@@ -17,7 +17,7 @@ test "Store init and deinit" {
     try testing.expectEqual(@as(u32, 0), store.size());
 }
 
-test "Store setString and get" {
+test "Store set and get" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -25,7 +25,7 @@ test "Store setString and get" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "hello");
+    try store.set("key1", "hello");
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result = store.get("key1");
@@ -34,7 +34,7 @@ test "Store setString and get" {
     try testing.expect(result.?.expiration == null);
 }
 
-test "Store setInt and get" {
+test "Store set int and get" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -42,7 +42,9 @@ test "Store setInt and get" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setInt("counter", 42);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{42});
+    try store.set("counter", int_str);
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result = store.get("counter");
@@ -76,7 +78,7 @@ test "Store getString with string value" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "hello world");
+    try store.set("key1", "hello world");
 
     const result = try store.getString(allocator, "key1");
     try testing.expect(result != null);
@@ -91,7 +93,9 @@ test "Store getString with integer value" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setInt("counter", -123);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{-123});
+    try store.set("counter", int_str);
 
     const result = try store.getString(allocator, "counter");
     try testing.expect(result != null);
@@ -118,7 +122,9 @@ test "Store getInt with integer value" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setInt("counter", 999);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{999});
+    try store.set("counter", int_str);
 
     const result = try store.getInt("counter");
     try testing.expect(result != null);
@@ -133,7 +139,7 @@ test "Store getInt with string value" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("number", "456");
+    try store.set("number", "456");
 
     const result = try store.getInt("number");
     try testing.expect(result != null);
@@ -148,7 +154,7 @@ test "Store getInt with invalid string" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("text", "hello");
+    try store.set("text", "hello");
 
     try testing.expectError(error.NotAnInteger, store.getInt("text"));
 }
@@ -173,7 +179,7 @@ test "Store delete existing key" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "value1");
+    try store.set("key1", "value1");
     try testing.expectEqual(@as(u32, 1), store.size());
     try testing.expect(store.exists("key1"));
 
@@ -205,7 +211,7 @@ test "Store exists" {
 
     try testing.expect(!store.exists("key1"));
 
-    try store.setString("key1", "value1");
+    try store.set("key1", "value1");
     try testing.expect(store.exists("key1"));
 
     _ = store.delete("key1");
@@ -222,10 +228,12 @@ test "Store getType" {
 
     try testing.expect(store.getType("nonexistent") == null);
 
-    try store.setString("str_key", "hello");
+    try store.set("str_key", "hello");
     try testing.expectEqual(ValueType.string, store.getType("str_key").?);
 
-    try store.setInt("int_key", 42);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{42});
+    try store.set("int_key", int_str);
     try testing.expectEqual(ValueType.int, store.getType("int_key").?);
 }
 
@@ -237,14 +245,14 @@ test "Store overwrite existing key" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "original");
+    try store.set("key1", "original");
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result1 = store.get("key1");
     try testing.expect(result1 != null);
     try testing.expectEqualStrings("original", result1.?.value.string);
 
-    try store.setString("key1", "updated");
+    try store.set("key1", "updated");
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result2 = store.get("key1");
@@ -260,10 +268,12 @@ test "Store overwrite string with integer" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "hello");
+    try store.set("key1", "hello");
     try testing.expectEqual(ValueType.string, store.getType("key1").?);
 
-    try store.setInt("key1", 123);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{123});
+    try store.set("key1", int_str);
     try testing.expectEqual(ValueType.int, store.getType("key1").?);
     try testing.expectEqual(@as(i64, 123), store.get("key1").?.value.int);
 }
@@ -276,10 +286,12 @@ test "Store overwrite integer with string" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setInt("key1", 456);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{456});
+    try store.set("key1", int_str);
     try testing.expectEqual(ValueType.int, store.getType("key1").?);
 
-    try store.setString("key1", "world");
+    try store.set("key1", "world");
     try testing.expectEqual(ValueType.string, store.getType("key1").?);
     try testing.expectEqualStrings("world", store.get("key1").?.value.string);
 }
@@ -292,7 +304,7 @@ test "Store expire functionality" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "value1");
+    try store.set("key1", "value1");
     try testing.expect(!store.isExpired("key1"));
 
     const success = try store.expire("key1", 12345);
@@ -324,7 +336,7 @@ test "Store delete removes from expiration map" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "value1");
+    try store.set("key1", "value1");
     _ = try store.expire("key1", 12345);
 
     const deleted = store.delete("key1");
@@ -340,10 +352,14 @@ test "Store multiple keys with different types" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("str1", "hello");
-    try store.setString("str2", "world");
-    try store.setInt("int1", 123);
-    try store.setInt("int2", -456);
+    try store.set("str1", "hello");
+    try store.set("str2", "world");
+    var buf1: [20]u8 = undefined;
+    const int_str1 = try std.fmt.bufPrint(&buf1, "{d}", .{123});
+    try store.set("int1", int_str1);
+    var buf2: [20]u8 = undefined;
+    const int_str2 = try std.fmt.bufPrint(&buf2, "{d}", .{-456});
+    try store.set("int2", int_str2);
 
     try testing.expectEqual(@as(u32, 4), store.size());
 
@@ -361,7 +377,7 @@ test "Store empty string values" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("empty", "");
+    try store.set("empty", "");
 
     const result = store.get("empty");
     try testing.expect(result != null);
@@ -380,7 +396,9 @@ test "Store zero integer values" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setInt("zero", 0);
+    var buf: [20]u8 = undefined;
+    const int_str = try std.fmt.bufPrint(&buf, "{d}", .{0});
+    try store.set("zero", int_str);
 
     const result = store.get("zero");
     try testing.expect(result != null);
@@ -468,7 +486,7 @@ test "Store getList with wrong type" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("notalist", "hello");
+    try store.set("notalist", "hello");
 
     const list = store.getList("notalist");
     try testing.expect(list == StoreError.WrongType);
@@ -494,7 +512,7 @@ test "Store overwrite string with list" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "hello");
+    try store.set("key1", "hello");
     try testing.expectEqual(ValueType.string, store.getType("key1").?);
 
     _ = try store.createList("key1");
@@ -517,12 +535,8 @@ test "Store overwrite list with string" {
     try list.append(.{ .string = "item" });
     try testing.expectEqual(ValueType.list, store.getType("key1").?);
 
-    try store.setString("key1", "hello");
-    try testing.expectEqual(ValueType.string, store.getType("key1").?);
-    try testing.expectEqualStrings("hello", store.get("key1").?.value.string);
-
-    const retrieved_list = store.getList("key1");
-    try testing.expect(retrieved_list == StoreError.WrongType);
+    const set = store.set("key1", "hello");
+    try testing.expect(set == StoreError.WrongType);
 }
 
 test "Store delete list key" {

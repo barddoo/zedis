@@ -212,16 +212,6 @@ pub const Store = struct {
         return self.map.count();
     }
 
-    pub fn setString(self: *Store, key: []const u8, value: []const u8) !void {
-        const zedis_object = ZedisObject{ .value = .{ .string = value } };
-        try self.setObject(key, zedis_object);
-    }
-
-    pub fn setInt(self: *Store, key: []const u8, value: i64) !void {
-        const zedis_object = ZedisObject{ .value = .{ .int = value } };
-        try self.setObject(key, zedis_object);
-    }
-
     pub fn setObject(self: *Store, key: []const u8, object: ZedisObject) !void {
         const gop = try self.map.getOrPut(key);
 
@@ -250,6 +240,31 @@ pub const Store = struct {
 
         // Update the entry
         gop.value_ptr.* = new_object;
+    }
+
+    pub fn set(self: *Store, key: []const u8, value: []const u8) !void {
+        const gop = try self.map.getOrPut(key);
+
+        // Free old value if key existed
+        if (gop.found_existing) {
+            switch (gop.value_ptr.value) {
+                .string => |str| self.allocator.free(str),
+                .int => {},
+                else => return error.WrongType,
+            }
+        } else {
+            // New key - allocate copy
+            gop.key_ptr.* = try self.allocator.dupe(u8, key);
+        }
+
+        const maybe_int = std.fmt.parseInt(i64, value, 10);
+
+        if (maybe_int) |int_value| {
+            gop.value_ptr.* = ZedisObject{ .value = .{ .int = int_value } };
+        } else |_| {
+            const value_copy = try self.allocator.dupe(u8, value);
+            gop.value_ptr.* = ZedisObject{ .value = .{ .string = value_copy } };
+        }
     }
 
     // Delete a key from the store
@@ -298,7 +313,7 @@ pub const Store = struct {
             switch (obj.value) {
                 .string => |str| return try allocator.dupe(u8, str),
                 .int => |i| return try std.fmt.allocPrint(allocator, "{d}", .{i}),
-                .list => return null, // Lists can't be converted to strings
+                .list => return error.WrongType,
             }
         }
         return null;
@@ -333,9 +348,9 @@ pub const Store = struct {
         const key_copy = try self.allocator.dupe(u8, key);
         const list = ZedisList.init(self.allocator);
 
-        const zedis_object = ZedisObject{ .value = .{ .list = list } };
+        const object = ZedisObject{ .value = .{ .list = list } };
 
-        try self.setObject(key_copy, zedis_object);
+        try self.setObject(key_copy, object);
 
         return &self.map.getPtr(key_copy).?.value.list;
     }

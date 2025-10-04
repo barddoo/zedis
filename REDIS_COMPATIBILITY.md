@@ -27,16 +27,16 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 | INCR        | Yes       | Increment the integer value of a key by one |
 | DECR        | Yes       | Decrement the integer value of a key by one |
 | EXPIRE      | Yes       | Set expiration time for a key               |
-| APPEND      | No        | Append a value to a key                     |
-| STRLEN      | No        | Get the length of the value stored in a key |
-| GETSET      | No        | Set a key and return its old value          |
-| MGET        | No        | Get the values of multiple keys             |
-| MSET        | No        | Set multiple key-value pairs                |
-| SETEX       | No        | Set a key with expiration time              |
-| SETNX       | No        | Set a key only if it doesn't exist          |
-| INCRBY      | No        | Increment a key by a specific amount        |
-| DECRBY      | No        | Decrement a key by a specific amount        |
-| INCRBYFLOAT | No        | Increment a key by a floating point number  |
+| APPEND      | Yes       | Append a value to a key                     |
+| STRLEN      | Yes       | Get the length of the value stored in a key |
+| GETSET      | Yes       | Set a key and return its old value          |
+| MGET        | Yes       | Get the values of multiple keys             |
+| MSET        | Yes       | Set multiple key-value pairs                |
+| SETEX       | Yes       | Set a key with expiration time              |
+| SETNX       | Yes       | Set a key only if it doesn't exist          |
+| INCRBY      | Yes       | Increment a key by a specific amount        |
+| DECRBY      | Yes       | Decrement a key by a specific amount        |
+| INCRBYFLOAT | Yes       | Increment a key by a floating point number  |
 
 ## Key Commands
 
@@ -182,10 +182,10 @@ Redis modules extend Redis functionality with custom data types and commands. Ze
 ## Summary
 
 **Total Commands**: 77
-- **Fully Implemented**: 18 commands
+- **Fully Implemented**: 28 commands
 - **Partially Implemented**: 0 commands
-- **Not Implemented**: 59 commands
+- **Not Implemented**: 49 commands
 
-**Implementation Coverage**: ~23%
+**Implementation Coverage**: ~36%
 
 This compatibility matrix will be updated as new commands are implemented in Zedis.

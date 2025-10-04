@@ -98,9 +98,11 @@ pub const MockClient = struct {
         const maybe_int = std.fmt.parseInt(i64, value, 10);
 
         if (maybe_int) |int_value| {
-            try self.store.setInt(key, int_value);
+            var buf: [20]u8 = undefined;
+            const int_str = try std.fmt.bufPrint(&buf, "{d}", .{int_value});
+            try self.store.set(key, int_str);
         } else |_| {
-            try self.store.setString(key, value);
+            try self.store.set(key, value);
         }
 
         try self.output.appendSlice("+OK\r\n");
@@ -151,7 +153,9 @@ pub const MockClient = struct {
             }
         }
 
-        try self.store.setInt(key, new_value);
+        var buf: [20]u8 = undefined;
+        const int_str = try std.fmt.bufPrint(&buf, "{d}", .{new_value});
+        try self.store.set(key, int_str);
         const result_str = try std.fmt.allocPrint(self.allocator, "{d}", .{new_value});
         defer self.allocator.free(result_str);
         try self.writeBulkString(result_str);
@@ -183,7 +187,9 @@ pub const MockClient = struct {
             }
         }
 
-        try self.store.setInt(key, new_value);
+        var buf: [20]u8 = undefined;
+        const int_str = try std.fmt.bufPrint(&buf, "{d}", .{new_value});
+        try self.store.set(key, int_str);
         const result_str = try std.fmt.allocPrint(self.allocator, "{d}", .{new_value});
         defer self.allocator.free(result_str);
         try self.writeBulkString(result_str);
@@ -198,6 +204,157 @@ pub const MockClient = struct {
         }
 
         try self.writeInt(deleted);
+    }
+
+    pub fn testSetex(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const seconds = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+        const value = args[3].asSlice();
+
+        if (seconds <= 0) {
+            try self.writeError("ERR invalid expire time in SETEX", .{});
+            return;
+        }
+
+        try self.store.set(key, value);
+        const expiration_time = std.time.milliTimestamp() + (seconds * 1000);
+        _ = try self.store.expire(key, expiration_time);
+
+        try self.writeBulkString("OK");
+    }
+
+    pub fn testSetnx(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const value = args[2].asSlice();
+
+        const existing = self.store.get(key);
+        if (existing == null) {
+            try self.store.set(key, value);
+            try self.writeInt(1);
+        } else {
+            try self.writeInt(0);
+        }
+    }
+
+    pub fn testIncrby(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const increment = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var new_value: i64 = increment;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    const int_val = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = int_val + increment;
+                },
+                .int => |i| {
+                    new_value = i + increment;
+                },
+                .list => {
+                    try self.writeError("ERR value is not an integer or out of range", .{});
+                    return;
+                },
+            }
+        }
+
+        var buf: [20]u8 = undefined;
+        const int_str = try std.fmt.bufPrint(&buf, "{d}", .{new_value});
+        try self.store.set(key, int_str);
+        try self.writeIntAsString(new_value);
+    }
+
+    pub fn testDecrby(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const decrement = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var new_value: i64 = -decrement;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    const int_val = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = int_val - decrement;
+                },
+                .int => |i| {
+                    new_value = i - decrement;
+                },
+                .list => {
+                    try self.writeError("ERR value is not an integer or out of range", .{});
+                    return;
+                },
+            }
+        }
+
+        var buf: [20]u8 = undefined;
+        const int_str = try std.fmt.bufPrint(&buf, "{d}", .{new_value});
+        try self.store.set(key, int_str);
+        try self.writeIntAsString(new_value);
+    }
+
+    pub fn testIncrbyfloat(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const increment_str = args[2].asSlice();
+
+        const increment = std.fmt.parseFloat(f64, increment_str) catch {
+            try self.writeError("ERR value is not a valid float", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var new_value: f64 = increment;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    const float_val = std.fmt.parseFloat(f64, s) catch {
+                        try self.writeError("ERR value is not a valid float", .{});
+                        return;
+                    };
+                    new_value = float_val + increment;
+                },
+                .int => |i| {
+                    const float_val: f64 = @floatFromInt(i);
+                    new_value = float_val + increment;
+                },
+                .list => {
+                    try self.writeError("ERR value is not a valid float", .{});
+                    return;
+                },
+            }
+        }
+
+        const result_str = try std.fmt.allocPrint(self.allocator, "{d}", .{new_value});
+        defer self.allocator.free(result_str);
+
+        try self.store.set(key, result_str);
+        try self.writeBulkString(result_str);
+    }
+
+    pub fn testMset(self: *MockClient, args: []const Value) !void {
+        for (0..args.len / 2) |i| {
+            const key = args[i * 2 + 1].asSlice();
+            const value = args[i * 2 + 2].asSlice();
+            try self.store.set(key, value);
+        }
+        try self.writeBulkString("OK");
     }
 
     // List command test methods

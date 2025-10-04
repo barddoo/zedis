@@ -13,7 +13,7 @@ pub fn lpush(client: *Client, args: []const Value) !void {
         try list.prepend(.{ .string = arg.asSlice() });
     }
 
-    try client.writeInt(@intCast(list.len()));
+    try client.writeInt(list.len());
 }
 
 pub fn rpush(client: *Client, args: []const Value) !void {
@@ -25,7 +25,7 @@ pub fn rpush(client: *Client, args: []const Value) !void {
         try list.append(.{ .string = arg.asSlice() });
     }
 
-    try client.writeInt(@intCast(list.len()));
+    try client.writeInt(list.len());
 }
 
 pub fn lpop(client: *Client, args: []const Value) !void {
@@ -105,7 +105,7 @@ pub fn llen(client: *Client, args: []const Value) !void {
     const list = try client.store.getList(key);
 
     if (list) |l| {
-        try client.writeInt(@intCast(l.len()));
+        try client.writeInt(l.len());
     } else {
         try client.writeInt(0);
     }

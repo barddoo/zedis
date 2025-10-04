@@ -122,15 +122,19 @@ pub const Client = struct {
     }
 
     pub fn writeIntAsString(self: *Client, i: i64) !void {
-        var buf: [8]u8 = undefined;
-        const int_str = try std.fmt.bufPrint(&buf, "{}", .{i});
+        var buf: [20]u8 = undefined;
+        const int_str = try std.fmt.bufPrint(&buf, "{d}", .{i});
         try self.writeBulkString(int_str);
     }
 
-    pub fn writeInt(self: *Client, value: i64) !void {
-        const formatted = try std.fmt.allocPrint(self.allocator, ":{d}\r\n", .{value});
-        defer self.allocator.free(formatted);
-        _ = try self.writer.interface.write(formatted);
+    pub fn writeInt(self: *Client, value: anytype) !void {
+        const T = @TypeOf(value);
+        comptime {
+            if (T != i64 and T != usize and T != comptime_int) {
+                @compileError("writeInt only accepts i64, usize, or comptime_int");
+            }
+        }
+        _ = try self.writer.interface.print(":{d}\r\n", .{value});
     }
 
     pub fn writeListLen(self: *Client, count: usize) !void {

@@ -142,7 +142,7 @@ fn testPublish(client: *MockClient, args: []const Value) !void {
     }
 
     if (channel_id == null) {
-        try client.writeInt(@as(u32, 0));
+        try client.writeInt(0);
         return;
     }
 
@@ -159,7 +159,7 @@ fn testPublish(client: *MockClient, args: []const Value) !void {
     }
 
     // Return number of recipients
-    try client.writeInt(@as(u32, @intCast(subscribers.len)));
+    try client.writeInt(subscribers.len);
 }
 
 // Test wrapper for subscribe command to work with MockClient

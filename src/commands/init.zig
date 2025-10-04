@@ -188,5 +188,85 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Get a range of elements from a list",
     });
 
+    try registry.register(.{
+        .name = "APPEND",
+        .handler = string.append,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Append a value to a key",
+    });
+
+    try registry.register(.{
+        .name = "STRLEN",
+        .handler = string.strlen,
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the length of the value stored in a key",
+    });
+
+    try registry.register(.{
+        .name = "GETSET",
+        .handler = string.getset,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Set a key and return its old value",
+    });
+
+    try registry.register(.{
+        .name = "MGET",
+        .handler = string.mget,
+        .min_args = 2,
+        .max_args = null,
+        .description = "Get the values of multiple keys",
+    });
+
+    try registry.register(.{
+        .name = "MSET",
+        .handler = string.mset,
+        .min_args = 3,
+        .max_args = null,
+        .description = "Set multiple key-value pairs",
+    });
+
+    try registry.register(.{
+        .name = "SETEX",
+        .handler = string.setex,
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Set a key with expiration time in seconds",
+    });
+
+    try registry.register(.{
+        .name = "SETNX",
+        .handler = string.setnx,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Set a key only if it doesn't exist",
+    });
+
+    try registry.register(.{
+        .name = "INCRBY",
+        .handler = string.incrby,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Increment a key by a specific amount",
+    });
+
+    try registry.register(.{
+        .name = "DECRBY",
+        .handler = string.decrby,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Decrement a key by a specific amount",
+    });
+
+    try registry.register(.{
+        .name = "INCRBYFLOAT",
+        .handler = string.incrbyfloat,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Increment a key by a floating point number",
+    });
+
     return registry;
 }
