@@ -4,6 +4,7 @@ const CommandRegistry = @import("registry.zig").CommandRegistry;
 const connection_commands = @import("connection.zig");
 const string = @import("string.zig");
 const list = @import("list.zig");
+const keys = @import("keys.zig");
 const rdb = @import("../commands/rdb.zig");
 const pubsub = @import("../pubsub/pubsub.zig");
 
@@ -266,6 +267,62 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .min_args = 3,
         .max_args = 3,
         .description = "Increment a key by a floating point number",
+    });
+
+    try registry.register(.{
+        .name = "EXISTS",
+        .handler = keys.exists,
+        .min_args = 2,
+        .max_args = null,
+        .description = "Check if one or more keys exist",
+    });
+
+    try registry.register(.{
+        .name = "TYPE",
+        .handler = keys.typeCmd,
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the data type of a key",
+    });
+
+    try registry.register(.{
+        .name = "TTL",
+        .handler = keys.ttl,
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get remaining time to live of a key",
+    });
+
+    try registry.register(.{
+        .name = "PERSIST",
+        .handler = keys.persist,
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Remove expiration from a key",
+    });
+
+    try registry.register(.{
+        .name = "RENAME",
+        .handler = keys.rename,
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Rename a key",
+    });
+
+    try registry.register(.{
+        .name = "KEYS",
+        .handler = keys.keys,
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Find all keys matching a pattern",
+    });
+
+    try registry.register(.{
+        .name = "RANDOMKEY",
+        .handler = keys.randomkey,
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Return a random key",
     });
 
     return registry;

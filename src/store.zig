@@ -14,12 +14,6 @@ pub const ValueType = enum(u8) {
     }
 };
 
-pub const StoreError = error{
-    KeyNotFound,
-    WrongType,
-    NotAnInteger,
-};
-
 pub const PrimitiveValue = union(enum) {
     string: []const u8,
     int: i64,
@@ -127,22 +121,22 @@ pub const ZedisList = struct {
 
     pub fn setByIndex(self: *ZedisList, index: i64, value: PrimitiveValue) !void {
         const list_len = self.list.len();
-        if (list_len == 0) return StoreError.KeyNotFound;
+        if (list_len == 0) return error.KeyNotFound;
 
         // Convert negative index to positive
         const actual_index: usize = if (index < 0) blk: {
             const neg_offset = @as(usize, @intCast(-index));
-            if (neg_offset > list_len) return StoreError.KeyNotFound;
+            if (neg_offset > list_len) return error.KeyNotFound;
             break :blk list_len - neg_offset;
         } else blk: {
             const pos_index = @as(usize, @intCast(index));
-            if (pos_index >= list_len) return StoreError.KeyNotFound;
+            if (pos_index >= list_len) return error.KeyNotFound;
             break :blk pos_index;
         };
 
         // O(1) optimization for first index
         if (actual_index == 0) {
-            const node = self.list.first orelse return StoreError.KeyNotFound;
+            const node = self.list.first orelse return error.KeyNotFound;
             const list_node: *ZedisListNode = @fieldParentPtr("node", node);
             list_node.data = value;
             return;
@@ -150,7 +144,7 @@ pub const ZedisList = struct {
 
         // O(1) optimization for last index
         if (actual_index == list_len - 1) {
-            const node = self.list.last orelse return StoreError.KeyNotFound;
+            const node = self.list.last orelse return error.KeyNotFound;
             const list_node: *ZedisListNode = @fieldParentPtr("node", node);
             list_node.data = value;
             return;
@@ -168,7 +162,7 @@ pub const ZedisList = struct {
             current = node.next;
             i += 1;
         }
-        return StoreError.KeyNotFound;
+        return error.KeyNotFound;
     }
 };
 
@@ -282,6 +276,34 @@ pub const Store = struct {
         return false;
     }
 
+    // Rename a key without copying the underlying value
+    // Only reallocates the key string, keeps the value structure intact
+    pub fn rename(self: *Store, old_key: []const u8, new_key: []const u8) !void {
+        // Remove the old key-value pair
+        const kv = self.map.fetchRemove(old_key) orelse return error.KeyNotFound;
+
+        // Free the old key string
+        self.allocator.free(kv.key);
+
+        // Insert with the new key, reusing the same value
+        const gop = try self.map.getOrPut(new_key);
+
+        // If new_key already exists, free its old value
+        if (gop.found_existing) {
+            switch (gop.value_ptr.value) {
+                .string => |str| self.allocator.free(str),
+                .int => {},
+                .list => |*list| @constCast(list).deinit(),
+            }
+        } else {
+            // New key - allocate copy
+            gop.key_ptr.* = try self.allocator.dupe(u8, new_key);
+        }
+
+        // Set the value (reusing the original value structure)
+        gop.value_ptr.* = kv.value;
+    }
+
     // Check if a key exists
     pub fn exists(self: Store, key: []const u8) bool {
         return self.map.contains(key);
@@ -325,9 +347,9 @@ pub const Store = struct {
             switch (obj.value) {
                 .int => |i| return i,
                 .string => |str| {
-                    return std.fmt.parseInt(i64, str, 10) catch StoreError.NotAnInteger;
+                    return std.fmt.parseInt(i64, str, 10) catch error.NotAnInteger;
                 },
-                .list => return StoreError.WrongType,
+                .list => return error.WrongType,
             }
         }
         return null;
@@ -337,7 +359,7 @@ pub const Store = struct {
         if (self.map.getPtr(key)) |obj_ptr| {
             switch (obj_ptr.value) {
                 .list => |*list| return list,
-                else => return StoreError.WrongType,
+                else => return error.WrongType,
             }
         }
         return null;
@@ -377,5 +399,32 @@ pub const Store = struct {
             return entry.expiration != null;
         }
         return false;
+    }
+
+    /// Get the time-to-live for a key in seconds
+    /// Returns -2 if the key does not exist
+    /// Returns -1 if the key exists but has no expiration
+    /// Returns the remaining time in seconds otherwise
+    pub fn ttl(self: Store, key: []const u8) i64 {
+        if (self.map.get(key)) |entry| {
+            if (entry.expiration) |exp_time| {
+                const now = std.time.milliTimestamp();
+                const remaining_ms = exp_time - now;
+
+                if (remaining_ms <= 0) {
+                    // Key has expired but hasn't been cleaned up yet
+                    return -2;
+                } else {
+                    // Convert milliseconds to seconds (rounded down)
+                    return @divFloor(remaining_ms, 1000);
+                }
+            } else {
+                // Key exists but has no expiration
+                return -1;
+            }
+        } else {
+            // Key does not exist
+            return -2;
+        }
     }
 };

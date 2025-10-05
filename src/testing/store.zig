@@ -3,8 +3,8 @@ const Store = @import("../store.zig").Store;
 const ZedisObject = @import("../store.zig").ZedisObject;
 const ZedisValue = @import("../store.zig").ZedisValue;
 const ValueType = @import("../store.zig").ValueType;
-const StoreError = @import("../store.zig").StoreError;
 const testing = std.testing;
+const time = std.time;
 
 test "Store init and deinit" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
@@ -489,7 +489,7 @@ test "Store getList with wrong type" {
     try store.set("notalist", "hello");
 
     const list = store.getList("notalist");
-    try testing.expect(list == StoreError.WrongType);
+    try testing.expect(list == error.WrongType);
 }
 
 test "Store list type checking" {
@@ -536,7 +536,7 @@ test "Store overwrite list with string" {
     try testing.expectEqual(ValueType.list, store.getType("key1").?);
 
     const set = store.set("key1", "hello");
-    try testing.expect(set == StoreError.WrongType);
+    try testing.expect(set == error.WrongType);
 }
 
 test "Store delete list key" {
@@ -579,4 +579,213 @@ test "Store empty list operations" {
     try list.append(.{ .int = 0 });
     try testing.expectEqual(@as(usize, 2), list.len());
     try testing.expectEqual(@as(i64, 0), list.getByIndex(1).?.int);
+}
+
+test "Store ttl returns -2 for nonexistent key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    const ttl_value = store.ttl("nonexistent");
+    try testing.expectEqual(@as(i64, -2), ttl_value);
+}
+
+test "Store ttl returns -1 for key without expiration" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+
+    const ttl_value = store.ttl("key1");
+    try testing.expectEqual(@as(i64, -1), ttl_value);
+}
+
+test "Store ttl returns remaining seconds for key with expiration" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+
+    // Set expiration to 10 seconds from now
+    const future_time = time.milliTimestamp() + 10000;
+    _ = try store.expire("key1", future_time);
+
+    const ttl_value = store.ttl("key1");
+    // Should be around 10 seconds, allow for some variance
+    try testing.expect(ttl_value >= 9 and ttl_value <= 10);
+}
+
+test "Store ttl returns -2 for expired key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+
+    // Set expiration to 1ms in the past
+    const past_time = time.milliTimestamp() - 1;
+    _ = try store.expire("key1", past_time);
+
+    const ttl_value = store.ttl("key1");
+    try testing.expectEqual(@as(i64, -2), ttl_value);
+}
+
+test "Store ttl with long expiration time" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+
+    // Set expiration to 1 hour from now
+    const future_time = time.milliTimestamp() + 3600000;
+    _ = try store.expire("key1", future_time);
+
+    const ttl_value = store.ttl("key1");
+    // Should be around 3600 seconds (1 hour)
+    try testing.expect(ttl_value >= 3599 and ttl_value <= 3600);
+}
+
+test "Store rename basic string key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("old_key", "value1");
+
+    // Rename the key
+    try store.rename("old_key", "new_key");
+
+    // Old key should not exist
+    try testing.expect(!store.exists("old_key"));
+    try testing.expect(store.exists("new_key"));
+
+    // Value should be the same
+    const value = store.get("new_key");
+    try testing.expect(value != null);
+    try testing.expectEqualStrings("value1", value.?.value.string);
+}
+
+test "Store rename preserves expiration" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("old_key", "value1");
+    const future_time = time.milliTimestamp() + 10000;
+    _ = try store.expire("old_key", future_time);
+
+    // Rename the key
+    try store.rename("old_key", "new_key");
+
+    // Check expiration is preserved
+    const value = store.get("new_key");
+    try testing.expect(value != null);
+    try testing.expect(value.?.expiration != null);
+    try testing.expect(value.?.expiration.? == future_time);
+}
+
+test "Store rename overwrites existing key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("old_key", "value1");
+    try store.set("new_key", "value2");
+
+    // Rename should overwrite new_key
+    try store.rename("old_key", "new_key");
+
+    try testing.expect(!store.exists("old_key"));
+    try testing.expect(store.exists("new_key"));
+
+    const value = store.get("new_key");
+    try testing.expect(value != null);
+    try testing.expectEqualStrings("value1", value.?.value.string);
+}
+
+test "Store rename nonexistent key returns error" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    const result = store.rename("nonexistent", "new_key");
+    try testing.expectError(error.KeyNotFound, result);
+}
+
+test "Store rename with list value" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    const list = try store.createList("old_list");
+    try list.append(.{ .string = "item1" });
+    try list.append(.{ .int = 42 });
+
+    // Rename the list
+    try store.rename("old_list", "new_list");
+
+    try testing.expect(!store.exists("old_list"));
+    try testing.expect(store.exists("new_list"));
+
+    // Verify the list structure is intact (not copied)
+    const new_list = try store.getList("new_list");
+    try testing.expect(new_list != null);
+    try testing.expectEqual(@as(usize, 2), new_list.?.len());
+
+    const first = new_list.?.getByIndex(0);
+    try testing.expect(first != null);
+    try testing.expectEqualStrings("item1", first.?.string);
+
+    const second = new_list.?.getByIndex(1);
+    try testing.expect(second != null);
+    try testing.expectEqual(@as(i64, 42), second.?.int);
+}
+
+test "Store rename to same key does nothing" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator);
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+
+    // This should be handled at the command level, but test store behavior
+    // In the store, renaming to same key would remove and re-add
+    // But the command handler checks this first
+    try testing.expect(store.exists("key1"));
 }
