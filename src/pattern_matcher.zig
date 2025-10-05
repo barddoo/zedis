@@ -6,28 +6,28 @@ const std = @import("std");
 /// Time complexity: O(n + m) average case, O(n * m) worst case
 /// Space complexity: O(1)
 pub fn matchPattern(pattern: []const u8, text: []const u8) bool {
-    var p_idx: usize = 0;
-    var t_idx: usize = 0;
+    var pattern_idx: usize = 0;
+    var text_idx: usize = 0;
     var star_idx: ?usize = null;
     var match_idx: usize = 0;
 
-    while (t_idx < text.len) {
+    while (text_idx < text.len) {
         // If pattern and text match, or pattern has ?, advance both
-        if (p_idx < pattern.len and (pattern[p_idx] == text[t_idx] or pattern[p_idx] == '?')) {
-            p_idx += 1;
-            t_idx += 1;
+        if (pattern_idx < pattern.len and (pattern[pattern_idx] == text[text_idx] or pattern[pattern_idx] == '?')) {
+            pattern_idx += 1;
+            text_idx += 1;
         }
         // If pattern has *, save position and try to match 0 characters first
-        else if (p_idx < pattern.len and pattern[p_idx] == '*') {
-            star_idx = p_idx;
-            match_idx = t_idx;
-            p_idx += 1;
+        else if (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+            star_idx = pattern_idx;
+            match_idx = text_idx;
+            pattern_idx += 1;
         }
         // If no match and we had a previous *, backtrack and try matching 1 more character
         else if (star_idx) |star| {
-            p_idx = star + 1;
+            pattern_idx = star + 1;
             match_idx += 1;
-            t_idx = match_idx;
+            text_idx = match_idx;
         }
         // No match
         else {
@@ -36,9 +36,9 @@ pub fn matchPattern(pattern: []const u8, text: []const u8) bool {
     }
 
     // Check remaining pattern characters (should only be *)
-    while (p_idx < pattern.len and pattern[p_idx] == '*') {
-        p_idx += 1;
+    while (pattern_idx < pattern.len and pattern[pattern_idx] == '*') {
+        pattern_idx += 1;
     }
 
-    return p_idx == pattern.len;
+    return pattern_idx == pattern.len;
 }
