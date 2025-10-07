@@ -39,6 +39,7 @@ pub const Client = struct {
         store: *Store,
     ) Client {
         const id = next_client_id.fetchAdd(1, .monotonic);
+
         return .{
             .allocator = allocator,
             .authenticated = false,
@@ -67,6 +68,7 @@ pub const Client = struct {
         const reader = sr.interface();
         var sw = self.connection.stream.writer(&.{});
         const writer = &sw.interface;
+
         while (true) {
             // Parse the incoming command from the client's stream.
             var parser = Parser.init(self.allocator);

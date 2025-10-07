@@ -24,13 +24,7 @@ pub fn set(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
     const value = args[2].asSlice();
 
-    const maybe_int = std.fmt.parseInt(i64, value, 10);
-
-    if (maybe_int) |int_value| {
-        try store.setInt(key, int_value);
-    } else |_| {
-        try store.setString(key, value);
-    }
+    try store.set(key, value);
 
     try resp.writeBulkString(writer, "OK");
 }
@@ -42,25 +36,11 @@ pub fn get(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     if (value) |v| {
         switch (v.value) {
             .string => |s| try resp.writeBulkString(writer, s),
+            .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
             .int => |i| {
                 try resp.writeIntBulkString(writer, i);
             },
-            .list => |*list| {
-                var current = list.list.first;
-                while (current) |node| {
-                    const list_node: *const @import("../store.zig").ZedisListNode = @fieldParentPtr("node", node);
-                    const entry = list_node.data;
-
-                    switch (entry) {
-                        .string => |str| try resp.writeBulkString(writer, str),
-                        .int => |i| {
-                            try resp.writeIntBulkString(writer, i);
-                        },
-                    }
-
-                    current = node.next;
-                }
-            },
+            .list => return error.WrongType,
         }
     } else {
         try resp.writeNull(writer);
@@ -134,7 +114,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
         }
 
         const int_object = ZedisObject{ .value = .{ .int = new_value } };
-        try store_ptr.setObject(key, int_object);
+        try store_ptr.putObject(key, int_object);
 
         return new_value;
     } else {
@@ -192,7 +172,7 @@ test "incrDecr helper function with string integer" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    try store.setString("key1", "100");
+    try store.set("key1", "100");
 
     const result = try incrDecr(&store, "key1", 50);
     try testing.expectEqual(@as(i64, 150), result);

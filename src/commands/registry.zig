@@ -62,10 +62,13 @@ pub const CommandRegistry = struct {
         client: *Client,
         args: []const Value,
     ) !void {
-        var sw = client.connection.stream.writer(&.{});
+        var buf: [4096]u8 = undefined;
+        var sw = client.connection.stream.writer(&buf);
         const writer = &sw.interface;
 
         try self.executeCommand(writer, client, client.store, &client.server.aof_writer, args);
+
+        try writer.flush();
     }
 
     pub fn executeCommandAof(
@@ -97,9 +100,13 @@ pub const CommandRegistry = struct {
 
         const command_name = args[0].asSlice();
 
-        // Convert to uppercase for case-insensitive lookup
-        var upper_name = try self.allocator.alloc(u8, command_name.len);
-        defer self.allocator.free(upper_name);
+        var buf: [32]u8 = undefined;
+        if (command_name.len > buf.len) return error.CommandTooLong;
+
+        for (command_name, 0..) |c, i| {
+            buf[i] = std.ascii.toUpper(c);
+        }
+        const upper_name = buf[0..command_name.len];
 
         for (command_name, 0..) |c, i| {
             upper_name[i] = std.ascii.toUpper(c);

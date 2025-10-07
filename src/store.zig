@@ -4,6 +4,7 @@ pub const ValueType = enum(u8) {
     string = 0,
     int = 1,
     list = 2,
+    short_string = 3,
 
     pub fn toRdbOpcode(self: ValueType) u8 {
         return @intFromEnum(self);
@@ -18,6 +19,7 @@ pub const StoreError = error{
     KeyNotFound,
     WrongType,
     NotAnInteger,
+    KeyAlreadyExists,
 };
 
 pub const PrimitiveValue = union(enum) {
@@ -33,6 +35,7 @@ pub const ZedisListNode = struct {
 pub const ZedisList = struct {
     list: std.DoublyLinkedList = .{},
     allocator: std.mem.Allocator,
+    cached_len: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) ZedisList {
         return .{
@@ -50,20 +53,22 @@ pub const ZedisList = struct {
         self.list = .{};
     }
 
-    pub fn len(self: *const ZedisList) usize {
-        return self.list.len();
+    pub inline fn len(self: *const ZedisList) usize {
+        return self.cached_len;
     }
 
     pub fn prepend(self: *ZedisList, value: PrimitiveValue) !void {
         const list_node = try self.allocator.create(ZedisListNode);
         list_node.* = ZedisListNode{ .data = value };
         self.list.prepend(&list_node.node);
+        self.cached_len += 1;
     }
 
     pub fn append(self: *ZedisList, value: PrimitiveValue) !void {
         const list_node = try self.allocator.create(ZedisListNode);
         list_node.* = ZedisListNode{ .data = value };
         self.list.append(&list_node.node);
+        self.cached_len += 1;
     }
 
     pub fn popFirst(self: *ZedisList) ?PrimitiveValue {
@@ -71,6 +76,7 @@ pub const ZedisList = struct {
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);
         const value = list_node.data;
         self.allocator.destroy(list_node);
+        self.cached_len -= 1;
         return value;
     }
 
@@ -79,11 +85,12 @@ pub const ZedisList = struct {
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);
         const value = list_node.data;
         self.allocator.destroy(list_node);
+        self.cached_len -= 1;
         return value;
     }
 
     pub fn getByIndex(self: *const ZedisList, index: i64) ?PrimitiveValue {
-        const list_len = self.list.len();
+        const list_len = self.cached_len;
         if (list_len == 0) return null;
 
         // Convert negative index to positive
@@ -126,7 +133,7 @@ pub const ZedisList = struct {
     }
 
     pub fn setByIndex(self: *ZedisList, index: i64, value: PrimitiveValue) !void {
-        const list_len = self.list.len();
+        const list_len = self.cached_len;
         if (list_len == 0) return StoreError.KeyNotFound;
 
         // Convert negative index to positive
@@ -172,24 +179,56 @@ pub const ZedisList = struct {
     }
 };
 
+pub const ShortString = struct {
+    data: [15]u8, // Inline storage
+    len: u8, // Actual length
+
+    pub fn fromSlice(str: []const u8) ShortString {
+        var ss: ShortString = .{ .data = undefined, .len = @intCast(str.len) };
+        @memcpy(ss.data[0..str.len], str);
+        return ss;
+    }
+
+    pub fn asSlice(self: *const ShortString) []const u8 {
+        return self.data[0..self.len];
+    }
+};
+
 pub const ZedisValue = union(ValueType) {
     string: []const u8,
     int: i64,
     list: ZedisList,
+    short_string: ShortString,
 };
 
-pub const ZedisObject = struct { value: ZedisValue, expiration: ?i64 = null };
+pub const ZedisObject = struct { value: ZedisValue };
 
 pub const Store = struct {
+    base_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
     // The HashMap stores string keys and string values.
-    map: std.StringHashMap(ZedisObject),
+    map: std.StringHashMapUnmanaged(ZedisObject),
+    // Separate map for expirations
+    expiration_map: std.StringHashMapUnmanaged(i64),
+
+    pool_32: std.heap.MemoryPool([32]u8),
+    pool_64: std.heap.MemoryPool([64]u8),
+    pool_128: std.heap.MemoryPool([128]u8),
 
     // Initializes the store.
     pub fn init(allocator: std.mem.Allocator) Store {
+        const initial_capacity = 1024;
+        var map: std.StringHashMapUnmanaged(ZedisObject) = .{};
+        map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
+
         return .{
+            .base_allocator = allocator,
             .allocator = allocator,
-            .map = std.StringHashMap(ZedisObject).init(allocator),
+            .map = map,
+            .expiration_map = .{},
+            .pool_32 = std.heap.MemoryPool([32]u8).init(allocator),
+            .pool_64 = std.heap.MemoryPool([64]u8).init(allocator),
+            .pool_128 = std.heap.MemoryPool([128]u8).init(allocator),
         };
     }
 
@@ -197,55 +236,114 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
+            self.freeString(entry.key_ptr.*);
             // Free values based on their type
             switch (entry.value_ptr.*.value) {
-                .string => |str| self.allocator.free(str),
+                .string => |str| self.freeString(str),
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
+                .short_string => {},
             }
         }
-        self.map.deinit();
+        self.map.deinit(self.base_allocator);
+        self.expiration_map.deinit(self.base_allocator);
+        self.pool_32.deinit();
+        self.pool_64.deinit();
+        self.pool_128.deinit();
     }
 
-    pub fn size(self: Store) u32 {
+    pub inline fn size(self: Store) u32 {
         return self.map.count();
     }
 
-    pub fn setString(self: *Store, key: []const u8, value: []const u8) !void {
-        const zedis_object = ZedisObject{ .value = .{ .string = value } };
-        try self.setObject(key, zedis_object);
+    /// Allocate a string buffer using pools for common sizes
+    inline fn allocString(self: *Store, len: usize) ![]u8 {
+        if (len <= 32) {
+            const buf = try self.pool_32.create();
+            return buf[0..len];
+        } else if (len <= 64) {
+            const buf = try self.pool_64.create();
+            return buf[0..len];
+        } else if (len <= 128) {
+            const buf = try self.pool_128.create();
+            return buf[0..len];
+        }
+        return try self.base_allocator.alloc(u8, len);
+    }
+
+    /// Free a string buffer, returning to pool if applicable
+    inline fn freeString(self: *Store, str: []const u8) void {
+        if (str.len <= 32) {
+            const array_ptr: *align(8) [32]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
+            self.pool_32.destroy(array_ptr);
+        } else if (str.len <= 64) {
+            const array_ptr: *align(8) [64]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
+            self.pool_64.destroy(array_ptr);
+        } else if (str.len <= 128) {
+            const array_ptr: *align(8) [128]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
+            self.pool_128.destroy(array_ptr);
+        } else {
+            self.base_allocator.free(str);
+        }
+    }
+
+    /// Duplicate a string using pools when possible
+    inline fn dupeString(self: *Store, str: []const u8) ![]u8 {
+        const buf = try self.allocString(str.len);
+        @memcpy(buf, str);
+        return buf;
+    }
+
+    fn setString(self: *Store, key: []const u8, value: []const u8) !void {
+        // Automatically use ShortString for small strings to avoid allocation
+        const zedis_value: ZedisValue = if (value.len <= 15)
+            .{ .short_string = ShortString.fromSlice(value) }
+        else
+            .{ .string = value };
+        const zedis_object = ZedisObject{ .value = zedis_value };
+        try self.putObject(key, zedis_object);
     }
 
     pub fn setInt(self: *Store, key: []const u8, value: i64) !void {
-        const zedis_object = ZedisObject{ .value = .{ .int = value } };
-        try self.setObject(key, zedis_object);
+        try self.putObject(key, .{ .value = .{ .int = value } });
     }
 
-    pub fn setObject(self: *Store, key: []const u8, object: ZedisObject) !void {
-        const gop = try self.map.getOrPut(key);
+    pub fn set(self: *Store, key: []const u8, value: []const u8) !void {
+        // Try to parse as integer for automatic type optimization
+        if (std.fmt.parseInt(i64, value, 10)) |int_value| {
+            try self.putObject(key, .{ .value = .{ .int = int_value } });
+        } else |_| {
+            try self.setString(key, value);
+        }
+    }
+
+    /// Update/overwrite an existing key or insert if not present
+    pub inline fn putObject(self: *Store, key: []const u8, object: ZedisObject) !void {
+        const gop = try self.map.getOrPut(self.base_allocator, key);
 
         // Free old value if key existed
         if (gop.found_existing) {
             switch (gop.value_ptr.value) {
-                .string => |str| self.allocator.free(str),
+                .string => |str| self.freeString(str),
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
+                .short_string => {},
             }
         } else {
-            // New key - allocate copy
-            gop.key_ptr.* = try self.allocator.dupe(u8, key);
+            // New key - allocate copy using pool allocator
+            gop.key_ptr.* = try self.dupeString(key);
         }
 
         // Build the new object with allocated values
         var new_object = object;
         switch (object.value) {
             .string => |str| {
-                const value_copy = try self.allocator.dupe(u8, str);
+                const value_copy = try self.dupeString(str);
                 new_object.value = .{ .string = value_copy };
             },
             .int => {}, // No allocation needed
             .list => {}, // List is moved directly
+            .short_string => {}, // No allocation needed - stored inline
         }
 
         // Update the entry
@@ -255,67 +353,38 @@ pub const Store = struct {
     // Delete a key from the store
     pub fn delete(self: *Store, key: []const u8) bool {
         if (self.map.fetchRemove(key)) |kv| {
-            self.allocator.free(kv.key);
+            self.freeString(kv.key);
             // Free the value based on its type
             switch (kv.value.value) {
-                .string => |str| self.allocator.free(str),
+                .string => |str| self.freeString(str),
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
+                .short_string => {},
             }
+            // Remove from expiration map if present
+            _ = self.expiration_map.remove(key);
             return true;
         }
         return false;
     }
 
-    // Check if a key exists
-    pub fn exists(self: Store, key: []const u8) bool {
+    pub inline fn exists(self: Store, key: []const u8) bool {
         return self.map.contains(key);
     }
 
-    pub fn getType(self: Store, key: []const u8) ?ValueType {
-        if (self.map.get(key)) |obj| {
-            switch (obj.value) {
-                .int => return .int,
-                .string => return .string,
-                .list => return .list,
-            }
+    pub inline fn getType(self: Store, key: []const u8) ?ValueType {
+        if (self.map.getPtr(key)) |obj| {
+            return std.meta.activeTag(obj.value);
         }
         return null;
     }
 
-    // Gets a value by its key. It also acquires a lock.
-    pub fn get(self: Store, key: []const u8) ?ZedisObject {
-        if (self.map.get(key)) |obj| {
-            return obj;
-        } else {
+    pub inline fn get(self: *Store, key: []const u8) ?*const ZedisObject {
+        if (self.isExpired(key)) {
+            _ = self.delete(key);
             return null;
         }
-    }
-
-    // Gets a copy of the string value for thread safety
-    pub fn getString(self: Store, allocator: std.mem.Allocator, key: []const u8) !?[]u8 {
-        if (self.map.get(key)) |obj| {
-            switch (obj.value) {
-                .string => |str| return try allocator.dupe(u8, str),
-                .int => |i| return try std.fmt.allocPrint(allocator, "{d}", .{i}),
-                .list => return null, // Lists can't be converted to strings
-            }
-        }
-        return null;
-    }
-
-    // Gets an integer value, converting from string if necessary
-    pub fn getInt(self: Store, key: []const u8) !?i64 {
-        if (self.map.get(key)) |obj| {
-            switch (obj.value) {
-                .int => |i| return i,
-                .string => |str| {
-                    return std.fmt.parseInt(i64, str, 10) catch StoreError.NotAnInteger;
-                },
-                .list => return StoreError.WrongType,
-            }
-        }
-        return null;
+        return self.map.getPtr(key);
     }
 
     pub fn getList(self: Store, key: []const u8) !?*ZedisList {
@@ -329,15 +398,13 @@ pub const Store = struct {
     }
 
     pub fn createList(self: *Store, key: []const u8) !*ZedisList {
-        // Create list directly in place without going through setObject
-        const key_copy = try self.allocator.dupe(u8, key);
-        const list = ZedisList.init(self.allocator);
+        // Create list - error if key already exists
+        const list: ZedisList = .init(self.base_allocator);
+        const zedis_object: ZedisObject = .{ .value = .{ .list = list } };
 
-        const zedis_object = ZedisObject{ .value = .{ .list = list } };
+        try self.putObject(key, zedis_object);
 
-        try self.setObject(key_copy, zedis_object);
-
-        return &self.map.getPtr(key_copy).?.value.list;
+        return &self.map.getPtr(key).?.value.list;
     }
 
     pub fn getSetList(self: *Store, key: []const u8) !*ZedisList {
@@ -349,18 +416,21 @@ pub const Store = struct {
     }
 
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {
-        if (self.map.getPtr(key)) |entry| {
-            entry.expiration = time;
-
+        if (self.map.contains(key)) {
+            try self.expiration_map.put(self.base_allocator, key, time);
             return true;
         }
         return false;
     }
 
-    pub fn isExpired(self: Store, key: []const u8) bool {
-        if (self.map.get(key)) |entry| {
-            return entry.expiration != null;
+    pub inline fn isExpired(self: Store, key: []const u8) bool {
+        if (self.expiration_map.get(key)) |expiration_time| {
+            return std.time.milliTimestamp() > expiration_time;
         }
         return false;
+    }
+
+    pub inline fn getTtl(self: Store, key: []const u8) ?i64 {
+        return self.expiration_map.get(key);
     }
 };

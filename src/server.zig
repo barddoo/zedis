@@ -66,9 +66,11 @@ pub const Server = struct {
         // Initialize store with the KV allocator
         const store = Store.init(kv_allocator.allocator());
 
-        // Initialize command registry with temp arena (will be allocated)
-        var temp_arena = std.heap.ArenaAllocator.init(base_allocator);
-        const registry = try command_init.initRegistry(temp_arena.allocator());
+        // Initialize temp arena for temporary allocations
+        const temp_arena = std.heap.ArenaAllocator.init(base_allocator);
+
+        // Initialize command registry with base allocator (lives for server lifetime)
+        const registry = try command_init.initRegistry(base_allocator);
 
         // Allocate fixed memory pools on heap
         const client_pool = try base_allocator.alloc(Client, server_config.MAX_CLIENTS);

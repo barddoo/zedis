@@ -44,7 +44,7 @@ pub const Writer = struct {
 
     fn mapToOpCode(val: ZedisValue) u8 {
         return switch (val) {
-            .int, .string => 0x00,
+            .int, .string, .short_string => 0x00,
             .list => 0x01,
         };
     }
@@ -131,7 +131,7 @@ pub const Writer = struct {
     fn writeCache(self: *Writer) !void {
         var it = self.store.map.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.*.expiration) |expiry| {
+            if (self.store.getTtl(entry.key_ptr.*)) |expiry| {
                 try self.writer.interface.writeByte(OPCODE_EXPIRE_TIME_MS);
                 try self.writer.interface.writeInt(i64, expiry, .little);
             }
@@ -146,6 +146,7 @@ pub const Writer = struct {
             switch (entry.value_ptr.*.value) {
                 .int => |i| try self.writeInt(i),
                 .string => |s| try self.writeString(s),
+                .short_string => |ss| try self.writeString(ss.asSlice()),
                 .list => |list| try self.writeList(@constCast(&list)),
             }
         }
@@ -217,6 +218,7 @@ pub const Writer = struct {
         switch (payload) {
             .int => |number| try self.writeInt(number),
             .string => |str| try self.writeString(str),
+            .short_string => |ss| try self.writeString(ss.asSlice()),
             .list => |list| try self.writeList(@constCast(&list)),
         }
     }
@@ -423,6 +425,7 @@ test "ZDB init and deinit" {
     const allocator = testing.allocator;
 
     var store = Store.init(allocator);
+    defer store.deinit();
     const test_file = "test_db.rdb";
 
     var zdb = try Writer.init(allocator, &store, test_file);
@@ -437,6 +440,7 @@ test "ZDB writeFile creates valid RDB header" {
     const allocator = testing.allocator;
 
     var store = Store.init(allocator);
+    defer store.deinit();
     const test_file = "test_header.rdb";
 
     var zdb = try Writer.init(allocator, &store, test_file);
@@ -456,6 +460,7 @@ test "ZDB writeString writes correct format" {
     const allocator = testing.allocator;
 
     var store = Store.init(allocator);
+    defer store.deinit();
     const test_file = "test_string.rdb";
 
     var zdb = try Writer.init(allocator, &store, test_file);
@@ -476,6 +481,7 @@ test "ZDB writeMetadata writes correct format" {
     const allocator = testing.allocator;
 
     var store = Store.init(allocator);
+    defer store.deinit();
     const test_file = "test_string.rdb";
 
     var zdb = try Writer.init(allocator, &store, test_file);

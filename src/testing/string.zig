@@ -27,7 +27,7 @@ test "SET command with string value" {
 
     const stored_value = store.get("key1");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("hello", stored_value.?.value.string);
+    try testing.expectEqualStrings("hello", stored_value.?.value.short_string.asSlice());
 }
 
 test "SET command with integer value" {
@@ -67,7 +67,7 @@ test "GET command with existing string value" {
     var client = MockClient.initLegacy(allocator, &store);
     defer client.deinit();
 
-    try store.setString("key1", "hello");
+    try store.set("key1", "hello");
 
     const args = [_]Value{
         .{ .data = "GET" },
@@ -186,7 +186,7 @@ test "INCR command on string that represents integer" {
     var client = MockClient.initLegacy(allocator, &store);
     defer client.deinit();
 
-    try store.setString("counter", "10");
+    try store.set("counter", "10");
 
     const args = [_]Value{
         .{ .data = "INCR" },
@@ -213,7 +213,7 @@ test "INCR command on non-integer string" {
     var client = MockClient.initLegacy(allocator, &store);
     defer client.deinit();
 
-    try store.setString("key1", "hello");
+    try store.set("key1", "hello");
 
     const args = [_]Value{
         .{ .data = "INCR" },
@@ -288,7 +288,7 @@ test "DEL command with single existing key" {
     var client = MockClient.initLegacy(allocator, &store);
     defer client.deinit();
 
-    try store.setString("key1", "value1");
+    try store.set("key1", "value1");
 
     const args = [_]Value{
         .{ .data = "DEL" },
@@ -314,8 +314,8 @@ test "DEL command with multiple keys" {
     var client = MockClient.initLegacy(allocator, &store);
     defer client.deinit();
 
-    try store.setString("key1", "value1");
-    try store.setString("key2", "value2");
+    try store.set("key1", "value1");
+    try store.set("key2", "value2");
     try store.setInt("key3", 42);
 
     const args = [_]Value{

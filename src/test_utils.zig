@@ -100,7 +100,7 @@ pub const MockClient = struct {
         if (maybe_int) |int_value| {
             try self.store.setInt(key, int_value);
         } else |_| {
-            try self.store.setString(key, value);
+            try self.store.set(key, value);
         }
 
         try self.output.appendSlice("+OK\r\n");
@@ -113,6 +113,7 @@ pub const MockClient = struct {
         if (value) |v| {
             switch (v.value) {
                 .string => |s| try self.writeBulkString(s),
+                .short_string => |ss| try self.writeBulkString(ss.asSlice()),
                 .int => |i| {
                     const int_str = try std.fmt.allocPrint(self.allocator, "{d}", .{i});
                     defer self.allocator.free(int_str);
@@ -136,6 +137,13 @@ pub const MockClient = struct {
             switch (v.value) {
                 .string => |s| {
                     new_value = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value += 1;
+                },
+                .short_string => |ss| {
+                    new_value = std.fmt.parseInt(i64, ss.asSlice(), 10) catch {
                         try self.writeError("ERR value is not an integer or out of range", .{});
                         return;
                     };
@@ -168,6 +176,13 @@ pub const MockClient = struct {
             switch (v.value) {
                 .string => |s| {
                     new_value = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value -= 1;
+                },
+                .short_string => |ss| {
+                    new_value = std.fmt.parseInt(i64, ss.asSlice(), 10) catch {
                         try self.writeError("ERR value is not an integer or out of range", .{});
                         return;
                     };

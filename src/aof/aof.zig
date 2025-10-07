@@ -105,7 +105,7 @@ test "aof reading test" {
 
     try aof_reader.read();
 
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.string, "test"));
+    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
 }
 test "aof writing test" {
     const testing = std.testing;
@@ -142,7 +142,7 @@ test "aof writing test" {
 
     var file_reader = test_file.reader(&.{});
 
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.string, "test"));
+    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
     const buf = try testing.allocator.alloc(u8, 1024);
     defer testing.allocator.free(buf);
     file_reader.interface.readSliceAll(buf) catch |e| {
