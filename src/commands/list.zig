@@ -15,7 +15,7 @@ pub fn lpush(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
         try list.prepend(.{ .string = arg.asSlice() });
     }
 
-    try resp.writeInt(writer, @intCast(list.len()));
+    try resp.writeInt(writer, list.len());
 }
 
 pub fn rpush(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
@@ -27,7 +27,7 @@ pub fn rpush(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
         try list.append(.{ .string = arg.asSlice() });
     }
 
-    try resp.writeInt(writer, @intCast(list.len()));
+    try resp.writeInt(writer, list.len());
 }
 
 pub fn lpop(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
@@ -107,7 +107,7 @@ pub fn llen(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const list = try store.getList(key);
 
     if (list) |l| {
-        try resp.writeInt(writer, @intCast(l.len()));
+        try resp.writeInt(writer, l.len());
     } else {
         try resp.writeInt(writer, 0);
     }
@@ -135,7 +135,7 @@ pub fn lset(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const value = args[3].asSlice();
 
     const list = try store.getList(key) orelse {
-        return resp.writeError(writer, "ERR no such key");
+        return error.NoSuchKey;
     };
 
     try list.setByIndex(index, .{ .string = value });

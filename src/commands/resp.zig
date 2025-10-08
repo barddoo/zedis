@@ -35,7 +35,17 @@ pub fn writeSingleIntBulkString(writer: *std.Io.Writer, value: i64) !void {
     try writer.print("${d}\r\n{d}\r\n", .{ 1, value });
 }
 
-pub fn writeInt(writer: *std.Io.Writer, value: i64) !void {
+pub fn writeInt(writer: *std.Io.Writer, value: anytype) !void {
+    const T = @TypeOf(value);
+    const type_info = @typeInfo(T);
+
+    // Compile-time check that value is an integer type
+    comptime {
+        if (type_info != .int and type_info != .comptime_int) {
+            @compileError("writeInt requires an integer type, got " ++ @typeName(T));
+        }
+    }
+
     try writer.print(":{d}\r\n", .{value});
 }
 

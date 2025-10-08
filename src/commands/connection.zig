@@ -32,7 +32,7 @@ pub fn auth(client: *Client, args: []const Value) !void {
     const password = args[1].asSlice();
 
     if (!client.server.config.requiresAuth()) {
-        return resp.writeError(writer, "ERR Client sent AUTH, but no password is set");
+        return error.AuthNoPasswordSet;
     }
 
     if (std.mem.eql(u8, password, client.server.config.requirepass.?)) {
@@ -40,7 +40,7 @@ pub fn auth(client: *Client, args: []const Value) !void {
         try resp.writeOK(writer);
     } else {
         client.authenticated = false;
-        try resp.writeError(writer, "ERR invalid password");
+        return error.AuthInvalidPassword;
     }
 }
 

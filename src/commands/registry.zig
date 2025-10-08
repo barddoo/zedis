@@ -9,6 +9,15 @@ pub const CommandError = error{
     WrongNumberOfArguments,
     InvalidArgument,
     UnknownCommand,
+    WrongType,
+    ValueNotInteger,
+    InvalidFloat,
+    Overflow,
+    KeyNotFound,
+    IndexOutOfRange,
+    NoSuchKey,
+    AuthNoPasswordSet,
+    AuthInvalidPassword,
 };
 
 pub const CommandHandler = union(enum) {
@@ -55,6 +64,28 @@ pub const CommandRegistry = struct {
 
     pub fn get(self: *CommandRegistry, name: []const u8) ?CommandInfo {
         return self.commands.get(name);
+    }
+
+    fn handleCommandError(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
+        const msg = switch (err) {
+            error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
+            error.ValueNotInteger => "ERR value is not an integer or out of range",
+            error.InvalidFloat => "ERR value is not a valid float",
+            error.Overflow => "ERR increment or decrement would overflow",
+            error.KeyNotFound => "ERR no such key",
+            error.IndexOutOfRange => "ERR index out of range",
+            error.NoSuchKey => "ERR no such key",
+            error.AuthNoPasswordSet => "ERR Client sent AUTH, but no password is set",
+            error.AuthInvalidPassword => "ERR invalid password",
+            else => blk: {
+                std.log.err("Handler for command '{s}' failed with error: {s}", .{
+                    command_name,
+                    @errorName(err),
+                });
+                break :blk "ERR while processing command";
+            },
+        };
+        resp.writeError(writer, msg) catch {};
     }
 
     pub fn executeCommandClient(
@@ -135,32 +166,20 @@ pub const CommandRegistry = struct {
                 .client_handler => |handler| {
                     // If we haven't provided a client, this is an invariant failure
                     handler(client, args) catch |err| {
-                        std.log.err("Handler for command '{s}' failed with error: {s}", .{
-                            cmd_info.name,
-                            @errorName(err),
-                        });
-                        resp.writeError(writer, "ERR while processing command") catch {};
+                        handleCommandError(writer, cmd_info.name, err);
                         return;
                     };
                 },
                 .store_handler => |handler| {
                     // If we haven't provided a store, this is an invariant failure
                     handler(writer, store, args) catch |err| {
-                        std.log.err("Handler for command '{s}' failed with error: {s}", .{
-                            cmd_info.name,
-                            @errorName(err),
-                        });
-                        resp.writeError(writer, "ERR while processing command") catch {};
+                        handleCommandError(writer, cmd_info.name, err);
                         return;
                     };
                 },
                 .default => |handler| {
                     handler(writer, args) catch |err| {
-                        std.log.err("Handler for command '{s}' failed with error: {s}", .{
-                            cmd_info.name,
-                            @errorName(err),
-                        });
-                        resp.writeError(writer, "ERR while processing command") catch {};
+                        handleCommandError(writer, cmd_info.name, err);
                         return;
                     };
                 },

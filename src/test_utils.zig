@@ -215,6 +215,326 @@ pub const MockClient = struct {
         try self.writeInt(deleted);
     }
 
+    pub fn testAppend(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const append_value = args[2].asSlice();
+
+        const current_value = self.store.get(key);
+        var new_value: []const u8 = undefined;
+        var needs_free = false;
+
+        if (current_value) |v| {
+            const current_str = switch (v.value) {
+                .string => |s| s,
+                .short_string => |ss| ss.asSlice(),
+                .int => |i| blk: {
+                    var buf: [21]u8 = undefined;
+                    break :blk std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            };
+
+            const concatenated = try std.fmt.allocPrint(self.allocator, "{s}{s}", .{ current_str, append_value });
+            new_value = concatenated;
+            needs_free = true;
+        } else {
+            new_value = append_value;
+        }
+
+        defer if (needs_free) self.allocator.free(new_value);
+        try self.store.set(key, new_value);
+
+        try self.writeInt(new_value.len);
+    }
+
+    pub fn testStrlen(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const value = self.store.get(key);
+
+        if (value) |v| {
+            const len: usize = switch (v.value) {
+                .string => |s| s.len,
+                .short_string => |ss| ss.len,
+                .int => |i| blk: {
+                    var buf: [21]u8 = undefined;
+                    const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
+                    break :blk str.len;
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            };
+            try self.writeInt(len);
+        } else {
+            try self.writeInt(0);
+        }
+    }
+
+    pub fn testGetset(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const new_value = args[2].asSlice();
+
+        const old_value = self.store.get(key);
+
+        if (old_value) |v| {
+            switch (v.value) {
+                .string => |s| try self.writeBulkString(s),
+                .short_string => |ss| try self.writeBulkString(ss.asSlice()),
+                .int => |i| {
+                    const int_str = try std.fmt.allocPrint(self.allocator, "{d}", .{i});
+                    defer self.allocator.free(int_str);
+                    try self.writeBulkString(int_str);
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            }
+        } else {
+            try self.writeNull();
+        }
+
+        try self.store.set(key, new_value);
+    }
+
+    pub fn testMget(self: *MockClient, args: []const Value) !void {
+        try self.writeListLen(args.len - 1);
+
+        for (args[1..]) |key_arg| {
+            const key = key_arg.asSlice();
+            const value = self.store.get(key);
+
+            if (value) |v| {
+                switch (v.value) {
+                    .string => |s| try self.writeBulkString(s),
+                    .short_string => |ss| try self.writeBulkString(ss.asSlice()),
+                    .int => |i| {
+                        const int_str = try std.fmt.allocPrint(self.allocator, "{d}", .{i});
+                        defer self.allocator.free(int_str);
+                        try self.writeBulkString(int_str);
+                    },
+                    .list => try self.writeNull(),
+                }
+            } else {
+                try self.writeNull();
+            }
+        }
+    }
+
+    pub fn testMset(self: *MockClient, args: []const Value) !void {
+        if (args.len % 2 != 1) {
+            try self.writeError("ERR wrong number of arguments for 'mset' command", .{});
+            return;
+        }
+
+        var i: usize = 1;
+        while (i < args.len) : (i += 2) {
+            const key = args[i].asSlice();
+            const value = args[i + 1].asSlice();
+            try self.store.set(key, value);
+        }
+
+        try self.output.appendSlice("+OK\r\n");
+    }
+
+    pub fn testSetex(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const seconds = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+        const value = args[3].asSlice();
+
+        try self.store.set(key, value);
+
+        if (seconds > 0) {
+            const expiration_time = std.time.milliTimestamp() + (seconds * 1000);
+            _ = try self.store.expire(key, expiration_time);
+        }
+
+        try self.output.appendSlice("+OK\r\n");
+    }
+
+    pub fn testSetnx(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const value = args[2].asSlice();
+
+        const exists = self.store.get(key) != null;
+
+        if (!exists) {
+            try self.store.set(key, value);
+            try self.writeInt(1);
+        } else {
+            try self.writeInt(0);
+        }
+    }
+
+    pub fn testIncrby(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const increment = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var new_value: i64 = increment;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    const int_val = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = std.math.add(i64, int_val, increment) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .short_string => |ss| {
+                    const int_val = std.fmt.parseInt(i64, ss.asSlice(), 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = std.math.add(i64, int_val, increment) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .int => |i| {
+                    new_value = std.math.add(i64, i, increment) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            }
+        }
+
+        try self.store.setInt(key, new_value);
+        const result_str = try std.fmt.allocPrint(self.allocator, "{d}", .{new_value});
+        defer self.allocator.free(result_str);
+        try self.writeBulkString(result_str);
+    }
+
+    pub fn testDecrby(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const decrement = args[2].asInt() catch {
+            try self.writeError("ERR value is not an integer or out of range", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var new_value: i64 = -decrement;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    const int_val = std.fmt.parseInt(i64, s, 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = std.math.sub(i64, int_val, decrement) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .short_string => |ss| {
+                    const int_val = std.fmt.parseInt(i64, ss.asSlice(), 10) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                    new_value = std.math.sub(i64, int_val, decrement) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .int => |i| {
+                    new_value = std.math.sub(i64, i, decrement) catch {
+                        try self.writeError("ERR value is not an integer or out of range", .{});
+                        return;
+                    };
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            }
+        }
+
+        try self.store.setInt(key, new_value);
+        const result_str = try std.fmt.allocPrint(self.allocator, "{d}", .{new_value});
+        defer self.allocator.free(result_str);
+        try self.writeBulkString(result_str);
+    }
+
+    pub fn testIncrbyfloat(self: *MockClient, args: []const Value) !void {
+        const key = args[1].asSlice();
+        const increment_str = args[2].asSlice();
+
+        const increment = std.fmt.parseFloat(f64, increment_str) catch {
+            try self.writeError("ERR value is not a valid float", .{});
+            return;
+        };
+
+        const current_value = self.store.get(key);
+        var current_float: f64 = 0.0;
+
+        if (current_value) |v| {
+            switch (v.value) {
+                .string => |s| {
+                    current_float = std.fmt.parseFloat(f64, s) catch {
+                        try self.writeError("ERR value is not a valid float", .{});
+                        return;
+                    };
+                },
+                .short_string => |ss| {
+                    current_float = std.fmt.parseFloat(f64, ss.asSlice()) catch {
+                        try self.writeError("ERR value is not a valid float", .{});
+                        return;
+                    };
+                },
+                .int => |i| {
+                    current_float = @floatFromInt(i);
+                },
+                .list => {
+                    try self.writeError("WRONGTYPE Operation against a key holding the wrong kind of value", .{});
+                    return;
+                },
+            }
+        }
+
+        const new_float = current_float + increment;
+
+        var buf: [64]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buf, "{d:.17}", .{new_float}) catch {
+            try self.writeError("ERR overflow", .{});
+            return;
+        };
+
+        // Remove trailing zeros and trailing decimal point
+        var end = formatted.len;
+        if (std.mem.indexOf(u8, formatted, ".")) |_| {
+            while (end > 0 and formatted[end - 1] == '0') {
+                end -= 1;
+            }
+            if (end > 0 and formatted[end - 1] == '.') {
+                end -= 1;
+            }
+        }
+
+        const result = formatted[0..end];
+        try self.store.set(key, result);
+        try self.writeBulkString(result);
+    }
+
     // List command test methods
     pub fn writeListLen(self: *MockClient, count: usize) !void {
         try self.output.writer().print("*{d}\r\n", .{count});

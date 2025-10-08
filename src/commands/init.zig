@@ -228,5 +228,95 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = false,
     });
 
+    try registry.register(.{
+        .name = "APPEND",
+        .handler = .{ .store_handler = string.append },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Append a value to a key",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "STRLEN",
+        .handler = .{ .store_handler = string.strlen },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the length of the value stored in a key",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "GETSET",
+        .handler = .{ .store_handler = string.getset },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Set a key and return its old value",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "MGET",
+        .handler = .{ .store_handler = string.mget },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Get the values of multiple keys",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "MSET",
+        .handler = .{ .store_handler = string.mset },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Set multiple key-value pairs",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "SETEX",
+        .handler = .{ .store_handler = string.setex },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Set a key with expiration time",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "SETNX",
+        .handler = .{ .store_handler = string.setnx },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Set a key only if it doesn't exist",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "INCRBY",
+        .handler = .{ .store_handler = string.incrby },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Increment a key by a specific amount",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "DECRBY",
+        .handler = .{ .store_handler = string.decrby },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Decrement a key by a specific amount",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "INCRBYFLOAT",
+        .handler = .{ .store_handler = string.incrbyfloat },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Increment a key by a floating point number",
+        .write_to_aof = true,
+    });
+
     return registry;
 }
