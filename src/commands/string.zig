@@ -9,14 +9,12 @@ const resp = @import("./resp.zig");
 pub const StringCommandError = error{
     WrongType,
     ValueNotInteger,
-    KeyNotFound,
 };
 
 fn getErrorMessage(err: StringCommandError) []const u8 {
     return switch (err) {
         StringCommandError.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
         StringCommandError.ValueNotInteger => "ERR value is not an integer or out of range",
-        StringCommandError.KeyNotFound => "ERR key not found",
     };
 }
 
@@ -50,13 +48,13 @@ pub fn get(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 pub fn incr(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
     const new_value = incrDecr(store, key, 1) catch |err| switch (err) {
-        StringCommandError.WrongType => |e| {
-            try resp.writeError(writer, getErrorMessage(e));
-            return e;
+        StringCommandError.WrongType => {
+            try resp.writeError(writer, getErrorMessage(StringCommandError.WrongType));
+            return;
         },
-        StringCommandError.ValueNotInteger => |e| {
-            try resp.writeError(writer, getErrorMessage(e));
-            return e;
+        StringCommandError.ValueNotInteger => {
+            try resp.writeError(writer, getErrorMessage(StringCommandError.ValueNotInteger));
+            return;
         },
         else => return err,
     };
@@ -68,15 +66,11 @@ pub fn decr(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
     const new_value = incrDecr(store, key, -1) catch |err| switch (err) {
         StringCommandError.WrongType => {
-            return resp.writeError(writer, "ERR value is not an integer or out of range");
+            try resp.writeError(writer, getErrorMessage(StringCommandError.WrongType));
+            return;
         },
         StringCommandError.ValueNotInteger => {
-            return resp.writeError(writer, "ERR value is not an integer or out of range");
-        },
-        StringCommandError.KeyNotFound => {
-            // For DECR on non-existent key, Redis creates it with value 0 then decrements
-            try store.setInt(key, -1);
-            try resp.writeSingleIntBulkString(writer, -1);
+            try resp.writeError(writer, getErrorMessage(StringCommandError.ValueNotInteger));
             return;
         },
         else => return err,
@@ -104,7 +98,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                     return StringCommandError.ValueNotInteger;
                 };
             },
-            else => return StringCommandError.ValueNotInteger,
+            else => return StringCommandError.WrongType,
         }
 
         const int_object = ZedisObject{ .value = .{ .int = new_value } };
@@ -112,8 +106,12 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
 
         return new_value;
     } else {
-        try store_ptr.setInt(key, 1);
-        return 1;
+        // Redis behavior: non-existent key is treated as 0, then the operation is applied
+        const new_value = std.math.add(i64, 0, value) catch {
+            return StringCommandError.ValueNotInteger;
+        };
+        try store_ptr.setInt(key, new_value);
+        return new_value;
     }
 }
 
@@ -199,6 +197,10 @@ test "incrDecr helper function with non-existent key" {
     var store = Store.init(allocator);
     defer store.deinit();
 
-    const result = incrDecr(&store, "nonexistent", 1);
-    try testing.expectError(StringCommandError.KeyNotFound, result);
+    const result = try incrDecr(&store, "nonexistent", 1);
+    try testing.expectEqual(@as(i64, 1), result);
+
+    const stored_value = store.get("nonexistent");
+    try testing.expect(stored_value != null);
+    try testing.expectEqual(@as(i64, 1), stored_value.?.value.int);
 }
