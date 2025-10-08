@@ -6,7 +6,7 @@ const resp = @import("../commands/resp.zig");
 // PING command implementation
 pub fn ping(writer: *std.Io.Writer, args: []const Value) !void {
     if (args.len == 1) {
-        try resp.writeBulkString(writer, "PONG");
+        try resp.writeSimpleString(writer, "PONG");
     } else {
         try resp.writeBulkString(writer, args[1].asSlice());
     }
@@ -22,7 +22,7 @@ pub fn quit(client: *Client, args: []const Value) !void {
     var sw = client.connection.stream.writer(&.{});
     const writer = &sw.interface;
     _ = args; // Unused parameter
-    try resp.writeBulkString(writer, "OK");
+    try resp.writeOK(writer);
     client.connection.stream.close();
 }
 
@@ -37,7 +37,7 @@ pub fn auth(client: *Client, args: []const Value) !void {
 
     if (std.mem.eql(u8, password, client.server.config.requirepass.?)) {
         client.authenticated = true;
-        try resp.writeBulkString(writer, "OK");
+        try resp.writeOK(writer);
     } else {
         client.authenticated = false;
         try resp.writeError(writer, "ERR invalid password");

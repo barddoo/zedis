@@ -140,7 +140,7 @@ pub fn lset(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 
     try list.setByIndex(index, .{ .string = value });
 
-    try resp.writeBulkString(writer, "OK");
+    try resp.writeOK(writer);
 }
 
 pub fn lrange(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {

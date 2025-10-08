@@ -10,7 +10,15 @@ const PrimitiveValue = storeModule.PrimitiveValue;
 // --- RESP Writing Helpers ---
 
 pub fn writeError(writer: *std.Io.Writer, msg: []const u8) !void {
-    try writer.print("-{s}\r\n", .{msg});
+    try writer.print("-ERR {s}\r\n", .{msg});
+}
+
+pub fn writeSimpleString(writer: *std.Io.Writer, str: []const u8) !void {
+    try writer.print("+{s}\r\n", .{str});
+}
+
+pub fn writeOK(writer: *std.Io.Writer) !void {
+    try writer.writeAll("+OK\r\n");
 }
 
 pub fn writeBulkString(writer: *std.Io.Writer, str: []const u8) !void {
@@ -75,7 +83,7 @@ pub fn writeTupleAsArray(writer: *std.Io.Writer, items: anytype) !void {
 }
 
 pub fn writeNull(writer: *std.Io.Writer) !void {
-    _ = try writer.write("$-1\r\n");
+    try writer.writeAll("$-1\r\n");
 }
 
 pub fn writePrimitiveValue(writer: *std.Io.Writer, value: PrimitiveValue) !void {

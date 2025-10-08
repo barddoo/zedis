@@ -16,5 +16,5 @@ pub fn save(client: *Client, args: []const Value) !void {
     defer zdb.deinit();
     try zdb.writeFile();
 
-    try resp.writeBulkString(writer, "OK");
+    try resp.writeOK(writer);
 }

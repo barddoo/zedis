@@ -101,7 +101,7 @@ pub const Server = struct {
             .createdTime = time.timestamp(),
 
             // AOF
-            .aof_writer = try aof.Writer.init(true),
+            .aof_writer = try aof.Writer.init(false),
         };
 
         if (config.requiresAuth()) {

@@ -26,7 +26,7 @@ pub fn set(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 
     try store.set(key, value);
 
-    try resp.writeBulkString(writer, "OK");
+    try resp.writeOK(writer);
 }
 
 pub fn get(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
@@ -56,12 +56,6 @@ pub fn incr(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
         },
         StringCommandError.ValueNotInteger => |e| {
             try resp.writeError(writer, getErrorMessage(e));
-            return e;
-        },
-        StringCommandError.KeyNotFound => |e| {
-            // For INCR on non-existent key, Redis creates it with value 0 then increments
-            try store.setInt(key, 1);
-            try resp.writeSingleIntBulkString(writer, 1);
             return e;
         },
         else => return err,
@@ -118,7 +112,8 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
 
         return new_value;
     } else {
-        return StringCommandError.KeyNotFound;
+        try store_ptr.setInt(key, 1);
+        return 1;
     }
 }
 

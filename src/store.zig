@@ -1,4 +1,16 @@
 const std = @import("std");
+const SafeMemoryPool = @import("./safe_memory_pool.zig");
+const simd = @import("./simd.zig");
+
+// Optimal load factor
+const optimal_max_load_percentage = 75;
+
+const OptimizedHashMap = std.ArrayHashMapUnmanaged([]const u8, ZedisObject, StringContext, true);
+
+// Memory pool sizes optimized for Redis workloads
+const SMALL_STRING_SIZE = 32; // Redis keys are often small
+const MEDIUM_STRING_SIZE = 128; // Medium-sized values
+const LARGE_STRING_SIZE = 512; // Larger values but still pooled
 
 pub const ValueType = enum(u8) {
     string = 0,
@@ -180,12 +192,14 @@ pub const ZedisList = struct {
 };
 
 pub const ShortString = struct {
-    data: [15]u8, // Inline storage
+    data: [23]u8, // Inline storage - increased from 15 to 23 bytes
     len: u8, // Actual length
 
     pub fn fromSlice(str: []const u8) ShortString {
         var ss: ShortString = .{ .data = undefined, .len = @intCast(str.len) };
         @memcpy(ss.data[0..str.len], str);
+        // Zero remaining bytes for consistent hashing
+        @memset(ss.data[str.len..], 0);
         return ss;
     }
 
@@ -201,24 +215,106 @@ pub const ZedisValue = union(ValueType) {
     short_string: ShortString,
 };
 
-pub const ZedisObject = struct { value: ZedisValue };
+pub const ZedisObject = struct {
+    value: ZedisValue,
+};
+
+const StringContext = struct {
+    pub fn hash(self: @This(), s: []const u8) u32 {
+        _ = self;
+        // Redis-optimized hash function for typical key patterns
+        return redisOptimizedHash(s);
+    }
+
+    pub fn eql(self: @This(), a: []const u8, b: []const u8, b_index: usize) bool {
+        _ = self;
+        _ = b_index;
+        // Quick length check first
+        if (a.len != b.len) return false;
+        // For interned strings, this becomes pointer comparison
+        if (a.ptr == b.ptr) return true;
+
+        // Use SIMD for longer strings (Redis keys can be long)
+        if (a.len >= 16) {
+            return simd.simdStringEql(a, b);
+        }
+
+        return std.mem.eql(u8, a, b);
+    }
+};
+
+/// Redis-optimized hash function for common key patterns
+fn redisOptimizedHash(s: []const u8) u32 {
+    if (s.len == 0) return 0;
+
+    // Fast path for very short keys
+    if (s.len <= 4) {
+        var hash: u32 = 0;
+        for (s, 0..) |byte, i| {
+            hash |= @as(u32, byte) << @intCast(i * 8);
+        }
+        return hash;
+    }
+
+    // Optimized for Redis key patterns:
+    // - "user:123", "session:abc", "cache:key:value"
+    // - Often have colons as separators
+    // - Numbers are common
+    var hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+    const prime: u64 = 0x00000100000001b3; // FNV-1a prime
+
+    // Process 8 bytes at a time for better performance
+    var i: usize = 0;
+    while (i + 8 <= s.len) {
+        const chunk = std.mem.readInt(u64, s[i..][0..8], .little);
+        hash ^= chunk;
+        hash *%= prime;
+        i += 8;
+    }
+
+    // Handle remaining bytes
+    while (i < s.len) {
+        hash ^= s[i];
+        hash *%= prime;
+        i += 1;
+    }
+
+    return @truncate(hash);
+}
 
 pub const Store = struct {
     base_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
-    // The HashMap stores string keys and string values.
-    map: std.StringHashMapUnmanaged(ZedisObject),
-    // Separate map for expirations
+    // Cache hash map
+    map: OptimizedHashMap,
+    // Expiration hash map
     expiration_map: std.StringHashMapUnmanaged(i64),
 
-    pool_32: std.heap.MemoryPool([32]u8),
-    pool_64: std.heap.MemoryPool([64]u8),
-    pool_128: std.heap.MemoryPool([128]u8),
+    // Map of interned strings
+    interned_strings: std.StringHashMapUnmanaged([]const u8),
 
-    // Initializes the store.
+    // Hybrid memory pools for different string sizes
+    small_pool: SafeMemoryPool, // 32 bytes - for keys
+    medium_pool: SafeMemoryPool, // 128 bytes - for small values
+    large_pool: SafeMemoryPool, // 512 bytes - for medium values
+
+    // Statistics for pool effectiveness
+    pool_hits: std.atomic.Value(u64),
+    pool_misses: std.atomic.Value(u64),
+
+    /// Check if we need to resize to maintain optimal load factor
+    inline fn maybeResize(self: *Store) !void {
+        const current_load = (self.map.count() * 100) / self.map.capacity();
+        if (current_load > optimal_max_load_percentage) {
+            const new_capacity = self.map.capacity() * 2;
+            try self.map.ensureTotalCapacity(self.base_allocator, new_capacity);
+        }
+    }
+
     pub fn init(allocator: std.mem.Allocator) Store {
-        const initial_capacity = 1024;
-        var map: std.StringHashMapUnmanaged(ZedisObject) = .{};
+        // Increased initial capacity to reduce rehashing
+        const initial_capacity = 4096;
+        var map: OptimizedHashMap = .{};
         map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
 
         return .{
@@ -226,77 +322,113 @@ pub const Store = struct {
             .allocator = allocator,
             .map = map,
             .expiration_map = .{},
-            .pool_32 = std.heap.MemoryPool([32]u8).init(allocator),
-            .pool_64 = std.heap.MemoryPool([64]u8).init(allocator),
-            .pool_128 = std.heap.MemoryPool([128]u8).init(allocator),
+            .interned_strings = .{},
+            .small_pool = SafeMemoryPool.init(allocator, SMALL_STRING_SIZE),
+            .medium_pool = SafeMemoryPool.init(allocator, MEDIUM_STRING_SIZE),
+            .large_pool = SafeMemoryPool.init(allocator, LARGE_STRING_SIZE),
+            .pool_hits = std.atomic.Value(u64).init(0),
+            .pool_misses = std.atomic.Value(u64).init(0),
         };
     }
 
     // Frees all memory associated with the store.
     pub fn deinit(self: *Store) void {
+        // Free all values in the main map
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
-            self.freeString(entry.key_ptr.*);
+            // Don't free keys - they're managed by interned_strings
             // Free values based on their type
             switch (entry.value_ptr.*.value) {
-                .string => |str| self.freeString(str),
+                .string => |str| {
+                    if (str.len > 0) self.smartFree(str);
+                },
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
             }
         }
         self.map.deinit(self.base_allocator);
+
+        // Free interned strings
+        var intern_it = self.interned_strings.iterator();
+        while (intern_it.next()) |entry| {
+            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
+        }
+        self.interned_strings.deinit(self.base_allocator);
+
         self.expiration_map.deinit(self.base_allocator);
-        self.pool_32.deinit();
-        self.pool_64.deinit();
-        self.pool_128.deinit();
+
+        // Clean up memory pools
+        self.small_pool.deinit();
+        self.medium_pool.deinit();
+        self.large_pool.deinit();
     }
 
     pub inline fn size(self: Store) u32 {
-        return self.map.count();
+        return @intCast(self.map.count());
     }
 
-    /// Allocate a string buffer using pools for common sizes
-    inline fn allocString(self: *Store, len: usize) ![]u8 {
-        if (len <= 32) {
-            const buf = try self.pool_32.create();
-            return buf[0..len];
-        } else if (len <= 64) {
-            const buf = try self.pool_64.create();
-            return buf[0..len];
-        } else if (len <= 128) {
-            const buf = try self.pool_128.create();
-            return buf[0..len];
+    fn internString(self: *Store, str: []const u8) ![]const u8 {
+        const gop = try self.interned_strings.getOrPut(self.base_allocator, str);
+        if (!gop.found_existing) {
+            const owned_str = try self.dupeString(str);
+            gop.key_ptr.* = owned_str;
+            gop.value_ptr.* = owned_str;
         }
+        return gop.value_ptr.*;
+    }
+
+    /// Smart allocation using memory pools based on size
+    pub inline fn smartAlloc(self: *Store, len: usize) ![]u8 {
+        if (len <= SMALL_STRING_SIZE) {
+            if (self.small_pool.alloc(len)) |result| {
+                _ = self.pool_hits.fetchAdd(1, .monotonic);
+                return result;
+            } else |_| {}
+        } else if (len <= MEDIUM_STRING_SIZE) {
+            if (self.medium_pool.alloc(len)) |result| {
+                _ = self.pool_hits.fetchAdd(1, .monotonic);
+                return result;
+            } else |_| {}
+        } else if (len <= LARGE_STRING_SIZE) {
+            if (self.large_pool.alloc(len)) |result| {
+                _ = self.pool_hits.fetchAdd(1, .monotonic);
+                return result;
+            } else |_| {}
+        }
+
+        // Fallback to base allocator
+        _ = self.pool_misses.fetchAdd(1, .monotonic);
         return try self.base_allocator.alloc(u8, len);
     }
 
-    /// Free a string buffer, returning to pool if applicable
-    inline fn freeString(self: *Store, str: []const u8) void {
-        if (str.len <= 32) {
-            const array_ptr: *align(8) [32]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
-            self.pool_32.destroy(array_ptr);
-        } else if (str.len <= 64) {
-            const array_ptr: *align(8) [64]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
-            self.pool_64.destroy(array_ptr);
-        } else if (str.len <= 128) {
-            const array_ptr: *align(8) [128]u8 = @ptrCast(@alignCast(@constCast(str.ptr)));
-            self.pool_128.destroy(array_ptr);
+    /// Smart deallocation that returns memory to appropriate pool
+    pub inline fn smartFree(self: *Store, slice: []const u8) void {
+        if (slice.len == 0) return;
+
+        // Try pools in order of likelihood
+        if (slice.len <= SMALL_STRING_SIZE and self.small_pool.owns(slice)) {
+            self.small_pool.free(slice);
+        } else if (slice.len <= MEDIUM_STRING_SIZE and self.medium_pool.owns(slice)) {
+            self.medium_pool.free(slice);
+        } else if (slice.len <= LARGE_STRING_SIZE and self.large_pool.owns(slice)) {
+            self.large_pool.free(slice);
         } else {
-            self.base_allocator.free(str);
+            // Not from pools, use base allocator
+            self.base_allocator.free(slice);
         }
     }
 
-    /// Duplicate a string using pools when possible
-    inline fn dupeString(self: *Store, str: []const u8) ![]u8 {
-        const buf = try self.allocString(str.len);
+    /// Duplicate a string using smart allocation
+    pub inline fn dupeString(self: *Store, str: []const u8) ![]u8 {
+        const buf = try self.smartAlloc(str.len);
         @memcpy(buf, str);
         return buf;
     }
 
     fn setString(self: *Store, key: []const u8, value: []const u8) !void {
         // Automatically use ShortString for small strings to avoid allocation
-        const zedis_value: ZedisValue = if (value.len <= 15)
+        const zedis_value: ZedisValue = if (value.len <= 23)
             .{ .short_string = ShortString.fromSlice(value) }
         else
             .{ .string = value };
@@ -319,20 +451,25 @@ pub const Store = struct {
 
     /// Update/overwrite an existing key or insert if not present
     pub inline fn putObject(self: *Store, key: []const u8, object: ZedisObject) !void {
-        const gop = try self.map.getOrPut(self.base_allocator, key);
+        // Check if we need to resize before adding new entries
+        try self.maybeResize();
+
+        const interned_key = try self.internString(key);
+        const gop = try self.map.getOrPut(self.base_allocator, interned_key);
 
         // Free old value if key existed
         if (gop.found_existing) {
             switch (gop.value_ptr.value) {
-                .string => |str| self.freeString(str),
+                .string => |str| {
+                    if (str.len > 0) self.smartFree(str);
+                },
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
             }
-        } else {
-            // New key - allocate copy using pool allocator
-            gop.key_ptr.* = try self.dupeString(key);
         }
+        // Key is already interned, no need to duplicate again
+        gop.key_ptr.* = interned_key;
 
         // Build the new object with allocated values
         var new_object = object;
@@ -352,16 +489,19 @@ pub const Store = struct {
 
     // Delete a key from the store
     pub fn delete(self: *Store, key: []const u8) bool {
-        if (self.map.fetchRemove(key)) |kv| {
-            self.freeString(kv.key);
+        if (self.map.getPtr(key)) |obj_ptr| {
             // Free the value based on its type
-            switch (kv.value.value) {
-                .string => |str| self.freeString(str),
+            switch (obj_ptr.value) {
+                .string => |str| {
+                    if (str.len > 0) self.smartFree(str);
+                },
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
             }
-            // Remove from expiration map if present
+
+            // Remove from maps
+            _ = self.map.swapRemove(key);
             _ = self.expiration_map.remove(key);
             return true;
         }
@@ -417,7 +557,8 @@ pub const Store = struct {
 
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {
         if (self.map.contains(key)) {
-            try self.expiration_map.put(self.base_allocator, key, time);
+            const interned_key = try self.internString(key);
+            try self.expiration_map.put(self.base_allocator, interned_key, time);
             return true;
         }
         return false;
@@ -433,4 +574,35 @@ pub const Store = struct {
     pub inline fn getTtl(self: Store, key: []const u8) ?i64 {
         return self.expiration_map.get(key);
     }
+
+    /// Get memory pool statistics
+    pub fn getPoolStats(self: *Store) PoolStats {
+        const hits = self.pool_hits.load(.acquire);
+        const misses = self.pool_misses.load(.acquire);
+        const total = hits + misses;
+
+        return PoolStats{
+            .pool_hits = hits,
+            .pool_misses = misses,
+            .hit_rate = if (total > 0) (@as(f64, @floatFromInt(hits)) / @as(f64, @floatFromInt(total))) * 100.0 else 0.0,
+            .small_pool_allocations = self.small_pool.allocations.count(),
+            .medium_pool_allocations = self.medium_pool.allocations.count(),
+            .large_pool_allocations = self.large_pool.allocations.count(),
+        };
+    }
+
+    /// Reset pool statistics
+    pub fn resetPoolStats(self: *Store) void {
+        self.pool_hits.store(0, .release);
+        self.pool_misses.store(0, .release);
+    }
+};
+
+pub const PoolStats = struct {
+    pool_hits: u64,
+    pool_misses: u64,
+    hit_rate: f64,
+    small_pool_allocations: u32,
+    medium_pool_allocations: u32,
+    large_pool_allocations: u32,
 };

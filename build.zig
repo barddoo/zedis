@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) void {
     });
 
     // This makes the standard library available to our project.
-    exe.linkSystemLibrary("c");
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
