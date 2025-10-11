@@ -24,10 +24,11 @@ pub const Client = struct {
     client_id: u64,
     command_registry: *CommandRegistry,
     connection: Connection,
+    current_db: u8,
+    databases: *[16]Store,
     is_in_pubsub_mode: bool,
     pubsub_context: *PubSubContext,
     server: *Server,
-    store: *Store,
     writer: std.net.Stream.Writer,
 
     pub fn init(
@@ -36,7 +37,7 @@ pub const Client = struct {
         pubsub_context: *PubSubContext,
         registry: *CommandRegistry,
         server: *Server,
-        store: *Store,
+        databases: *[16]Store,
     ) Client {
         const id = next_client_id.fetchAdd(1, .monotonic);
 
@@ -46,10 +47,11 @@ pub const Client = struct {
             .client_id = id,
             .command_registry = registry,
             .connection = connection,
+            .current_db = 0,
+            .databases = databases,
             .is_in_pubsub_mode = false,
             .pubsub_context = pubsub_context,
             .server = server,
-            .store = store,
             .writer = connection.stream.writer(&.{}),
         };
     }
@@ -111,5 +113,10 @@ pub const Client = struct {
 
     pub fn isAuthenticated(self: *Client) bool {
         return self.authenticated or !self.server.config.requiresAuth();
+    }
+
+    // Helper to get the currently selected database
+    pub fn getCurrentStore(self: *Client) *Store {
+        return &self.databases[self.current_db];
     }
 };

@@ -12,7 +12,8 @@ pub fn save(client: *Client, args: []const Value) !void {
     var sw = client.connection.stream.writer(&.{});
     const writer = &sw.interface;
 
-    var zdb = try ZDB.Writer.init(client.allocator, client.store, "test.rdb");
+    // SAVE command saves the currently selected database
+    var zdb = try ZDB.Writer.init(client.allocator, client.getCurrentStore(), "test.rdb");
     defer zdb.deinit();
     try zdb.writeFile();
 

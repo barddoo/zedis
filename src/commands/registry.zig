@@ -18,6 +18,7 @@ pub const CommandError = error{
     NoSuchKey,
     AuthNoPasswordSet,
     AuthInvalidPassword,
+    InvalidDatabaseIndex,
 };
 
 pub const CommandHandler = union(enum) {
@@ -77,6 +78,7 @@ pub const CommandRegistry = struct {
             error.NoSuchKey => "ERR no such key",
             error.AuthNoPasswordSet => "ERR Client sent AUTH, but no password is set",
             error.AuthInvalidPassword => "ERR invalid password",
+            error.InvalidDatabaseIndex => "ERR invalid database index (must be 0-15)",
             else => blk: {
                 std.log.err("Handler for command '{s}' failed with error: {s}", .{
                     command_name,
@@ -97,7 +99,7 @@ pub const CommandRegistry = struct {
         var sw = client.connection.stream.writer(&buf);
         const writer = &sw.interface;
 
-        try self.executeCommand(writer, client, client.store, &client.server.aof_writer, args);
+        try self.executeCommand(writer, client, client.getCurrentStore(), &client.server.aof_writer, args);
 
         try writer.flush();
     }

@@ -38,7 +38,7 @@ pub const Server = struct {
 
     // Custom allocator for key-value store with eviction
     kv_allocator: KeyValueAllocator,
-    store: Store,
+    databases: [16]Store,
     registry: CommandRegistry,
     pubsub_context: PubSubContext,
 
@@ -63,8 +63,11 @@ pub const Server = struct {
         // Initialize the KV allocator with eviction support
         var kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
 
-        // Initialize store with the KV allocator
-        const store = Store.init(kv_allocator.allocator());
+        // Initialize 16 databases with the KV allocator (shared memory pool)
+        var databases: [16]Store = undefined;
+        for (&databases) |*db| {
+            db.* = Store.init(kv_allocator.allocator());
+        }
 
         // Initialize temp arena for temporary allocations
         const temp_arena = std.heap.ArenaAllocator.init(base_allocator);
@@ -90,9 +93,9 @@ pub const Server = struct {
             // Arena for temporary allocations
             .temp_arena = temp_arena,
 
-            // KV allocator and store
+            // KV allocator and databases
             .kv_allocator = kv_allocator,
-            .store = store,
+            .databases = databases,
             .registry = registry,
             .pubsub_context = undefined, // Will be initialized after server creation
 
@@ -115,28 +118,32 @@ pub const Server = struct {
         // Prefer AOF to RDB
         // Load AOF file if it exists
         // 'true' to be replaced with user option (use aof/rdb on boot)
+        // Note: AOF/RDB currently only loads into database 0
         if (true) {
-            std.log.info("Loading AOF", .{});
-            var aof_reader = aof.Reader.init(server.temp_arena.allocator(), &server.store, &server.registry) catch |err| {
-                std.log.err("Failed to load AOF: {s}", .{@errorName(err)});
-                return err;
-            };
-            aof_reader.read() catch |err| {
-                std.log.err("Failed to load AOF: {s}", .{@errorName(err)});
-                return err;
-            };
+            if (aof.Reader.init(server.temp_arena.allocator(), &server.databases[0], &server.registry)) |reader_value| {
+                var reader = reader_value;
+                std.log.info("Loading AOF into database 0", .{});
+                reader.read() catch |err| {
+                    std.log.warn("Failed to read AOF: {s}", .{@errorName(err)});
+                };
+            } else |err| {
+                std.log.debug("AOF not available: {s}", .{@errorName(err)});
+            }
         } else {
             // Load RDB file if it exists
-            const file_exists = Reader.rdbFileExists();
-            if (file_exists) {
-                var reader = try Reader.init(server.temp_arena.allocator(), &server.store);
-                defer reader.deinit();
+            if (Reader.rdbFileExists()) {
+                if (Reader.init(server.temp_arena.allocator(), &server.databases[0])) |reader_value| {
+                    var reader = reader_value;
+                    defer reader.deinit();
 
-                if (reader.readFile()) |data| {
-                    std.log.debug("Loading RDB", .{});
-                    server.createdTime = data.ctime;
+                    if (reader.readFile()) |data| {
+                        std.log.info("Loading RDB into database 0", .{});
+                        server.createdTime = data.ctime;
+                    } else |err| {
+                        std.log.warn("Failed to read RDB: {s}", .{@errorName(err)});
+                    }
                 } else |err| {
-                    std.log.err("Failed to load rdb: {s}", .{@errorName(err)});
+                    std.log.warn("Failed to initialize RDB reader: {s}", .{@errorName(err)});
                 }
             }
         }
@@ -154,8 +161,10 @@ pub const Server = struct {
         // Network cleanup
         self.listener.deinit();
 
-        // Store cleanup (uses KV allocator)
-        self.store.deinit();
+        // Databases cleanup (uses KV allocator)
+        for (&self.databases) |*db| {
+            db.deinit();
+        }
 
         // Registry cleanup (uses temp arena)
         self.registry.deinit();
@@ -232,7 +241,7 @@ pub const Server = struct {
             &self.pubsub_context,
             &self.registry,
             self,
-            &self.store,
+            &self.databases,
         );
 
         defer {

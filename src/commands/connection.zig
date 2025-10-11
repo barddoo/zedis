@@ -44,6 +44,24 @@ pub fn auth(client: *Client, args: []const Value) !void {
     }
 }
 
+// SELECT command implementation - switch database
+pub fn select(client: *Client, args: []const Value) !void {
+    var sw = client.connection.stream.writer(&.{});
+    const writer = &sw.interface;
+
+    const db_str = args[1].asSlice();
+    const db_index = std.fmt.parseInt(u8, db_str, 10) catch {
+        return error.InvalidDatabaseIndex;
+    };
+
+    if (db_index >= 16) {
+        return error.InvalidDatabaseIndex;
+    }
+
+    client.current_db = db_index;
+    try resp.writeOK(writer);
+}
+
 // HELP command implementation
 pub fn help(writer: *std.Io.Writer, args: []const Value) !void {
     _ = args; // Unused parameter
@@ -51,16 +69,17 @@ pub fn help(writer: *std.Io.Writer, args: []const Value) !void {
         \\Zedis Server Commands:
         \\
         \\Connection Commands:
-        \\  PING [message]     - Ping the server
-        \\  ECHO <message>     - Echo the given string
-        \\  QUIT               - Close the connection
-        \\  HELP               - Show this help message
+        \\  PING [message]       - Ping the server
+        \\  ECHO <message>       - Echo the given string
+        \\  SELECT <index>       - Select database (0-15)
+        \\  QUIT                 - Close the connection
+        \\  HELP                 - Show this help message
         \\
         \\String Commands:
-        \\  SET <key> <value>  - Set string value of a key
-        \\  GET <key>          - Get string value of a key
-        \\  INCR <key>         - Increment the value of a key
-        \\  DECR <key>         - Decrement the value of a key
+        \\  SET <key> <value>    - Set string value of a key
+        \\  GET <key>            - Get string value of a key
+        \\  INCR <key>           - Increment the value of a key
+        \\  DECR <key>           - Decrement the value of a key
     ;
 
     try resp.writeBulkString(writer, help_text);

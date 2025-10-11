@@ -340,7 +340,7 @@ pub const Reader = struct {
         const key = try self.readString();
         const value = try self.genericRead();
 
-        try self.store.setObject(key, .{ .value = value, .expiration = undefined });
+        try self.store.putObject(key, .{ .value = value });
     }
 
     fn assert(incoming_byes: []u8, expected: []const u8) void {

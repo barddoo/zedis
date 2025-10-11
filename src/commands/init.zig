@@ -146,6 +146,15 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = false,
     });
 
+    try registry.register(.{
+        .name = "SELECT",
+        .handler = .{ .client_handler = connection_commands.select },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Select a database (0-15)",
+        .write_to_aof = false,
+    });
+
     // List commands: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
 
     try registry.register(.{
