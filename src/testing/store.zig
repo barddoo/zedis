@@ -3,7 +3,6 @@ const Store = @import("../store.zig").Store;
 const ZedisObject = @import("../store.zig").ZedisObject;
 const ZedisValue = @import("../store.zig").ZedisValue;
 const ValueType = @import("../store.zig").ValueType;
-const StoreError = @import("../store.zig").StoreError;
 const testing = std.testing;
 
 test "Store init and deinit" {
@@ -365,7 +364,7 @@ test "Store getList with wrong type" {
     try store.set("notalist", "hello");
 
     const list = store.getList("notalist");
-    try testing.expect(list == StoreError.WrongType);
+    try testing.expect(list == error.WrongType);
 }
 
 test "Store list type checking" {
@@ -416,7 +415,7 @@ test "Store overwrite list with string" {
     try testing.expectEqualStrings("hello", store.get("key1").?.value.short_string.asSlice());
 
     const retrieved_list = store.getList("key1");
-    try testing.expect(retrieved_list == StoreError.WrongType);
+    try testing.expect(retrieved_list == error.WrongType);
 }
 
 test "Store delete list key" {

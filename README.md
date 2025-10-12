@@ -2,32 +2,24 @@
 
 A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), designed for learning and experimentation. Zedis implements the core Redis protocol and data structures with a focus on simplicity, performance, and thread safety.
 
-> Made for learning purposes. Not intended for production use.
+> Made for learning purposes. Not intended for production use **for now**.
 
 ## Features
 
-- **Redis Protocol Compatibility**: Supports the Redis Serialization Protocol (RESP)locks
-- **Multiple Data Types**: String and integer value storage with automatic type conversion
-- **Core Commands**: Essential Redis commands including GET, SET, INCR, DECR, DEL, EXISTS, and TYPE
-- **High Performance**: Written in Zig for optimal performance and memory safety
-- **Connection Management**: Handles multiple concurrent client connections
+- **Redis Protocol Compatibility**: Supports the Redis Serialization Protocol (RESP)locks.
+- **Multiple Data Types**: String and integer value storage with automatic type conversion.
+- **Core Commands**: Essential Redis commands including GET, SET, INCR, DECR, DEL, EXISTS, and TYPE.
+- **High Performance**: Written in Zig for optimal performance and memory safety.
+- **Connection Management**: Handles multiple concurrent client connections.
 - **Disk persistence (RDB)**: Point-in-time snapshots of your dataset.
 - **Memory Management**: No memory allocation during command execution.
-- **Pub/Sub**: Decoupled communication between services. **(latest feature)** 🎉
+- **Pub/Sub**: Decoupled communication between services.
+- **Key Expiration**: Set time-to-live (TTL) for keys with background expiration handling.
+- **Time Series**: Time series data structure. **New!**
 
 ## Roadmap
 
-- [x] Add [RDB snapshots](https://rdb.fnordig.de/file_format.html#string-encoding)
-- [x] Implement pub/sub functionality
-- [x] Implement key expiration
-- [x] Background job for key expiration
-- [ ] Add tests to key expiration
-- [ ] Implement AOF (Append Only File) logging
-- [ ] Implement more Redis commands
-- [ ] Add support for lists and sets
-- [ ] Add configuration file support
-- [ ] Add clustering support
-- [ ] Performance benchmarking suite
+See the [open issues](https://github.com/barddoo/zedis/issues) for upcoming features and improvements.
 
 ## Quick Start
 
@@ -78,7 +70,7 @@ The codebase follows Zig conventions with clear separation of concerns:
 
 - Type-safe operations with compile-time guarantees
 - Explicit error handling throughout
-- Memory safety without garbage collection
+- Memory safety
 - Modular design for easy extension
 - Comprehensive logging for debugging
 
@@ -99,31 +91,14 @@ zig build -Doptimize=ReleaseFast
 zig build test
 ```
 
-### Adding New Commands
-
-1. Implement the command handler in the appropriate file under `src/commands/`
-2. Register the command in the command registry
-3. Add tests for the new functionality
-
-Example:
-```zig
-pub fn myCommand(client: *Client, args: []const Value) !void {
-    // Command implementation
-    try client.writeSimpleString("OK");
-}
-```
-
-### Code Style
-
-- Follow Zig's standard formatting (`zig fmt`)
-- Add comprehensive error handling
-- Include documentation comments for public APIs
-- Write tests for new functionality
-
 ## Contact
 
 - GitHub: [@barddoo](https://github.com/barddoo)
 - Project Link: [https://github.com/barddoo/zedis](https://github.com/barddoo/zedis)
+- LinkedIn: [Charles Fonseca](https://www.linkedin.com/in/charlesjrfonseca/)
 
 ## Thanks
-- Inspired by [Redis](https://redis.io/) and [Zig](https://ziglang.org/)
+- [Andrew Kelley](https://andrewkelley.me) - For creating the amazing [Zig Language](https://ziglang.org/).
+- [Redis](https://redis.io/) - For the inspiration and protocol design.
+- [TigerBeetle](https://tigerbeetle.com/) - For the memory management and the tiger style.
+- [Karl Seguin](https://github.com/karlseguin) - For the great articles.

@@ -12,8 +12,20 @@ pub const Value = struct {
         return std.fmt.parseInt(i64, self.data, 10);
     }
 
+    pub fn asU64(self: Value) std.fmt.ParseIntError!u64 {
+        return std.fmt.parseInt(u64, self.data, 10);
+    }
+
+    pub fn asF64(self: Value) std.fmt.ParseFloatError!f64 {
+        return std.fmt.parseFloat(f64, self.data);
+    }
+
     pub fn asUsize(self: Value) std.fmt.ParseIntError!usize {
         return std.fmt.parseInt(usize, self.data, 10);
+    }
+
+    pub fn asU16(self: Value) std.fmt.ParseIntError!u16 {
+        return std.fmt.parseInt(u16, self.data, 10);
     }
 };
 

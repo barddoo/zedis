@@ -159,6 +159,23 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 
 Redis modules extend Redis functionality with custom data types and commands. Zedis currently does not support Redis modules.
 
+## Time Series
+
+| Command       | Supported | Notes                                                                                                           |
+| ------------- | --------- | --------------------------------------------------------------------------------------------------------------- |
+| TS.CREATE     | Yes       | Create a new time series with full configuration support (retention, encoding, duplicate policy, IGNORE params) |
+| TS.ADD        | Yes       | Add a sample to a time series with full duplicate policy and IGNORE filtering support                           |
+| TS.MADD       | No        | Add multiple samples to multiple time series                                                                    |
+| TS.GET        | Yes       | Get the latest sample from a time series (supports LATEST flag)                                                 |
+| TS.MGET       | No        | Get the latest samples from multiple time series                                                                |
+| TS.RANGE      | No        | Get samples in a time range from a time series                                                                  |
+| TS.MRANGE     | No        | Get samples in a time range from multiple time series                                                           |
+| TS.INCRBY     | No        | Increment the latest sample by a value                                                                          |
+| TS.DECRBY     | No        | Decrement the latest sample by a value                                                                          |
+| TS.CREATERULE | No        | Create a downsampling rule                                                                                      |
+| TS.DELETERULE | No        | Delete a downsampling rule                                                                                      |
+| TS.ALTER      | No        | Alter the configuration of a time series                                                                        |
+
 ### Popular Redis Modules
 
 | Module          | Supported | Notes                                               |

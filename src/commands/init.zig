@@ -6,6 +6,7 @@ const string = @import("string.zig");
 const list = @import("list.zig");
 const rdb = @import("../commands/rdb.zig");
 const pubsub = @import("../pubsub/pubsub.zig");
+const ts = @import("../commands/time_series.zig");
 
 pub fn initRegistry(allocator: Allocator) !CommandRegistry {
     var registry = CommandRegistry.init(allocator);
@@ -325,6 +326,34 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Increment a key by a floating point number",
         .write_to_aof = true,
+    });
+
+    // Time series commands
+    try registry.register(.{
+        .name = "TS.CREATE",
+        .handler = .{ .store_handler = ts.ts_create },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Create a new time series",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "TS.ADD",
+        .handler = .{ .store_handler = ts.ts_add },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Add a new sample to a time series",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "TS.GET",
+        .handler = .{ .store_handler = ts.ts_get },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the last sample from a time series",
+        .write_to_aof = false,
     });
 
     return registry;

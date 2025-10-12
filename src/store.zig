@@ -4,6 +4,10 @@ const simd = @import("./simd.zig");
 const PrimitiveValue = @import("types.zig").PrimitiveValue;
 const ZedisList = @import("list.zig").ZedisList;
 const ZedisListNode = @import("list.zig").ZedisListNode;
+const ts_module = @import("time_series.zig");
+const TimeSeries = ts_module.TimeSeries;
+
+const assert = std.debug.assert;
 
 // Optimal load factor
 const optimal_max_load_percentage = 75;
@@ -17,9 +21,10 @@ const LARGE_STRING_SIZE = 512; // Larger values but still pooled
 
 pub const ValueType = enum(u8) {
     string = 0,
-    int = 1,
-    list = 2,
-    short_string = 3,
+    int,
+    list,
+    short_string,
+    time_series,
 
     pub fn toRdbOpcode(self: ValueType) u8 {
         return @intFromEnum(self);
@@ -30,18 +35,12 @@ pub const ValueType = enum(u8) {
     }
 };
 
-pub const StoreError = error{
-    KeyNotFound,
-    WrongType,
-    NotAnInteger,
-    KeyAlreadyExists,
-};
-
 pub const ShortString = struct {
     data: [23]u8, // Inline storage - increased from 15 to 23 bytes
     len: u8, // Actual length
 
     pub fn fromSlice(str: []const u8) ShortString {
+        assert(str.len <= 23);
         var ss: ShortString = .{ .data = undefined, .len = @intCast(str.len) };
         @memcpy(ss.data[0..str.len], str);
         // Zero remaining bytes for consistent hashing
@@ -59,6 +58,7 @@ pub const ZedisValue = union(ValueType) {
     int: i64,
     list: ZedisList,
     short_string: ShortString,
+    time_series: TimeSeries,
 };
 
 pub const ZedisObject = struct {
@@ -68,6 +68,7 @@ pub const ZedisObject = struct {
 
 const StringContext = struct {
     pub fn hash(self: @This(), s: []const u8) u32 {
+        assert(s.len > 0);
         _ = self;
         // Redis-optimized hash function for typical key patterns
         return redisOptimizedHash(s);
@@ -81,12 +82,7 @@ const StringContext = struct {
         // For interned strings, this becomes pointer comparison
         if (a.ptr == b.ptr) return true;
 
-        // Use SIMD for longer strings (Redis keys can be long)
-        if (a.len >= 16) {
-            return simd.simdStringEql(a, b);
-        }
-
-        return std.mem.eql(u8, a, b);
+        return simd.simdStringEql(a, b);
     }
 };
 
@@ -195,6 +191,7 @@ pub const Store = struct {
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
+                .time_series => |*ts| ts.deinit(),
             }
         }
         self.map.deinit(self.base_allocator);
@@ -219,6 +216,7 @@ pub const Store = struct {
     }
 
     fn internString(self: *Store, str: []const u8) ![]const u8 {
+        assert(str.len > 0);
         const gop = try self.interned_strings.getOrPut(self.base_allocator, str);
         if (!gop.found_existing) {
             const owned_str = try self.dupeString(str);
@@ -230,6 +228,7 @@ pub const Store = struct {
 
     /// Smart allocation using memory pools based on size
     pub inline fn smartAlloc(self: *Store, len: usize) ![]u8 {
+        assert(len > 0);
         if (len <= SMALL_STRING_SIZE) {
             if (self.small_pool.alloc(len)) |result| {
                 _ = self.pool_hits.fetchAdd(1, .monotonic);
@@ -271,12 +270,14 @@ pub const Store = struct {
 
     /// Duplicate a string using smart allocation
     pub inline fn dupeString(self: *Store, str: []const u8) ![]u8 {
+        assert(str.len > 0);
         const buf = try self.smartAlloc(str.len);
         @memcpy(buf, str);
         return buf;
     }
 
     fn setString(self: *Store, key: []const u8, value: []const u8) !void {
+        assert(value.len > 0);
         // Automatically use ShortString for small strings to avoid allocation
         const zedis_value: ZedisValue = if (value.len <= 23)
             .{ .short_string = ShortString.fromSlice(value) }
@@ -291,6 +292,7 @@ pub const Store = struct {
     }
 
     pub fn set(self: *Store, key: []const u8, value: []const u8) !void {
+        assert(value.len > 0);
         // Try to parse as integer for automatic type optimization
         if (std.fmt.parseInt(i64, value, 10)) |int_value| {
             try self.putObject(key, .{ .value = .{ .int = int_value } });
@@ -301,6 +303,7 @@ pub const Store = struct {
 
     /// Update/overwrite an existing key or insert if not present
     pub inline fn putObject(self: *Store, key: []const u8, object: ZedisObject) !void {
+        assert(key.len > 0);
         // Check if we need to resize before adding new entries
         try self.maybeResize();
 
@@ -316,6 +319,7 @@ pub const Store = struct {
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
+                .time_series => return error.AlreadyExists,
             }
         }
         // Key is already interned, no need to duplicate again
@@ -331,6 +335,7 @@ pub const Store = struct {
             .int => {}, // No allocation needed
             .list => {}, // List is moved directly
             .short_string => {}, // No allocation needed - stored inline
+            .time_series => {},
         }
 
         // Update the entry
@@ -339,6 +344,7 @@ pub const Store = struct {
 
     // Delete a key from the store
     pub fn delete(self: *Store, key: []const u8) bool {
+        assert(key.len > 0);
         if (self.map.getPtr(key)) |obj_ptr| {
             // Free the value based on its type
             switch (obj_ptr.value) {
@@ -348,6 +354,7 @@ pub const Store = struct {
                 .int => {},
                 .list => |*list| @constCast(list).deinit(),
                 .short_string => {},
+                .time_series => |*ts| ts.deinit(),
             }
 
             // Remove from maps
@@ -359,10 +366,12 @@ pub const Store = struct {
     }
 
     pub inline fn exists(self: Store, key: []const u8) bool {
+        assert(key.len > 0);
         return self.map.contains(key);
     }
 
     pub inline fn getType(self: Store, key: []const u8) ?ValueType {
+        assert(key.len > 0);
         if (self.map.getPtr(key)) |obj| {
             return std.meta.activeTag(obj.value);
         }
@@ -370,6 +379,7 @@ pub const Store = struct {
     }
 
     pub inline fn get(self: *Store, key: []const u8) ?*const ZedisObject {
+        assert(key.len > 0);
         if (self.isExpired(key)) {
             _ = self.delete(key);
             return null;
@@ -382,16 +392,29 @@ pub const Store = struct {
     }
 
     pub fn getList(self: Store, key: []const u8) !?*ZedisList {
+        assert(key.len > 0);
         if (self.map.getPtr(key)) |obj_ptr| {
             switch (obj_ptr.value) {
                 .list => |*list| return list,
-                else => return StoreError.WrongType,
+                else => return error.WrongType,
+            }
+        }
+        return null;
+    }
+
+    pub fn getTimeSeries(self: Store, key: []const u8) !?*TimeSeries {
+        assert(key.len > 0);
+        if (self.map.getPtr(key)) |obj_ptr| {
+            switch (obj_ptr.value) {
+                .time_series => |*ts| return ts,
+                else => return error.WrongType,
             }
         }
         return null;
     }
 
     pub fn createList(self: *Store, key: []const u8) !*ZedisList {
+        assert(key.len > 0);
         // Create list - error if key already exists
         const list: ZedisList = .init(self.base_allocator);
         const zedis_object: ZedisObject = .{ .value = .{ .list = list } };
@@ -402,6 +425,7 @@ pub const Store = struct {
     }
 
     pub fn getSetList(self: *Store, key: []const u8) !*ZedisList {
+        assert(key.len > 0);
         const list = try self.getList(key);
         if (list == null) {
             return try self.createList(key);
@@ -410,6 +434,8 @@ pub const Store = struct {
     }
 
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {
+        assert(key.len > 0);
+        assert(time > 0);
         if (self.map.contains(key)) {
             const interned_key = try self.internString(key);
             try self.expiration_map.put(self.base_allocator, interned_key, time);
@@ -419,6 +445,7 @@ pub const Store = struct {
     }
 
     pub inline fn isExpired(self: Store, key: []const u8) bool {
+        assert(key.len > 0);
         if (self.expiration_map.get(key)) |expiration_time| {
             return std.time.milliTimestamp() > expiration_time;
         }
@@ -426,6 +453,7 @@ pub const Store = struct {
     }
 
     pub inline fn getTtl(self: Store, key: []const u8) ?i64 {
+        assert(key.len > 0);
         return self.expiration_map.get(key);
     }
 
@@ -508,6 +536,11 @@ pub const Store = struct {
         }
 
         return oldest_key;
+    }
+
+    pub fn createTimeSeries(self: *Store, key: []const u8, ts: TimeSeries) !void {
+        assert(key.len > 0);
+        try self.putObject(key, .{ .value = .{ .time_series = ts } });
     }
 };
 

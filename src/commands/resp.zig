@@ -96,6 +96,12 @@ pub fn writeNull(writer: *std.Io.Writer) !void {
     try writer.writeAll("$-1\r\n");
 }
 
+pub fn writeDoubleBulkString(writer: *std.Io.Writer, value: f64) !void {
+    var buf: [32]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    try writer.print("${d}\r\n{s}\r\n", .{ formatted.len, formatted });
+}
+
 pub fn writePrimitiveValue(writer: *std.Io.Writer, value: PrimitiveValue) !void {
     switch (value) {
         .string => |str| try writeBulkString(writer, str),

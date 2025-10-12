@@ -26,7 +26,7 @@ pub fn get(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
             .int => |i| {
                 try resp.writeIntBulkString(writer, i);
             },
-            .list => return error.WrongType,
+            .list, .time_series => return error.WrongType,
         }
     } else {
         try resp.writeNull(writer);
@@ -147,7 +147,7 @@ pub fn append(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
                 var buf: [21]u8 = undefined;
                 break :blk std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
             },
-            .list => return error.WrongType,
+            else => return error.WrongType,
         };
 
         // Concatenate current value with append value
@@ -178,7 +178,7 @@ pub fn strlen(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
                 break :blk str.len;
             },
-            .list => return error.WrongType,
+            else => return error.WrongType,
         };
         try resp.writeInt(writer, len);
     } else {
@@ -198,7 +198,7 @@ pub fn getset(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
             .string => |s| try resp.writeBulkString(writer, s),
             .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
             .int => |i| try resp.writeIntBulkString(writer, i),
-            .list => return error.WrongType,
+            else => return error.WrongType,
         }
     } else {
         try resp.writeNull(writer);
@@ -222,7 +222,7 @@ pub fn mget(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
                 .string => |s| try resp.writeBulkString(writer, s),
                 .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
                 .int => |i| try resp.writeIntBulkString(writer, i),
-                .list => try resp.writeNull(writer), // Lists return null
+                else => try resp.writeNull(writer), // Lists return null
             }
         } else {
             try resp.writeNull(writer);
@@ -328,7 +328,7 @@ pub fn incrbyfloat(writer: *std.Io.Writer, store: *Store, args: []const Value) !
             .int => |i| {
                 current_float = @floatFromInt(i);
             },
-            .list => return error.WrongType,
+            else => return error.WrongType,
         }
     }
 

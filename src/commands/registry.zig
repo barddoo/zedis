@@ -79,6 +79,8 @@ pub const CommandRegistry = struct {
             error.AuthNoPasswordSet => "ERR Client sent AUTH, but no password is set",
             error.AuthInvalidPassword => "ERR invalid password",
             error.InvalidDatabaseIndex => "ERR invalid database index (must be 0-15)",
+            error.AlreadyExists => "ERR key already exists",
+            error.TSDB_DuplicateTimestamp => "ERR duplicate timestamp",
             else => blk: {
                 std.log.err("Handler for command '{s}' failed with error: {s}", .{
                     command_name,

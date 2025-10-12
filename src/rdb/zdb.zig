@@ -47,6 +47,7 @@ pub const Writer = struct {
         return switch (val) {
             .int, .string, .short_string => 0x00,
             .list => 0x01,
+            .time_series => 0x0A,
         };
     }
 
@@ -149,6 +150,8 @@ pub const Writer = struct {
                 .string => |s| try self.writeString(s),
                 .short_string => |ss| try self.writeString(ss.asSlice()),
                 .list => |list| try self.writeList(@constCast(&list)),
+                // TODO
+                else => {},
             }
         }
     }
@@ -221,6 +224,7 @@ pub const Writer = struct {
             .string => |str| try self.writeString(str),
             .short_string => |ss| try self.writeString(ss.asSlice()),
             .list => |list| try self.writeList(@constCast(&list)),
+            else => {},
         }
     }
 };

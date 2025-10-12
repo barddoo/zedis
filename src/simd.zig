@@ -2,7 +2,7 @@ const std = @import("std");
 
 // SIMD-optimized string equality for longer strings
 pub fn simdStringEql(a: []const u8, b: []const u8) bool {
-    std.debug.assert(a.len == b.len);
+    if (a.len != b.len) return false;
 
     // Check if SIMD is available
     const vec_len = std.simd.suggestVectorLength(u8) orelse return std.mem.eql(u8, a, b);
