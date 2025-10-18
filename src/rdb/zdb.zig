@@ -428,7 +428,7 @@ const testing = std.testing;
 test "ZDB init and deinit" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
     const test_file = "test_db.rdb";
 
@@ -443,7 +443,7 @@ test "ZDB init and deinit" {
 test "ZDB writeFile creates valid RDB header" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
     const test_file = "test_header.rdb";
 
@@ -463,7 +463,7 @@ test "ZDB writeFile creates valid RDB header" {
 test "ZDB writeString writes correct format" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
     const test_file = "test_string.rdb";
 
@@ -484,7 +484,7 @@ test "ZDB writeString writes correct format" {
 test "ZDB writeMetadata writes correct format" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
     const test_file = "test_string.rdb";
 

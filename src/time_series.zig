@@ -22,12 +22,12 @@ pub const Duplicate_Policy = enum {
     SUM,
 
     pub fn fromString(s: []const u8) ?Duplicate_Policy {
-        if (eql(s, "BLOCK")) return Duplicate_Policy.BLOCK;
-        if (eql(s, "FIRST")) return Duplicate_Policy.FIRST;
-        if (eql(s, "LAST")) return Duplicate_Policy.LAST;
-        if (eql(s, "MIN")) return Duplicate_Policy.MIN;
-        if (eql(s, "MAX")) return Duplicate_Policy.MAX;
-        if (eql(s, "SUM")) return Duplicate_Policy.SUM;
+        if (eql(s, "BLOCK")) return .BLOCK;
+        if (eql(s, "FIRST")) return .FIRST;
+        if (eql(s, "LAST")) return .LAST;
+        if (eql(s, "MIN")) return .MIN;
+        if (eql(s, "MAX")) return .MAX;
+        if (eql(s, "SUM")) return .SUM;
         return null;
     }
 };
@@ -37,8 +37,8 @@ pub const EncodingType = enum(u8) {
     DeltaXor,
 
     pub fn fromString(s: []const u8) ?EncodingType {
-        if (eql(s, "UNCOMPRESSED")) return EncodingType.Uncompressed;
-        if (eql(s, "COMPRESSED")) return EncodingType.DeltaXor;
+        if (eql(s, "UNCOMPRESSED")) return .Uncompressed;
+        if (eql(s, "COMPRESSED")) return .DeltaXor;
         return null;
     }
 };
@@ -90,9 +90,9 @@ pub const TimeSeries = struct {
             .total_samples = 0,
             .retention_ms = retention_ms,
             .allocator = allocator,
-            .duplicate_policy = duplicate_policy orelse Duplicate_Policy.BLOCK,
+            .duplicate_policy = duplicate_policy orelse .BLOCK,
             .max_chunk_samples = max_chunk_samples,
-            .encoding = encoding orelse EncodingType.DeltaXor,
+            .encoding = encoding orelse .DeltaXor,
             .ignore_max_time_diff = ignore_max_time_diff orelse 0,
             .ignore_max_val_diff = ignore_max_val_diff orelse 0.0,
         };

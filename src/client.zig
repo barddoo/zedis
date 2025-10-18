@@ -13,7 +13,7 @@ const Command = @import("parser.zig").Command;
 const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
 const Server = @import("./server.zig");
 const PubSubContext = @import("./commands/pubsub.zig").PubSubContext;
-const ServerConfig = @import("./server_config.zig").ServerConfig;
+const Config = @import("./config.zig").Config;
 const resp = @import("./commands/resp.zig");
 
 var next_client_id: std.atomic.Value(u64) = .init(1);

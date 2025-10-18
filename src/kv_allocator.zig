@@ -1,5 +1,5 @@
 const std = @import("std");
-const server_config = @import("server_config.zig");
+const config_module = @import("config.zig");
 const Store = @import("store.zig").Store;
 
 const KeyValueAllocator = @This();
@@ -9,21 +9,21 @@ memory_pool: []u8,
 pool_allocator: std.heap.FixedBufferAllocator,
 memory_used: std.atomic.Value(usize),
 memory_budget: usize,
-eviction_policy: server_config.ServerConfig.EvictionPolicy,
+eviction_policy: config_module.EvictionPolicy,
 
 // Reference to store for eviction (set after init)
 store: ?*Store = null,
 
 const Self = @This();
 
-pub fn init(base_allocator: std.mem.Allocator, budget: usize, eviction_policy: server_config.ServerConfig.EvictionPolicy) !Self {
+pub fn init(base_allocator: std.mem.Allocator, budget: usize, eviction_policy: config_module.EvictionPolicy) !Self {
     const memory_pool = try base_allocator.alloc(u8, budget);
 
-    return Self{
+    return .{
         .base_allocator = base_allocator,
         .memory_pool = memory_pool,
-        .pool_allocator = std.heap.FixedBufferAllocator.init(memory_pool),
-        .memory_used = std.atomic.Value(usize).init(0),
+        .pool_allocator = .init(memory_pool),
+        .memory_used = .init(0),
         .memory_budget = budget,
         .eviction_policy = eviction_policy,
         .store = null,

@@ -1,8 +1,29 @@
 const std = @import("std");
+const Client = @import("./client.zig").Client;
+const eql = std.mem.eql;
+const parseInt = std.fmt.parseInt;
 
 const Self = @This();
 
-const Config = struct {
+pub const EvictionPolicy = enum {
+    noeviction, // Return errors when memory limit reached
+    allkeys_lru, // Evict least recently used keys
+    volatile_lru, // Evict LRU keys with expire set
+};
+
+pub const MemoryStats = struct {
+    fixed_memory_used: usize,
+    kv_memory_used: usize,
+    temp_arena_used: usize,
+    total_allocated: usize,
+    total_budget: usize,
+
+    pub fn usagePercent(self: MemoryStats) u8 {
+        return @intCast((self.total_allocated * 100) / self.total_budget);
+    }
+};
+
+pub const Config = struct {
     // Network
     /// Bind to specific network interfaces. Default: "127.0.0.1 -::1"
     bind: []const u8 = "127.0.0.1 -::1",
@@ -120,9 +141,39 @@ const Config = struct {
     aof_use_rdb_preamble: bool = true,
 
     // Legacy fields
-    max_clients: usize = 10000,
     timeout_seconds: u64 = 0,
     host: []const u8 = "127.0.0.1",
+
+    // Memory and performance configuration (production-ready defaults)
+    max_clients: u32 = 10000, // Maximum concurrent client connections
+    max_channels: u32 = 10000, // Maximum pub/sub channels (production: thousands of channels)
+    max_subscribers_per_channel: u32 = 1000, // Max subscribers per channel (production: hundreds per channel)
+    kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store (production headroom)
+    temp_arena_size: usize = 512 * 1024 * 1024, // 512MB for temporary allocations
+    initial_capacity: usize = 8192, // Initial hash map capacity for Store (reduces early rehashing)
+    eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
+    requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
+
+    // Computed constants (calculated from other fields)
+    pub fn clientPoolSize(self: Config) usize {
+        return self.max_clients * @sizeOf(Client);
+    }
+
+    pub fn pubsubMatrixSize(self: Config) usize {
+        return self.max_channels * self.max_subscribers_per_channel * @sizeOf(u64);
+    }
+
+    pub fn fixedMemorySize(self: Config) usize {
+        return self.clientPoolSize() + self.pubsubMatrixSize();
+    }
+
+    pub fn totalMemoryBudget(self: Config) usize {
+        return self.fixedMemorySize() + self.kv_memory_budget + self.temp_arena_size;
+    }
+
+    pub fn requiresAuth(self: Config) bool {
+        return self.requirepass != null;
+    }
 };
 
 pub fn readConfig(allocator: std.mem.Allocator) !Config {
@@ -146,7 +197,7 @@ fn readFile(allocator: std.mem.Allocator, file_name: []const u8) !Config {
     var file_reader = file.reader(&buffer);
     var reader = &file_reader.interface;
 
-    var config = Config{};
+    var config: Config = .{};
 
     while (true) {
         const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
@@ -174,68 +225,114 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
     const trimmed_value = std.mem.trim(u8, value, " \t\r");
 
     // Network
-    if (std.mem.eql(u8, key, "bind")) {
+    if (eql(u8, key, "bind")) {
         config.bind = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "protected-mode")) {
-        config.protected_mode = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "port")) {
-        config.port = try std.fmt.parseInt(u16, trimmed_value, 10);
-    } else if (std.mem.eql(u8, key, "tcp-backlog")) {
-        config.tcp_backlog = try std.fmt.parseInt(u32, trimmed_value, 10);
-    } else if (std.mem.eql(u8, key, "timeout")) {
-        config.timeout = try std.fmt.parseInt(u32, trimmed_value, 10);
-    } else if (std.mem.eql(u8, key, "tcp-keepalive")) {
-        config.tcp_keepalive = try std.fmt.parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "protected-mode")) {
+        config.protected_mode = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "port")) {
+        config.port = try parseInt(u16, trimmed_value, 10);
+    } else if (eql(u8, key, "tcp-backlog")) {
+        config.tcp_backlog = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "timeout")) {
+        config.timeout = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "tcp-keepalive")) {
+        config.tcp_keepalive = try parseInt(u32, trimmed_value, 10);
     }
     // General
-    else if (std.mem.eql(u8, key, "daemonize")) {
-        config.daemonize = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "pidfile")) {
+    else if (eql(u8, key, "daemonize")) {
+        config.daemonize = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "pidfile")) {
         config.pidfile = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "loglevel")) {
+    } else if (eql(u8, key, "loglevel")) {
         config.loglevel = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "logfile")) {
+    } else if (eql(u8, key, "logfile")) {
         config.logfile = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "databases")) {
-        config.databases = try std.fmt.parseInt(u32, trimmed_value, 10);
-    } else if (std.mem.eql(u8, key, "always-show-logo")) {
-        config.always_show_logo = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "set-proc-title")) {
-        config.set_proc_title = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "proc-title-template")) {
+    } else if (eql(u8, key, "databases")) {
+        config.databases = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "always-show-logo")) {
+        config.always_show_logo = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "set-proc-title")) {
+        config.set_proc_title = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "proc-title-template")) {
         config.proc_title_template = try allocator.dupe(u8, trimmed_value);
     }
     // Snapshotting
-    else if (std.mem.eql(u8, key, "stop-writes-on-bgsave-error")) {
-        config.stop_writes_on_bgsave_error = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "rdbcompression")) {
-        config.rdbcompression = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "rdbchecksum")) {
-        config.rdbchecksum = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "dbfilename")) {
+    else if (eql(u8, key, "stop-writes-on-bgsave-error")) {
+        config.stop_writes_on_bgsave_error = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "rdbcompression")) {
+        config.rdbcompression = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "rdbchecksum")) {
+        config.rdbchecksum = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "dbfilename")) {
         config.dbfilename = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "dir")) {
+    } else if (eql(u8, key, "dir")) {
         config.dir = try allocator.dupe(u8, trimmed_value);
     }
     // Replication
-    else if (std.mem.eql(u8, key, "replica-serve-stale-data")) {
-        config.replica_serve_stale_data = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "replica-read-only")) {
-        config.replica_read_only = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "repl-diskless-sync")) {
-        config.repl_diskless_sync = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "repl-diskless-sync-delay")) {
-        config.repl_diskless_sync_delay = try std.fmt.parseInt(u32, trimmed_value, 10);
-    } else if (std.mem.eql(u8, key, "repl-diskless-load")) {
+    else if (eql(u8, key, "replica-serve-stale-data")) {
+        config.replica_serve_stale_data = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "replica-read-only")) {
+        config.replica_read_only = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "repl-diskless-sync")) {
+        config.repl_diskless_sync = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "repl-diskless-sync-delay")) {
+        config.repl_diskless_sync_delay = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "repl-diskless-load")) {
         config.repl_diskless_load = try allocator.dupe(u8, trimmed_value);
     }
     // Append only mode
-    else if (std.mem.eql(u8, key, "appendonly")) {
-        config.appendonly = std.mem.eql(u8, trimmed_value, "yes");
-    } else if (std.mem.eql(u8, key, "appendfilename")) {
+    else if (eql(u8, key, "appendonly")) {
+        config.appendonly = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "appendfilename")) {
         config.appendfilename = try allocator.dupe(u8, trimmed_value);
-    } else if (std.mem.eql(u8, key, "appendfsync")) {
+    } else if (eql(u8, key, "appendfsync")) {
         config.appendfsync = try allocator.dupe(u8, trimmed_value);
     }
-    // Add more config options as needed
+    // Memory and performance configuration
+    else if (eql(u8, key, "max-clients") or eql(u8, key, "maxclients")) {
+        config.max_clients = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "max-channels")) {
+        config.max_channels = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "max-subscribers-per-channel")) {
+        config.max_subscribers_per_channel = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "kv-memory-budget")) {
+        config.kv_memory_budget = try parseMemorySize(trimmed_value);
+    } else if (eql(u8, key, "temp-arena-size")) {
+        config.temp_arena_size = try parseMemorySize(trimmed_value);
+    } else if (eql(u8, key, "initial-capacity")) {
+        config.initial_capacity = try parseInt(usize, trimmed_value, 10);
+    } else if (eql(u8, key, "eviction-policy") or eql(u8, key, "maxmemory-policy")) {
+        if (eql(u8, trimmed_value, "noeviction")) {
+            config.eviction_policy = .noeviction;
+        } else if (eql(u8, trimmed_value, "allkeys-lru")) {
+            config.eviction_policy = .allkeys_lru;
+        } else if (eql(u8, trimmed_value, "volatile-lru")) {
+            config.eviction_policy = .volatile_lru;
+        }
+    } else if (eql(u8, key, "requirepass")) {
+        config.requirepass = try allocator.dupe(u8, trimmed_value);
+    }
+}
+
+// Helper function to parse memory sizes like "1gb", "512mb", "4096"
+fn parseMemorySize(value: []const u8) !usize {
+    const lower = try std.ascii.allocLowerString(std.heap.page_allocator, value);
+    defer std.heap.page_allocator.free(lower);
+
+    if (std.mem.endsWith(u8, lower, "gb")) {
+        const num_str = lower[0 .. lower.len - 2];
+        const num = try parseInt(usize, num_str, 10);
+        return num * 1024 * 1024 * 1024;
+    } else if (std.mem.endsWith(u8, lower, "mb")) {
+        const num_str = lower[0 .. lower.len - 2];
+        const num = try parseInt(usize, num_str, 10);
+        return num * 1024 * 1024;
+    } else if (std.mem.endsWith(u8, lower, "kb")) {
+        const num_str = lower[0 .. lower.len - 2];
+        const num = try parseInt(usize, num_str, 10);
+        return num * 1024;
+    } else {
+        // Plain number in bytes
+        return try parseInt(usize, value, 10);
+    }
 }

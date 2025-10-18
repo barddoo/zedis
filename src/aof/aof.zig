@@ -94,7 +94,7 @@ test "aof reading test" {
 
     var registry = try reg_init.initRegistry(std.testing.allocator);
     defer registry.deinit();
-    var store: Store = .init(testing.allocator);
+    var store: Store = .init(testing.allocator, 4096);
     defer store.deinit();
 
     var aof_reader: Reader = undefined;
@@ -119,7 +119,7 @@ test "aof writing test" {
     const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
 
     var registry = try reg_init.initRegistry(std.testing.allocator);
-    var store: Store = .init(testing.allocator);
+    var store: Store = .init(testing.allocator, 4096);
     var parser = Parser.init(testing.allocator);
     defer registry.deinit();
     defer store.deinit();

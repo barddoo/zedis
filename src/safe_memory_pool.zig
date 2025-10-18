@@ -11,7 +11,7 @@ allocations: std.HashMapUnmanaged(usize, *[512]u8, std.hash_map.AutoContext(usiz
 pub fn init(base_allocator: std.mem.Allocator, size: usize) Self {
     return .{
         .base_allocator = base_allocator,
-        .pool = std.heap.MemoryPool([512]u8).init(base_allocator),
+        .pool = .init(base_allocator),
         .size = size,
         .allocations = .{},
     };

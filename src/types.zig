@@ -4,7 +4,7 @@ const Allocator = std.mem.Allocator;
 const time = std.time;
 const Store = @import("./store.zig").Store;
 const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
-const server_config = @import("./server_config.zig");
+const config_module = @import("./config.zig");
 const KeyValueAllocator = @import("./kv_allocator.zig");
 const Server = @import("./server.zig");
 

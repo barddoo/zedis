@@ -11,14 +11,14 @@ const Reader = @import("./rdb/zdb.zig").Reader;
 const Store = @import("store.zig").Store;
 const pubsub = @import("./commands/pubsub.zig");
 const PubSubContext = pubsub.PubSubContext;
-const server_config = @import("server_config.zig");
+const config_module = @import("config.zig");
 const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
 
 const Server = @This();
 
 // Configuration
-config: server_config.ServerConfig,
+config: config_module.Config,
 
 // Base allocator (only for server initialization)
 base_allocator: std.mem.Allocator,
@@ -52,10 +52,10 @@ aof_writer: aof.Writer,
 
 // Initializes the server with hybrid allocation strategy
 pub fn init(base_allocator: Allocator, host: []const u8, port: u16) !Server {
-    return initWithConfig(base_allocator, host, port, server_config.ServerConfig{});
+    return initWithConfig(base_allocator, host, port, config_module.Config{});
 }
 
-pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, config: server_config.ServerConfig) !Server {
+pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, config: config_module.Config) !Server {
     const address = try std.net.Address.parseIp(host, port);
     const listener = try address.listen(.{
         .reuse_address = true,
@@ -67,7 +67,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
     for (&databases) |*db| {
-        db.* = Store.init(kv_allocator.allocator());
+        db.* = Store.init(kv_allocator.allocator(), config.initial_capacity);
     }
 
     // Link KV allocator to database 0 for LRU eviction
@@ -81,7 +81,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     const registry = try command_init.initRegistry(base_allocator);
 
     // Allocate fixed memory pools on heap
-    const client_pool = try base_allocator.alloc(Client, server_config.MAX_CLIENTS);
+    const client_pool = try base_allocator.alloc(Client, config.max_clients);
     @memset(client_pool, undefined);
 
     var server = Server{
@@ -89,11 +89,11 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
         .base_allocator = base_allocator,
         .address = address,
         .listener = listener,
-        .pubsub_map = std.StringHashMap([]u64).init(base_allocator),
+        .pubsub_map = .init(base_allocator),
 
         // Fixed allocations - heap allocated
         .client_pool = client_pool,
-        .client_pool_bitmap = try std.bit_set.DynamicBitSet.initFull(base_allocator, server_config.MAX_CLIENTS),
+        .client_pool_bitmap = try .initFull(base_allocator, config.max_clients),
 
         // Arena for temporary allocations
         .temp_arena = temp_arena,
@@ -154,7 +154,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     }
 
     std.log.info("Server initialized with hybrid allocation - Fixed: {}MB, KV: {}MB, Arena: {}MB", .{
-        server_config.FIXED_MEMORY_SIZE / (1024 * 1024),
+        config.fixedMemorySize() / (1024 * 1024),
         config.kv_memory_budget / (1024 * 1024),
         config.temp_arena_size / (1024 * 1024),
     });
@@ -281,7 +281,7 @@ pub fn deallocateClient(self: *Server, client: *Client) void {
     const client_ptr = @intFromPtr(client);
     const client_size = @sizeOf(Client);
 
-    if (client_ptr >= pool_ptr and client_ptr < pool_ptr + (server_config.MAX_CLIENTS * client_size)) {
+    if (client_ptr >= pool_ptr and client_ptr < pool_ptr + (self.config.max_clients * client_size)) {
         const index = (client_ptr - pool_ptr) / client_size;
         self.client_pool_bitmap.set(index);
     }
@@ -314,7 +314,7 @@ pub fn subscribeToChannel(self: *Server, channel_name: []const u8, client_id: u6
     }
 
     // Check limit
-    if (current_subscribers.len >= server_config.MAX_SUBSCRIBERS_PER_CHANNEL) {
+    if (current_subscribers.len >= self.config.max_subscribers_per_channel) {
         return error.ChannelFull;
     }
 
@@ -370,14 +370,16 @@ pub fn cleanupDisconnectedPubSubClient(self: *Server, client_id: u64) void {
 }
 
 // Memory statistics
-pub fn getMemoryStats(self: *Server) server_config.MemoryStats {
-    return server_config.MemoryStats{
-        .fixed_memory_used = server_config.FIXED_MEMORY_SIZE,
+pub fn getMemoryStats(self: *Server) config_module.MemoryStats {
+    const fixed_size = self.config.fixedMemorySize();
+    const total_budget = self.config.totalMemoryBudget();
+    return config_module.MemoryStats{
+        .fixed_memory_used = fixed_size,
         .kv_memory_used = self.kv_allocator.getMemoryUsage(),
         .temp_arena_used = self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len,
-        .total_allocated = server_config.FIXED_MEMORY_SIZE + self.kv_allocator.getMemoryUsage() +
+        .total_allocated = fixed_size + self.kv_allocator.getMemoryUsage() +
             (self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len),
-        .total_budget = server_config.TOTAL_MEMORY_BUDGET,
+        .total_budget = total_budget,
     };
 }
 pub fn getChannelSubscribers(self: *Server, channel_name: []const u8) []const u64 {

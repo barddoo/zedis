@@ -117,9 +117,7 @@ pub const Store = struct {
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator) Store {
-        // Increased initial capacity to reduce rehashing
-        const initial_capacity = 4096;
+    pub fn init(allocator: std.mem.Allocator, initial_capacity: usize) Store {
         var map: OptimizedHashMap = .{};
         map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
 
@@ -129,12 +127,12 @@ pub const Store = struct {
             .map = map,
             .expiration_map = .{},
             .interned_strings = .{},
-            .small_pool = SafeMemoryPool.init(allocator, SMALL_STRING_SIZE),
-            .medium_pool = SafeMemoryPool.init(allocator, MEDIUM_STRING_SIZE),
-            .large_pool = SafeMemoryPool.init(allocator, LARGE_STRING_SIZE),
-            .pool_hits = std.atomic.Value(u64).init(0),
-            .pool_misses = std.atomic.Value(u64).init(0),
-            .access_counter = std.atomic.Value(u64).init(0),
+            .small_pool = .init(allocator, SMALL_STRING_SIZE),
+            .medium_pool = .init(allocator, MEDIUM_STRING_SIZE),
+            .large_pool = .init(allocator, LARGE_STRING_SIZE),
+            .pool_hits = .init(0),
+            .pool_misses = .init(0),
+            .access_counter = .init(0),
         };
     }
 

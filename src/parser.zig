@@ -36,7 +36,7 @@ pub const Command = struct {
 
     pub fn init(allocator: std.mem.Allocator) Command {
         return Command{
-            .args = std.ArrayList(Value){},
+            .args = .{},
             .allocator = allocator,
         };
     }

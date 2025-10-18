@@ -10,7 +10,7 @@ test "Store init and deinit" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try testing.expectEqual(@as(u32, 0), store.size());
@@ -21,7 +21,7 @@ test "Store set and get" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "hello");
@@ -37,7 +37,7 @@ test "Store setInt and get" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.setInt("counter", 42);
@@ -53,7 +53,7 @@ test "Store setObject with ZedisObject" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const obj = ZedisObject{ .value = .{ .string = "test" } };
@@ -69,7 +69,7 @@ test "Store delete existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "value1");
@@ -87,7 +87,7 @@ test "Store delete non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const deleted = store.delete("nonexistent");
@@ -99,7 +99,7 @@ test "Store exists" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try testing.expect(!store.exists("key1"));
@@ -116,7 +116,7 @@ test "Store getType" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try testing.expect(store.getType("nonexistent") == null);
@@ -133,7 +133,7 @@ test "Store overwrite existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "original");
@@ -156,7 +156,7 @@ test "Store overwrite string with integer" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "hello");
@@ -172,7 +172,7 @@ test "Store overwrite integer with string" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.setInt("key1", 456);
@@ -188,7 +188,7 @@ test "Store expire functionality" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "value1");
@@ -214,7 +214,7 @@ test "Store expire non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const success = try store.expire("nonexistent", 12345);
@@ -226,7 +226,7 @@ test "Store delete removes from expiration map" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "value1");
@@ -242,7 +242,7 @@ test "Store multiple keys with different types" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("str1", "hello");
@@ -263,7 +263,7 @@ test "Store empty string values" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("empty", "");
@@ -278,7 +278,7 @@ test "Store zero integer values" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.setInt("zero", 0);
@@ -293,7 +293,7 @@ test "Store createList and getList" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try testing.expect(try store.getList("mylist") == null);
@@ -311,7 +311,7 @@ test "Store list append and insert operations" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const list = try store.createList("test_append_insert");
@@ -338,7 +338,7 @@ test "Store list with mixed value types" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const list = try store.createList("test_mixed_values");
@@ -358,7 +358,7 @@ test "Store getList with wrong type" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("notalist", "hello");
@@ -372,7 +372,7 @@ test "Store list type checking" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     _ = try store.createList("mylist");
@@ -384,7 +384,7 @@ test "Store overwrite string with list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     try store.set("key1", "hello");
@@ -403,7 +403,7 @@ test "Store overwrite list with string" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const list = try store.createList("key1");
@@ -423,7 +423,7 @@ test "Store delete list key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const list = try store.createList("mylist");
@@ -445,7 +445,7 @@ test "Store empty list operations" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator);
+    var store = Store.init(allocator, 4096);
     defer store.deinit();
 
     const list = try store.createList("test_empty_ops");
