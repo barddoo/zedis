@@ -7,6 +7,7 @@ const list = @import("list.zig");
 const rdb = @import("../commands/rdb.zig");
 const pubsub = @import("../commands/pubsub.zig");
 const ts = @import("../commands/time_series.zig");
+const key = @import("../commands/keys.zig");
 
 pub fn initRegistry(allocator: Allocator) !CommandRegistry {
     var registry = CommandRegistry.init(allocator);
@@ -326,6 +327,71 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Increment a key by a floating point number",
         .write_to_aof = true,
+    });
+
+    // Key commands
+
+    try registry.register(.{
+        .name = "KEYS",
+        .handler = .{ .store_handler = key.keys },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Find all keys matching a pattern",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "EXISTS",
+        .handler = .{ .store_handler = key.exists },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Check if key exists",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "TTL",
+        .handler = .{ .store_handler = key.ttl },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get remaining time to live of a key",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "PERSIST",
+        .handler = .{ .store_handler = key.persist },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Remove expiration from a key",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "TYPE",
+        .handler = .{ .store_handler = key.typeCmd },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the data type of a key",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "RENAME",
+        .handler = .{ .store_handler = key.rename },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Rename a key",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "RANDOMKEY",
+        .handler = .{ .store_handler = key.randomkey },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Return a random key",
+        .write_to_aof = false,
     });
 
     // Time series commands

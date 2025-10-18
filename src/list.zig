@@ -65,16 +65,18 @@ pub const ZedisList = struct {
 
     /// Normalize a signed index to an unsigned index.
     /// Returns null if the index is out of bounds.
-    fn normalizeIndex(index: usize, list_len: usize) ?usize {
+    /// Negative indices count from the end: -1 is the last element, -2 is second to last, etc.
+    pub fn normalizeIndex(index: i64, list_len: usize) ?usize {
         if (list_len == 0) return null;
 
         if (index < 0) {
-            const neg_offset = -index;
+            const neg_offset = @as(usize, @intCast(-index));
             if (neg_offset > list_len) return null;
             return list_len - neg_offset;
         } else {
-            if (index >= list_len) return null;
-            return index;
+            const pos_index = @as(usize, @intCast(index));
+            if (pos_index >= list_len) return null;
+            return pos_index;
         }
     }
 
@@ -124,14 +126,12 @@ pub const ZedisList = struct {
     }
 
     pub fn getByIndex(self: *const ZedisList, index: usize) ?PrimitiveValue {
-        const actual_index = normalizeIndex(index, self.cached_len) orelse return null;
-        const list_node = self.getNodeAt(actual_index) orelse return null;
+        const list_node = self.getNodeAt(index) orelse return null;
         return list_node.data;
     }
 
     pub fn setByIndex(self: *ZedisList, index: usize, value: PrimitiveValue) !void {
-        const actual_index = normalizeIndex(index, self.cached_len) orelse return error.KeyNotFound;
-        const list_node = self.getNodeAt(actual_index) orelse return error.KeyNotFound;
+        const list_node = self.getNodeAt(index) orelse return error.KeyNotFound;
         list_node.data = value;
     }
 };

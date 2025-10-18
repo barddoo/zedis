@@ -7,6 +7,7 @@ const ZedisListNode = @import("list.zig").ZedisListNode;
 const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const CityHash64 = std.hash.CityHash64;
+const string_match = @import("./util/string_match.zig").string_match;
 
 const assert = std.debug.assert;
 
@@ -358,6 +359,19 @@ pub const Store = struct {
         return null;
     }
 
+    pub fn keys(self: Store, allocator: std.mem.Allocator, pattern: []const u8) ![][]const u8 {
+        var result: std.ArrayList([]const u8) = .empty;
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            const key = entry.key_ptr.*;
+            if (pattern.len == 0 or string_match(pattern, key)) {
+                try result.append(allocator, key);
+            }
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
     pub fn getList(self: Store, key: []const u8) !?*ZedisList {
         assert(key.len > 0);
         if (self.map.getPtr(key)) |obj_ptr| {
@@ -422,6 +436,22 @@ pub const Store = struct {
     pub inline fn getTtl(self: Store, key: []const u8) ?i64 {
         assert(key.len > 0);
         return self.expiration_map.get(key);
+    }
+
+    pub inline fn persist(self: *Store, key: []const u8) bool {
+        assert(key.len > 0);
+        return self.expiration_map.remove(key);
+    }
+
+    pub inline fn randomKey(self: *Store, random: std.Random) ?[]const u8 {
+        const total_keys = self.map.count();
+        if (total_keys == 0) return null;
+
+        const random_idx = random.intRangeAtMost(usize, 0, total_keys - 1);
+
+        const key = self.map.keys()[random_idx];
+
+        return key;
     }
 
     /// Get memory pool statistics

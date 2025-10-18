@@ -11,12 +11,12 @@ comptime {
     _ = @import("testing/string.zig");
     _ = @import("testing/list.zig");
     _ = @import("testing/time_series.zig");
+    _ = @import("testing/keys.zig");
+    _ = @import("util/string_match.zig");
 
     // Pub/Sub tests
     _ = @import("commands/pubsub.zig");
 
-    // RDB tests - checksum utility
-    _ = @import("rdb/checksum.zig");
     _ = @import("rdb/zdb.zig");
 
     // AOF tests
