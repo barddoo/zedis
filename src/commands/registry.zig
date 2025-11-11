@@ -95,12 +95,9 @@ pub const CommandRegistry = struct {
     pub fn executeCommandClient(
         self: *CommandRegistry,
         client: *Client,
+        writer: *std.Io.Writer,
         args: []const Value,
     ) !void {
-        var buf: [4096]u8 = undefined;
-        var sw = client.connection.stream.writer(&buf);
-        const writer = &sw.interface;
-
         try self.executeCommand(writer, client, client.getCurrentStore(), &client.server.aof_writer, args);
 
         try writer.flush();

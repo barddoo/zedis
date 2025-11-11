@@ -18,6 +18,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // Link libc for C allocator (best performance)
+    exe.linkLibC();
+
     // This makes the standard library available to our project.
     b.installArtifact(exe);
 
@@ -79,4 +82,43 @@ pub fn build(b: *std.Build) void {
     const test_all_step = b.step("test:all", "Run all tests including formatting checks");
     test_all_step.dependOn(&run_unit_tests.step);
     test_all_step.dependOn(fmt_step);
+
+    // Benchmark steps
+    // Micro-benchmarks (component-level performance)
+    const bench_micro_exe = b.addExecutable(.{
+        .name = "bench-micro",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench_micro.zig"),
+            .target = target,
+            .optimize = .ReleaseFast, // Always use optimized builds for benchmarks
+        }),
+    });
+    b.installArtifact(bench_micro_exe);
+
+    const run_bench_micro = b.addRunArtifact(bench_micro_exe);
+    run_bench_micro.step.dependOn(b.getInstallStep());
+
+    const bench_micro_step = b.step("bench:micro", "Run micro-benchmarks (component-level)");
+    bench_micro_step.dependOn(&run_bench_micro.step);
+
+    // Load tests (integration benchmarks with real server)
+    const bench_load_exe = b.addExecutable(.{
+        .name = "bench-load",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench_load.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    b.installArtifact(bench_load_exe);
+
+    const run_bench_load = b.addRunArtifact(bench_load_exe);
+    run_bench_load.step.dependOn(b.getInstallStep());
+
+    const bench_load_step = b.step("bench:load", "Run load tests (requires running server)");
+    bench_load_step.dependOn(&run_bench_load.step);
+
+    // Run all benchmarks (micro only, as load tests require manual server start)
+    const bench_all_step = b.step("bench", "Run all benchmarks (micro-benchmarks only)");
+    bench_all_step.dependOn(&run_bench_micro.step);
 }

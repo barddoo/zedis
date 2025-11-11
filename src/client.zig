@@ -66,14 +66,25 @@ pub const Client = struct {
     }
 
     pub fn handle(self: *Client) !void {
-        var sr = self.connection.stream.reader(&.{});
+        var reader_buffer: [1024 * 16]u8 = undefined;
+        var sr = self.connection.stream.reader(&reader_buffer);
         const reader = sr.interface();
-        var sw = self.connection.stream.writer(&.{});
+        var writer_buffer: [1024 * 16]u8 = undefined;
+        var sw = self.connection.stream.writer(&writer_buffer);
         const writer = &sw.interface;
 
+        // Create per-thread arena for temporary allocations
+        // This eliminates per-command malloc/free overhead
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         while (true) {
+            // Use arena allocator for all temporary command processing
+            // All allocations will be bulk-freed by arena.reset()
+            const arena_allocator = arena.allocator();
+
             // Parse the incoming command from the client's stream.
-            var parser = Parser.init(self.allocator);
+            var parser = Parser.init(arena_allocator);
 
             var command = parser.parse(reader) catch |err| {
                 // If there's an error (like a closed connection), we stop handling this client.
@@ -93,12 +104,19 @@ pub const Client = struct {
                 }
                 std.log.err("Parse error: {s}", .{@errorName(err)});
                 resp.writeError(writer, "ERR protocol error") catch {};
+
+                // Reset arena to free any partially allocated memory from failed parse
+                _ = arena.reset(.retain_capacity);
                 continue;
             };
             defer command.deinit();
 
             // Execute the parsed command.
-            try self.executeCommand(command);
+            try self.executeCommand(writer, command);
+
+            // Reset arena to bulk-free all temporary allocations from this command
+            // This is much faster than individual free() calls
+            _ = arena.reset(.retain_capacity);
 
             // If we're in pubsub mode after executing a command, stay connected
             if (self.is_in_pubsub_mode) {
@@ -108,8 +126,8 @@ pub const Client = struct {
     }
 
     // Dispatches the parsed command to the appropriate handler function.
-    fn executeCommand(self: *Client, command: Command) !void {
-        try self.command_registry.executeCommandClient(self, command.args.items);
+    fn executeCommand(self: *Client, writer: *std.Io.Writer, command: Command) !void {
+        try self.command_registry.executeCommandClient(self, writer, command.getArgs());
     }
 
     pub fn isAuthenticated(self: *Client) bool {

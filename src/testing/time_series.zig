@@ -8,7 +8,7 @@ const EncodingType = @import("../time_series.zig").EncodingType;
 test "TimeSeries: basic uncompressed storage" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0, // no retention
         .BLOCK,
@@ -31,7 +31,7 @@ test "TimeSeries: basic uncompressed storage" {
 test "TimeSeries: basic compressed storage" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -52,7 +52,7 @@ test "TimeSeries: basic compressed storage" {
 test "TimeSeries: duplicate policy BLOCK" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -73,7 +73,7 @@ test "TimeSeries: duplicate policy BLOCK" {
 test "TimeSeries: duplicate policy FIRST" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .FIRST,
@@ -94,7 +94,7 @@ test "TimeSeries: duplicate policy FIRST" {
 test "TimeSeries: duplicate policy LAST" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .LAST,
@@ -115,7 +115,7 @@ test "TimeSeries: duplicate policy LAST" {
 test "TimeSeries: duplicate policy MIN" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .MIN,
@@ -140,7 +140,7 @@ test "TimeSeries: duplicate policy MIN" {
 test "TimeSeries: duplicate policy MAX" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .MAX,
@@ -165,7 +165,7 @@ test "TimeSeries: duplicate policy MAX" {
 test "TimeSeries: IGNORE parameter filters samples" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .LAST, // IGNORE only works with LAST policy
@@ -194,7 +194,7 @@ test "TimeSeries: IGNORE parameter filters samples" {
 test "TimeSeries: IGNORE does not apply to non-LAST policies" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK, // Not LAST policy
@@ -215,7 +215,7 @@ test "TimeSeries: IGNORE does not apply to non-LAST policies" {
 test "TimeSeries: retention policy evicts old chunks" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         5000, // 5 second retention
         .BLOCK,
@@ -253,7 +253,7 @@ test "TimeSeries: retention policy evicts old chunks" {
 test "TimeSeries: retention policy with zero retention" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0, // No retention - keep all data
         .BLOCK,
@@ -278,7 +278,7 @@ test "TimeSeries: retention policy with zero retention" {
 test "TimeSeries: chunk sealing creates new chunk when full" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -308,7 +308,7 @@ test "TimeSeries: chunk sealing creates new chunk when full" {
 test "TimeSeries: compressed vs uncompressed encoding" {
     const allocator = testing.allocator;
 
-    var ts_compressed = TimeSeries.init(
+    var ts_compressed = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -319,7 +319,7 @@ test "TimeSeries: compressed vs uncompressed encoding" {
     );
     defer ts_compressed.deinit();
 
-    var ts_uncompressed = TimeSeries.init(
+    var ts_uncompressed = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -344,7 +344,7 @@ test "TimeSeries: compressed vs uncompressed encoding" {
 test "TimeSeries: multiple chunks with retention" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         10000, // 10 second retention
         .BLOCK,
@@ -385,7 +385,7 @@ test "TimeSeries: multiple chunks with retention" {
 test "TimeSeries: out of order samples with LAST policy" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .LAST,
@@ -408,7 +408,7 @@ test "TimeSeries: out of order samples with LAST policy" {
 test "TimeSeries: edge case - empty time series retention" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         5000,
         .BLOCK,
@@ -429,7 +429,7 @@ test "TimeSeries: edge case - empty time series retention" {
 test "TimeSeries: all chunks evicted clears head and tail" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         1000, // 1 second retention
         .BLOCK,
@@ -455,7 +455,7 @@ test "TimeSeries: all chunks evicted clears head and tail" {
 test "TimeSeries: getLastValue returns last value" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -480,7 +480,7 @@ test "TimeSeries: getLastValue returns last value" {
 test "TimeSeries: alter updates properties" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         1000,
         .BLOCK,
@@ -749,7 +749,7 @@ test "TS.ALTER changes duplicate policy" {
 test "TS.RANGE returns samples from active unsealed chunk - Uncompressed" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -785,7 +785,7 @@ test "TS.RANGE returns samples from active unsealed chunk - Uncompressed" {
 test "TS.RANGE can read from active unsealed chunk (hybrid approach)" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -824,7 +824,7 @@ test "TS.RANGE can read from active unsealed chunk (hybrid approach)" {
 test "TS.RANGE with COUNT parameter limits results" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -855,7 +855,7 @@ test "TS.RANGE with COUNT parameter limits results" {
 test "TS.RANGE with COUNT zero returns empty" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -879,7 +879,7 @@ test "TS.RANGE with COUNT zero returns empty" {
 test "TS.RANGE with COUNT larger than available samples returns all" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -904,7 +904,7 @@ test "TS.RANGE with COUNT larger than available samples returns all" {
 test "TS.RANGE with COUNT across multiple chunks" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -992,7 +992,7 @@ test "TS.RANGE with 5000 random samples using compressed encoding" {
     const random = prng.random();
 
     // Create time series with compressed encoding and reasonable chunk size
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0, // No retention
         .BLOCK,
@@ -1061,7 +1061,7 @@ test "TS.RANGE with 5000 random samples using uncompressed encoding" {
     const random = prng.random();
 
     // Create time series with uncompressed encoding
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1104,7 +1104,7 @@ const Aggregation = @import("../time_series.zig").Aggregation;
 test "TS.RANGE with AVG aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1151,7 +1151,7 @@ test "TS.RANGE with AVG aggregation" {
 test "TS.RANGE with SUM aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1186,7 +1186,7 @@ test "TS.RANGE with SUM aggregation" {
 test "TS.RANGE with MIN aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1221,7 +1221,7 @@ test "TS.RANGE with MIN aggregation" {
 test "TS.RANGE with MAX aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1256,7 +1256,7 @@ test "TS.RANGE with MAX aggregation" {
 test "TS.RANGE with COUNT aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1294,7 +1294,7 @@ test "TS.RANGE with COUNT aggregation" {
 test "TS.RANGE with FIRST aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1328,7 +1328,7 @@ test "TS.RANGE with FIRST aggregation" {
 test "TS.RANGE with LAST aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1362,7 +1362,7 @@ test "TS.RANGE with LAST aggregation" {
 test "TS.RANGE with RANGE aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1397,7 +1397,7 @@ test "TS.RANGE with RANGE aggregation" {
 test "TS.RANGE with STD.P (population standard deviation) aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1431,7 +1431,7 @@ test "TS.RANGE with STD.P (population standard deviation) aggregation" {
 test "TS.RANGE with STD.S (sample standard deviation) aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1464,7 +1464,7 @@ test "TS.RANGE with STD.S (sample standard deviation) aggregation" {
 test "TS.RANGE with VAR.P (population variance) aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1498,7 +1498,7 @@ test "TS.RANGE with VAR.P (population variance) aggregation" {
 test "TS.RANGE with VAR.S (sample variance) aggregation" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1531,7 +1531,7 @@ test "TS.RANGE with VAR.S (sample variance) aggregation" {
 test "TS.RANGE aggregation with COUNT limit" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,
@@ -1565,7 +1565,7 @@ test "TS.RANGE aggregation with COUNT limit" {
 test "TS.RANGE aggregation across multiple chunks" {
     const allocator = testing.allocator;
 
-    var ts = TimeSeries.init(
+    var ts = try TimeSeries.init(
         allocator,
         0,
         .BLOCK,

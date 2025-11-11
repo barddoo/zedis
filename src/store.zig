@@ -57,14 +57,13 @@ pub const ShortString = struct {
 pub const ZedisValue = union(ValueType) {
     string: []const u8,
     int: i64,
-    list: ZedisList,
+    list: *ZedisList,
     short_string: ShortString,
-    time_series: TimeSeries,
+    time_series: *TimeSeries,
 };
 
 pub const ZedisObject = struct {
     value: ZedisValue,
-    last_access: u64 = 0,
 };
 
 const StringContext = struct {
@@ -101,10 +100,6 @@ pub const Store = struct {
     medium_pool: SafeMemoryPool, // 128 bytes - for small values
     large_pool: SafeMemoryPool, // 512 bytes - for medium values
 
-    // Statistics for pool effectiveness
-    pool_hits: std.atomic.Value(u64),
-    pool_misses: std.atomic.Value(u64),
-
     access_counter: std.atomic.Value(u64),
 
     /// Check if we need to resize to maintain optimal load factor
@@ -129,8 +124,6 @@ pub const Store = struct {
             .small_pool = .init(allocator, SMALL_STRING_SIZE),
             .medium_pool = .init(allocator, MEDIUM_STRING_SIZE),
             .large_pool = .init(allocator, LARGE_STRING_SIZE),
-            .pool_hits = .init(0),
-            .pool_misses = .init(0),
             .access_counter = .init(0),
         };
     }
@@ -140,16 +133,22 @@ pub const Store = struct {
         // Free all values in the main map
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
-            // Don't free keys - they're managed by interned_strings
-            // Free values based on their type
+            // Strings are freed by arena, no manual free needed
+            // Only free non-arena managed structures
             switch (entry.value_ptr.*.value) {
                 .string => |str| {
                     if (str.len > 0) self.smartFree(str);
                 },
                 .int => {},
-                .list => |*list| @constCast(list).deinit(),
+                .list => |list_ptr| {
+                    list_ptr.deinit();
+                    self.base_allocator.destroy(list_ptr);
+                },
                 .short_string => {},
-                .time_series => |*ts| ts.deinit(),
+                .time_series => |ts_ptr| {
+                    ts_ptr.deinit();
+                    self.base_allocator.destroy(ts_ptr);
+                },
             }
         }
         self.map.deinit(self.base_allocator);
@@ -159,6 +158,8 @@ pub const Store = struct {
         while (intern_it.next()) |entry| {
             if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
         }
+
+        // Interned strings map cleanup (strings already freed by arena)
         self.interned_strings.deinit(self.base_allocator);
 
         self.expiration_map.deinit(self.base_allocator);
@@ -188,23 +189,19 @@ pub const Store = struct {
         assert(len > 0);
         if (len <= SMALL_STRING_SIZE) {
             if (self.small_pool.alloc(len)) |result| {
-                _ = self.pool_hits.fetchAdd(1, .monotonic);
                 return result;
             } else |_| {}
         } else if (len <= MEDIUM_STRING_SIZE) {
             if (self.medium_pool.alloc(len)) |result| {
-                _ = self.pool_hits.fetchAdd(1, .monotonic);
                 return result;
             } else |_| {}
         } else if (len <= LARGE_STRING_SIZE) {
             if (self.large_pool.alloc(len)) |result| {
-                _ = self.pool_hits.fetchAdd(1, .monotonic);
                 return result;
             } else |_| {}
         }
 
         // Fallback to base allocator
-        _ = self.pool_misses.fetchAdd(1, .monotonic);
         return try self.base_allocator.alloc(u8, len);
     }
 
@@ -281,7 +278,10 @@ pub const Store = struct {
                     if (str.len > 0) self.smartFree(str);
                 },
                 .int => {},
-                .list => |*list| @constCast(list).deinit(),
+                .list => |list_ptr| {
+                    list_ptr.deinit();
+                    self.base_allocator.destroy(list_ptr);
+                },
                 .short_string => {},
                 .time_series => return error.AlreadyExists,
             }
@@ -309,6 +309,7 @@ pub const Store = struct {
     // Delete a key from the store
     pub fn delete(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
+
         if (self.map.getPtr(key)) |obj_ptr| {
             // Free the value based on its type
             switch (obj_ptr.value) {
@@ -316,9 +317,15 @@ pub const Store = struct {
                     if (str.len > 0) self.smartFree(str);
                 },
                 .int => {},
-                .list => |*list| @constCast(list).deinit(),
+                .list => |list_ptr| {
+                    list_ptr.deinit();
+                    self.base_allocator.destroy(list_ptr);
+                },
                 .short_string => {},
-                .time_series => |*ts| ts.deinit(),
+                .time_series => |ts_ptr| {
+                    ts_ptr.deinit();
+                    self.base_allocator.destroy(ts_ptr);
+                },
             }
 
             // Remove from maps
@@ -329,30 +336,56 @@ pub const Store = struct {
         return false;
     }
 
-    pub inline fn exists(self: Store, key: []const u8) bool {
+    pub inline fn exists(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
-        return self.map.contains(key);
+
+        // Check existence first
+        if (!self.map.contains(key)) return false;
+
+        // Check expiration
+        if (self.expiration_map.get(key)) |expiration_time| {
+            if (std.time.milliTimestamp() > expiration_time) {
+                _ = self.delete(key);
+                return false;
+            }
+        }
+
+        return true;
     }
 
-    pub inline fn getType(self: Store, key: []const u8) ?ValueType {
+    pub inline fn getType(self: *Store, key: []const u8) ?ValueType {
         assert(key.len > 0);
-        if (self.map.getPtr(key)) |obj| {
-            return std.meta.activeTag(obj.value);
+
+        // Check existence first
+        const obj_ptr = self.map.getPtr(key) orelse return null;
+
+        // Check expiration before returning type
+        if (self.expiration_map.get(key)) |expiration_time| {
+            if (std.time.milliTimestamp() > expiration_time) {
+                _ = self.delete(key);
+                return null;
+            }
         }
-        return null;
+
+        return std.meta.activeTag(obj_ptr.value);
     }
 
     pub inline fn get(self: *Store, key: []const u8) ?*const ZedisObject {
         assert(key.len > 0);
-        if (self.isExpired(key)) {
-            _ = self.delete(key);
-            return null;
+
+        // Check existence first (Redis-style optimization)
+        // This avoids expiration lookup for non-existent keys
+        const obj_ptr = self.map.getPtr(key) orelse return null;
+
+        // Only check expiration if key exists AND has TTL
+        if (self.expiration_map.get(key)) |expiration_time| {
+            if (std.time.milliTimestamp() > expiration_time) {
+                _ = self.delete(key);
+                return null;
+            }
         }
-        if (self.map.getPtr(key)) |obj| {
-            obj.last_access = self.access_counter.fetchAdd(1, .monotonic);
-            return obj;
-        }
-        return null;
+
+        return obj_ptr;
     }
 
     pub fn keys(self: Store, allocator: std.mem.Allocator, pattern: []const u8) ![][]const u8 {
@@ -368,37 +401,58 @@ pub const Store = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    pub fn getList(self: Store, key: []const u8) !?*ZedisList {
+    pub fn getList(self: *Store, key: []const u8) !?*ZedisList {
         assert(key.len > 0);
-        if (self.map.getPtr(key)) |obj_ptr| {
-            switch (obj_ptr.value) {
-                .list => |*list| return list,
-                else => return error.WrongType,
+
+        // Check existence first
+        const obj_ptr = self.map.getPtr(key) orelse return null;
+
+        // Check expiration before type checking
+        if (self.expiration_map.get(key)) |expiration_time| {
+            if (std.time.milliTimestamp() > expiration_time) {
+                _ = self.delete(key);
+                return null;
             }
         }
-        return null;
+
+        // Type check and return
+        switch (obj_ptr.value) {
+            .list => |list_ptr| return list_ptr,
+            else => return error.WrongType,
+        }
     }
 
-    pub fn getTimeSeries(self: Store, key: []const u8) !?*TimeSeries {
+    pub fn getTimeSeries(self: *Store, key: []const u8) !?*TimeSeries {
         assert(key.len > 0);
-        if (self.map.getPtr(key)) |obj_ptr| {
-            switch (obj_ptr.value) {
-                .time_series => |*ts| return ts,
-                else => return error.WrongType,
+
+        // Check existence first
+        const obj_ptr = self.map.getPtr(key) orelse return null;
+
+        // Check expiration before type checking
+        if (self.expiration_map.get(key)) |expiration_time| {
+            if (std.time.milliTimestamp() > expiration_time) {
+                _ = self.delete(key);
+                return null;
             }
         }
-        return null;
+
+        // Type check and return
+        switch (obj_ptr.value) {
+            .time_series => |ts_ptr| return ts_ptr,
+            else => return error.WrongType,
+        }
     }
 
     pub fn createList(self: *Store, key: []const u8) !*ZedisList {
         assert(key.len > 0);
         // Create list - error if key already exists
-        const list: ZedisList = .init(self.base_allocator);
-        const zedis_object: ZedisObject = .{ .value = .{ .list = list } };
+        const list_ptr = try self.base_allocator.create(ZedisList);
+        list_ptr.* = ZedisList.init(self.base_allocator);
+        const zedis_object: ZedisObject = .{ .value = .{ .list = list_ptr } };
 
         try self.putObject(key, zedis_object);
 
-        return &self.map.getPtr(key).?.value.list;
+        return self.map.getPtr(key).?.value.list;
     }
 
     pub fn getSetList(self: *Store, key: []const u8) !*ZedisList {
@@ -458,9 +512,15 @@ pub const Store = struct {
                     if (str.len > 0) self.smartFree(str);
                 },
                 .int => {},
-                .list => |*list| @constCast(list).deinit(),
+                .list => |list| {
+                    list.deinit();
+                    self.base_allocator.destroy(list);
+                },
                 .short_string => {},
-                .time_series => |*ts| ts.deinit(),
+                .time_series => |ts| {
+                    ts.deinit();
+                    self.base_allocator.destroy(ts);
+                },
             }
         }
 
@@ -475,28 +535,6 @@ pub const Store = struct {
         self.interned_strings.clearRetainingCapacity();
     }
 
-    /// Get memory pool statistics
-    pub fn getPoolStats(self: *Store) PoolStats {
-        const hits = self.pool_hits.load(.acquire);
-        const misses = self.pool_misses.load(.acquire);
-        const total = hits + misses;
-
-        return PoolStats{
-            .pool_hits = hits,
-            .pool_misses = misses,
-            .hit_rate = if (total > 0) (@as(f64, @floatFromInt(hits)) / @as(f64, @floatFromInt(total))) * 100.0 else 0.0,
-            .small_pool_allocations = self.small_pool.allocations.count(),
-            .medium_pool_allocations = self.medium_pool.allocations.count(),
-            .large_pool_allocations = self.large_pool.allocations.count(),
-        };
-    }
-
-    /// Reset pool statistics
-    pub fn resetPoolStats(self: *Store) void {
-        self.pool_hits.store(0, .release);
-        self.pool_misses.store(0, .release);
-    }
-
     /// Sample random keys and return the least recently used one (approximate LRU)
     /// If volatile_only is true, only samples keys with expiration set (volatile-lru policy)
     pub fn sampleLRUKey(self: *Store, sample_size: usize, volatile_only: bool) ?[]const u8 {
@@ -505,7 +543,6 @@ pub const Store = struct {
         if (total_keys == 0) return null;
 
         var oldest_key: ?[]const u8 = null;
-        var oldest_access: u64 = std.math.maxInt(u64);
 
         // Use a simple PRNG for sampling
         var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
@@ -525,12 +562,7 @@ pub const Store = struct {
                     if (current_idx == random_idx) {
                         const key = entry.key_ptr.*;
                         // Get the object to check its access time
-                        if (self.map.getPtr(key)) |obj| {
-                            if (obj.last_access < oldest_access) {
-                                oldest_access = obj.last_access;
-                                oldest_key = key;
-                            }
-                        }
+                        oldest_key = key;
                         break;
                     }
                     current_idx += 1;
@@ -541,11 +573,7 @@ pub const Store = struct {
                 var current_idx: usize = 0;
                 while (it.next()) |entry| {
                     if (current_idx == random_idx) {
-                        const obj = entry.value_ptr;
-                        if (obj.last_access < oldest_access) {
-                            oldest_access = obj.last_access;
-                            oldest_key = entry.key_ptr.*;
-                        }
+                        oldest_key = entry.key_ptr.*;
                         break;
                     }
                     current_idx += 1;
@@ -558,15 +586,8 @@ pub const Store = struct {
 
     pub fn createTimeSeries(self: *Store, key: []const u8, ts: TimeSeries) !void {
         assert(key.len > 0);
-        try self.putObject(key, .{ .value = .{ .time_series = ts } });
+        const ts_ptr = try self.base_allocator.create(TimeSeries);
+        ts_ptr.* = ts;
+        try self.putObject(key, .{ .value = .{ .time_series = ts_ptr } });
     }
-};
-
-pub const PoolStats = struct {
-    pool_hits: u64,
-    pool_misses: u64,
-    hit_rate: f64,
-    small_pool_allocations: u32,
-    medium_pool_allocations: u32,
-    large_pool_allocations: u32,
 };

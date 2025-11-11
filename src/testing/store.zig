@@ -56,7 +56,7 @@ test "Store setObject with ZedisObject" {
     var store = Store.init(allocator, 4096);
     defer store.deinit();
 
-    const obj = ZedisObject{ .value = .{ .string = "test" } };
+    const obj = ZedisObject{ .value = .{ .string = try allocator.dupe(u8, "test") } };
     try store.putObject("key1", obj);
 
     const result = store.get("key1");
@@ -318,15 +318,15 @@ test "Store list append and insert operations" {
 
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    try list.append(.{ .string = "first" });
+    try list.append(.{ .string = try allocator.dupe(u8, "first") });
     try testing.expectEqual(@as(usize, 1), list.len());
     try testing.expectEqualStrings("first", list.getByIndex(0).?.string);
 
-    try list.append(.{ .string = "second" });
+    try list.append(.{ .string = try allocator.dupe(u8, "second") });
     try testing.expectEqual(@as(usize, 2), list.len());
     try testing.expectEqualStrings("second", list.getByIndex(1).?.string);
 
-    try list.prepend(.{ .string = "zero" });
+    try list.prepend(.{ .string = try allocator.dupe(u8, "zero") });
     try testing.expectEqual(@as(usize, 3), list.len());
     try testing.expectEqualStrings("zero", list.getByIndex(0).?.string);
     try testing.expectEqualStrings("first", list.getByIndex(1).?.string);
@@ -343,9 +343,9 @@ test "Store list with mixed value types" {
 
     const list = try store.createList("test_mixed_values");
 
-    try list.append(.{ .string = "hello" });
+    try list.append(.{ .string = try allocator.dupe(u8, "hello") });
     try list.append(.{ .int = 42 });
-    try list.append(.{ .string = "world" });
+    try list.append(.{ .string = try allocator.dupe(u8, "world") });
 
     try testing.expectEqual(@as(usize, 3), list.len());
     try testing.expectEqualStrings("hello", list.getByIndex(0).?.string);
@@ -407,7 +407,7 @@ test "Store overwrite list with string" {
     defer store.deinit();
 
     const list = try store.createList("key1");
-    try list.append(.{ .string = "item" });
+    try list.append(.{ .string = try allocator.dupe(u8, "item") });
     try testing.expectEqual(ValueType.list, store.getType("key1").?);
 
     try store.set("key1", "hello");
@@ -427,8 +427,8 @@ test "Store delete list key" {
     defer store.deinit();
 
     const list = try store.createList("mylist");
-    try list.append(.{ .string = "item1" });
-    try list.append(.{ .string = "item2" });
+    try list.append(.{ .string = try allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try allocator.dupe(u8, "item2") });
 
     try testing.expect(store.exists("mylist"));
     try testing.expectEqual(@as(u32, 1), store.size());
@@ -451,7 +451,7 @@ test "Store empty list operations" {
     const list = try store.createList("test_empty_ops");
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    try list.append(.{ .string = "" });
+    try list.append(.{ .string = try allocator.dupe(u8, "") });
     try testing.expectEqual(@as(usize, 1), list.len());
     try testing.expectEqualStrings("", list.getByIndex(0).?.string);
 
@@ -475,8 +475,8 @@ test "Store flush_db removes all keys" {
     try store.setInt("int2", -100);
 
     const list = try store.createList("mylist");
-    try list.append(.{ .string = "item1" });
-    try list.append(.{ .string = "item2" });
+    try list.append(.{ .string = try allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try allocator.dupe(u8, "item2") });
 
     // Verify all keys exist
     try testing.expectEqual(@as(u32, 5), store.size());

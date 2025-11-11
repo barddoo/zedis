@@ -48,17 +48,19 @@ pub const Reader = struct {
     allocator: std.mem.Allocator,
     store: *Store,
     registry: *Registry,
+    reader_buffer: [8192]u8 = undefined,
 
     // take path when ready to
     pub fn init(allocator: std.mem.Allocator, store: *Store, registry: *Registry) !Reader {
         const file = try std.fs.cwd().openFile(DEFAULT_NAME, .{ .mode = .read_only });
-        const reader = file.reader(&.{});
-        return .{
-            .file_reader = reader,
+        var result = Reader{
+            .file_reader = undefined,
             .allocator = allocator,
             .store = store,
             .registry = registry,
         };
+        result.file_reader = file.reader(&result.reader_buffer);
+        return result;
     }
 
     pub fn read(self: *Reader) !void {
@@ -71,7 +73,7 @@ pub const Reader = struct {
         } else |_| {}
 
         for (commands.items) |command| {
-            try self.registry.executeCommandAof(self.store, command.args.items);
+            try self.registry.executeCommandAof(self.store, command.getArgs());
         }
 
         for (commands.items) |*command| {
@@ -97,9 +99,10 @@ test "aof reading test" {
     var store: Store = .init(testing.allocator, 4096);
     defer store.deinit();
 
+    var reader_buffer: [8192]u8 = undefined;
     var aof_reader: Reader = undefined;
     aof_reader.allocator = testing.allocator;
-    aof_reader.file_reader = test_file.reader(&.{});
+    aof_reader.file_reader = test_file.reader(&reader_buffer);
     aof_reader.store = &store;
     aof_reader.registry = &registry;
 
@@ -138,9 +141,10 @@ test "aof writing test" {
     aof_writer.file_writer = test_file.writer(&.{});
     aof_writer.enabled = true;
 
-    try registry.executeCommand(&writer, &dummy_client, &store, &aof_writer, cmd.args.items);
+    try registry.executeCommand(&writer, &dummy_client, &store, &aof_writer, cmd.getArgs());
 
-    var file_reader = test_file.reader(&.{});
+    var file_reader_buffer: [8192]u8 = undefined;
+    var file_reader = test_file.reader(&file_reader_buffer);
 
     try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
     const buf = try testing.allocator.alloc(u8, 1024);

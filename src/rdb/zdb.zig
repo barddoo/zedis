@@ -173,7 +173,7 @@ pub const Writer = struct {
                 .int => |i| try self.writeIntValue(i),
                 .string => |s| try self.writeString(s),
                 .short_string => |ss| try self.writeString(ss.asSlice()),
-                .list => |list| try self.writeList(@constCast(&list)),
+                .list => |list_ptr| try self.writeList(list_ptr),
                 // TODO
                 else => {},
             }
@@ -247,7 +247,7 @@ pub const Writer = struct {
             .int => |number| try self.writeIntValue(number),
             .string => |str| try self.writeString(str),
             .short_string => |ss| try self.writeString(ss.asSlice()),
-            .list => |list| try self.writeList(@constCast(&list)),
+            .list => |list_ptr| try self.writeList(list_ptr),
             else => {},
         }
     }

@@ -107,10 +107,12 @@ pub const TimeSeries = struct {
 
     // Active chunk samples - always kept uncompressed for real-time queries
     // Compression (based on encoding setting) only applies when sealing chunks
-    active_samples: std.ArrayList(Sample),
+    // Boxed to reduce TimeSeries size
+    active_samples: *std.ArrayList(Sample),
 
     // Track last value for duplicate/IGNORE logic
-    last_sample: ?Sample = null,
+    // Boxed to reduce TimeSeries size
+    last_sample: ?*Sample = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -120,7 +122,10 @@ pub const TimeSeries = struct {
         encoding: ?EncodingType,
         ignore_max_time_diff: ?u64,
         ignore_max_val_diff: ?f64,
-    ) TimeSeries {
+    ) !TimeSeries {
+        const active_samples_ptr = try allocator.create(std.ArrayList(Sample));
+        active_samples_ptr.* = .empty;
+
         return TimeSeries{
             .head = null,
             .tail = null,
@@ -132,13 +137,19 @@ pub const TimeSeries = struct {
             .encoding = encoding orelse .DeltaXor,
             .ignore_max_time_diff = ignore_max_time_diff orelse 0,
             .ignore_max_val_diff = ignore_max_val_diff orelse 0.0,
-            .active_samples = .empty,
+            .active_samples = active_samples_ptr,
         };
     }
 
     pub fn deinit(self: *TimeSeries) void {
         // Deinit the active samples buffer
         self.active_samples.deinit(self.allocator);
+        self.allocator.destroy(self.active_samples);
+
+        // Free last_sample if present
+        if (self.last_sample) |sample_ptr| {
+            self.allocator.destroy(sample_ptr);
+        }
 
         var chunk = self.head;
         while (chunk) |c| {
@@ -341,7 +352,15 @@ pub const TimeSeries = struct {
         self.total_samples += 1;
 
         // Track last sample for duplicate/IGNORE logic
-        self.last_sample = .{ .timestamp = timestamp, .value = value };
+        if (self.last_sample) |sample_ptr| {
+            // Reuse existing allocation
+            sample_ptr.* = .{ .timestamp = timestamp, .value = value };
+        } else {
+            // Allocate new sample
+            const sample_ptr = try self.allocator.create(Sample);
+            sample_ptr.* = .{ .timestamp = timestamp, .value = value };
+            self.last_sample = sample_ptr;
+        }
 
         // Apply retention policy - evict chunks outside retention window
         self.evictExpiredChunks(timestamp);

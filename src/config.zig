@@ -194,7 +194,7 @@ fn readFile(allocator: std.mem.Allocator, file_name: []const u8) !Config {
     var file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
     defer file.close();
 
-    var buffer: [8192]u8 = undefined;
+    var buffer: [1024 * 8]u8 = undefined;
     var file_reader = file.reader(&buffer);
     var reader = &file_reader.interface;
 
