@@ -549,3 +549,278 @@ test "Store flush_db allows reuse after flush" {
     try testing.expect(store.get("key1") == null);
     try testing.expect(store.get("key2") == null);
 }
+
+test "Store maintenance() rehashes and reduces capacity" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Add many keys to grow the capacity
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        try store.set(key, "value");
+    }
+
+    const capacity_before = store.map.capacity();
+    const size_before = store.map.count();
+    try testing.expect(capacity_before > 0);
+    try testing.expectEqual(@as(usize, 1000), size_before);
+
+    // Delete half the keys to create tombstones
+    i = 0;
+    while (i < 500) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        const deleted = store.delete(key);
+        try testing.expect(deleted);
+    }
+
+    const size_after_delete = store.map.count();
+    try testing.expectEqual(@as(usize, 500), size_after_delete);
+
+    // Capacity should still be large (tombstones remain)
+    try testing.expectEqual(capacity_before, store.map.capacity());
+
+    // Run maintenance to clean up tombstones
+    store.maintenance();
+
+    const capacity_after = store.map.capacity();
+    const size_after = store.map.count();
+
+    // Size should remain the same
+    try testing.expectEqual(@as(usize, 500), size_after);
+
+    // Capacity should be reduced or at least not larger
+    try testing.expect(capacity_after <= capacity_before);
+
+    // Verify remaining keys are still accessible
+    i = 500;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        const result = store.get(key);
+        try testing.expect(result != null);
+        try testing.expectEqualStrings("value", result.?.value.short_string.asSlice());
+    }
+}
+
+test "Store maintenance() resets deletion counter" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Add and delete keys to increment deletion counter
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        try store.set(key, "value");
+        _ = store.delete(key);
+    }
+
+    try testing.expect(store.deletions_since_rehash > 0);
+
+    // Run maintenance
+    store.maintenance();
+
+    // Deletion counter should be reset
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store maybeMaintenance() respects rate limiting" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Add enough keys to trigger capacity growth
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        try store.set(key, "value");
+    }
+
+    // Delete many keys to exceed threshold
+    i = 0;
+    while (i < 700) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        _ = store.delete(key);
+    }
+
+    const capacity_before = store.map.capacity();
+
+    // Reset last_maintenance_check to ensure our explicit call isn't rate-limited
+    // (delete() calls maybeMaintenance() automatically, which may have updated it recently)
+    store.last_maintenance_check = 0;
+    const last_check_before = store.last_maintenance_check;
+
+    // Call maybeMaintenance multiple times in quick succession
+    store.maybeMaintenance();
+    const capacity_after_first = store.map.capacity();
+    const last_check_after_first = store.last_maintenance_check;
+
+    // First call should trigger maintenance
+    try testing.expect(capacity_after_first <= capacity_before);
+    try testing.expect(last_check_after_first > last_check_before);
+
+    // Immediately call again (within 50ms)
+    store.maybeMaintenance();
+    const capacity_after_second = store.map.capacity();
+    const last_check_after_second = store.last_maintenance_check;
+
+    // Second call should be rate-limited (no maintenance)
+    try testing.expectEqual(capacity_after_first, capacity_after_second);
+    try testing.expectEqual(last_check_after_first, last_check_after_second);
+}
+
+test "Store maybeMaintenance() triggers on 50% waste threshold" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Add many keys
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        try store.set(key, "value");
+    }
+
+    const capacity_before = store.map.capacity();
+
+    // Delete more than 50% of capacity to trigger waste threshold
+    // (capacity - count) > capacity / 2
+    const target_deletions = (capacity_before / 2) + 10;
+    i = 0;
+    while (i < target_deletions) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        _ = store.delete(key);
+    }
+
+    // Reset last_maintenance_check to avoid rate limiting
+    store.last_maintenance_check = 0;
+
+    // This should trigger maintenance due to waste threshold
+    store.maybeMaintenance();
+
+    // Deletion counter should be reset after maintenance
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store maybeMaintenance() triggers on 25% deletions threshold" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Add keys to establish capacity
+    var i: usize = 0;
+    while (i < 500) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        try store.set(key, "value");
+    }
+
+    const capacity = store.map.capacity();
+    const threshold = capacity / 4;
+
+    // Delete exactly threshold + 1 keys to trigger maintenance
+    i = 0;
+    while (i < threshold + 1) : (i += 1) {
+        const key = try std.fmt.allocPrint(allocator, "key{d}", .{i});
+        _ = store.delete(key);
+    }
+
+    try testing.expect(store.deletions_since_rehash > threshold);
+
+    // Reset last_maintenance_check to avoid rate limiting
+    store.last_maintenance_check = 0;
+
+    // This should trigger maintenance due to deletion threshold
+    store.maybeMaintenance();
+
+    // Deletion counter should be reset after maintenance
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store pool stats tracking" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Initially, stats should show zero attempts
+    const initial_stats = store.getPoolStats();
+    try testing.expectEqual(@as(usize, 0), initial_stats.small.attempts);
+    try testing.expectEqual(@as(usize, 0), initial_stats.medium.attempts);
+    try testing.expectEqual(@as(usize, 0), initial_stats.large.attempts);
+
+    // Add some small strings (should use small pool)
+    try store.set("key1", "small");
+    try store.set("key2", "tiny");
+    try store.set("key3", "short");
+
+    // Add some medium strings (should use medium pool)
+    const medium_value = "this is a medium sized value that should use the medium pool";
+    try store.set("key4", medium_value);
+    try store.set("key5", medium_value);
+
+    // Add some large strings (should use large pool)
+    const large_value = "this is a much larger value that exceeds the medium pool size and should use the large pool for allocation, hopefully this is long enough";
+    try store.set("key6", large_value);
+
+    // Check that pool stats have been updated
+    const final_stats = store.getPoolStats();
+    try testing.expect(final_stats.small.attempts > 0);
+    try testing.expect(final_stats.small.successes > 0);
+    try testing.expect(final_stats.small.hit_rate > 0.0);
+
+    // Verify hit rate calculation
+    try testing.expect(final_stats.small.hit_rate <= 1.0);
+    try testing.expectEqual(
+        final_stats.small.successes,
+        @as(usize, @intFromFloat(@as(f64, @floatFromInt(final_stats.small.attempts)) * final_stats.small.hit_rate))
+    );
+}
+
+test "Store deletion tracking increments counter" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var store = Store.init(allocator, 16);
+    defer store.deinit();
+
+    // Initially, deletion counter should be 0
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+
+    // Add and delete some keys
+    try store.set("key1", "value1");
+    try store.set("key2", "value2");
+    try store.set("key3", "value3");
+
+    _ = store.delete("key1");
+    try testing.expect(store.deletions_since_rehash >= 1);
+
+    _ = store.delete("key2");
+    try testing.expect(store.deletions_since_rehash >= 2);
+
+    _ = store.delete("key3");
+    try testing.expect(store.deletions_since_rehash >= 3);
+
+    // Deleting non-existent key should not increment
+    const before_failed_delete = store.deletions_since_rehash;
+    _ = store.delete("nonexistent");
+    try testing.expectEqual(before_failed_delete, store.deletions_since_rehash);
+}

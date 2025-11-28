@@ -11,9 +11,9 @@ const string_match = @import("./util/string_match.zig").string_match;
 const assert = std.debug.assert;
 
 // Optimal load factor
-const optimal_max_load_percentage = 75;
+const optimal_max_load_percentage = 80;
 
-const OptimizedHashMap = std.ArrayHashMapUnmanaged([]const u8, ZedisObject, StringContext, true);
+const OptimizedHashMap = std.StringHashMapUnmanaged(ZedisObject);
 
 // Memory pool sizes optimized for Redis workloads
 const SMALL_STRING_SIZE = 32; // Redis keys are often small
@@ -66,24 +66,6 @@ pub const ZedisObject = struct {
     value: ZedisValue,
 };
 
-const StringContext = struct {
-    pub fn hash(self: @This(), s: []const u8) u32 {
-        _ = self;
-        return @truncate(CityHash64.hash(s));
-    }
-
-    pub fn eql(self: @This(), a: []const u8, b: []const u8, b_index: usize) bool {
-        _ = self;
-        _ = b_index;
-        // Quick length check first
-        if (a.len != b.len) return false;
-        // For interned strings, this becomes pointer comparison
-        if (a.ptr == b.ptr) return true;
-
-        return std.mem.eql(u8, a, b);
-    }
-};
-
 pub const Store = struct {
     base_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
@@ -92,15 +74,16 @@ pub const Store = struct {
     // Expiration hash map
     expiration_map: std.StringHashMapUnmanaged(i64),
 
-    // Map of interned strings
-    interned_strings: std.StringHashMapUnmanaged(void),
-
     // Hybrid memory pools for different string sizes
     small_pool: SafeMemoryPool, // 32 bytes - for keys
     medium_pool: SafeMemoryPool, // 128 bytes - for small values
     large_pool: SafeMemoryPool, // 512 bytes - for medium values
 
     access_counter: std.atomic.Value(u64),
+
+    // Tracking for maintenance
+    deletions_since_rehash: usize,
+    last_maintenance_check: i64,
 
     /// Check if we need to resize to maintain optimal load factor
     inline fn maybeResize(self: *Store) !void {
@@ -113,28 +96,31 @@ pub const Store = struct {
 
     pub fn init(allocator: std.mem.Allocator, initial_capacity: usize) Store {
         var map: OptimizedHashMap = .{};
-        map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
+        map.ensureTotalCapacity(allocator, @intCast(initial_capacity)) catch unreachable;
 
         return .{
             .base_allocator = allocator,
             .allocator = allocator,
             .map = map,
             .expiration_map = .{},
-            .interned_strings = .{},
             .small_pool = .init(allocator, SMALL_STRING_SIZE),
             .medium_pool = .init(allocator, MEDIUM_STRING_SIZE),
             .large_pool = .init(allocator, LARGE_STRING_SIZE),
             .access_counter = .init(0),
+            .deletions_since_rehash = 0,
+            .last_maintenance_check = 0,
         };
     }
 
     // Frees all memory associated with the store.
     pub fn deinit(self: *Store) void {
-        // Free all values in the main map
+        // Free all keys and values in the main map
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
-            // Strings are freed by arena, no manual free needed
-            // Only free non-arena managed structures
+            // Free the key
+            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
+
+            // Free the value
             switch (entry.value_ptr.*.value) {
                 .string => |str| {
                     if (str.len > 0) self.smartFree(str);
@@ -153,15 +139,6 @@ pub const Store = struct {
         }
         self.map.deinit(self.base_allocator);
 
-        // Free interned strings
-        var intern_it = self.interned_strings.iterator();
-        while (intern_it.next()) |entry| {
-            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
-        }
-
-        // Interned strings map cleanup (strings already freed by arena)
-        self.interned_strings.deinit(self.base_allocator);
-
         self.expiration_map.deinit(self.base_allocator);
 
         // Clean up memory pools
@@ -172,16 +149,6 @@ pub const Store = struct {
 
     pub inline fn size(self: Store) u32 {
         return @intCast(self.map.count());
-    }
-
-    fn internString(self: *Store, str: []const u8) ![]const u8 {
-        assert(str.len > 0);
-        const gop = try self.interned_strings.getOrPut(self.base_allocator, str);
-        if (!gop.found_existing) {
-            const owned_str = try self.dupeString(str);
-            gop.key_ptr.* = owned_str;
-        }
-        return gop.key_ptr.*;
     }
 
     /// Smart allocation using memory pools based on size
@@ -268,8 +235,7 @@ pub const Store = struct {
         // Check if we need to resize before adding new entries
         try self.maybeResize();
 
-        const interned_key = try self.internString(key);
-        const gop = try self.map.getOrPut(self.base_allocator, interned_key);
+        const gop = try self.map.getOrPut(self.base_allocator, key);
 
         // Free old value if key existed
         if (gop.found_existing) {
@@ -285,9 +251,11 @@ pub const Store = struct {
                 .short_string => {},
                 .time_series => return error.AlreadyExists,
             }
+        } else {
+            // New key - need to duplicate it for the HashMap to own
+            const owned_key = try self.dupeString(key);
+            gop.key_ptr.* = owned_key;
         }
-        // Key is already interned, no need to duplicate again
-        gop.key_ptr.* = interned_key;
 
         // Build the new object with allocated values
         var new_object = object;
@@ -304,34 +272,49 @@ pub const Store = struct {
 
         // Update the entry
         gop.value_ptr.* = new_object;
+
+        // Maybe run maintenance if thresholds are met
+        self.maybeMaintenance();
     }
 
     // Delete a key from the store
     pub fn delete(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
 
-        if (self.map.getPtr(key)) |obj_ptr| {
-            // Free the value based on its type
-            switch (obj_ptr.value) {
-                .string => |str| {
-                    if (str.len > 0) self.smartFree(str);
-                },
-                .int => {},
-                .list => |list_ptr| {
-                    list_ptr.deinit();
-                    self.base_allocator.destroy(list_ptr);
-                },
-                .short_string => {},
-                .time_series => |ts_ptr| {
-                    ts_ptr.deinit();
-                    self.base_allocator.destroy(ts_ptr);
-                },
-            }
+        if (self.map.getKey(key)) |stored_key| {
+            if (self.map.getPtr(key)) |obj_ptr| {
+                // Free the value based on its type
+                switch (obj_ptr.value) {
+                    .string => |str| {
+                        if (str.len > 0) self.smartFree(str);
+                    },
+                    .int => {},
+                    .list => |list_ptr| {
+                        list_ptr.deinit();
+                        self.base_allocator.destroy(list_ptr);
+                    },
+                    .short_string => {},
+                    .time_series => |ts_ptr| {
+                        ts_ptr.deinit();
+                        self.base_allocator.destroy(ts_ptr);
+                    },
+                }
 
-            // Remove from maps
-            _ = self.map.swapRemove(key);
-            _ = self.expiration_map.remove(key);
-            return true;
+                // Remove from maps
+                _ = self.map.remove(key);
+                _ = self.expiration_map.remove(key);
+
+                // Free the key (now that it's no longer in any map)
+                if (stored_key.len > 0) self.smartFree(stored_key);
+
+                // Track deletion for maintenance
+                self.deletions_since_rehash += 1;
+
+                // Maybe run maintenance if thresholds are met
+                self.maybeMaintenance();
+
+                return true;
+            }
         }
         return false;
     }
@@ -467,9 +450,9 @@ pub const Store = struct {
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {
         assert(key.len > 0);
         assert(time > 0);
-        if (self.map.contains(key)) {
-            const interned_key = try self.internString(key);
-            try self.expiration_map.put(self.base_allocator, interned_key, time);
+        if (self.map.getKey(key)) |existing_key| {
+            // Use the key from the map (already owned) for expiration map
+            try self.expiration_map.put(self.base_allocator, existing_key, time);
             return true;
         }
         return false;
@@ -499,14 +482,26 @@ pub const Store = struct {
 
         const random_idx = random.intRangeAtMost(usize, 0, total_keys - 1);
 
-        const key = self.map.keys()[random_idx];
+        // Use iterator to find the key at random_idx
+        var it = self.map.iterator();
+        var current_idx: usize = 0;
+        while (it.next()) |entry| {
+            if (current_idx == random_idx) {
+                return entry.key_ptr.*;
+            }
+            current_idx += 1;
+        }
 
-        return key;
+        return null;
     }
 
     pub inline fn flush_db(self: *Store) void {
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
+            // Free the key
+            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
+
+            // Free the value
             switch (entry.value_ptr.*.value) {
                 .string => |str| {
                     if (str.len > 0) self.smartFree(str);
@@ -524,15 +519,8 @@ pub const Store = struct {
             }
         }
 
-        // Free interned strings
-        var intern_it = self.interned_strings.iterator();
-        while (intern_it.next()) |entry| {
-            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
-        }
-
-        // Clear the maps to remove all keys
+        // Clear the map to remove all keys
         self.map.clearRetainingCapacity();
-        self.interned_strings.clearRetainingCapacity();
     }
 
     /// Sample random keys and return the least recently used one (approximate LRU)
@@ -589,5 +577,108 @@ pub const Store = struct {
         const ts_ptr = try self.base_allocator.create(TimeSeries);
         ts_ptr.* = ts;
         try self.putObject(key, .{ .value = .{ .time_series = ts_ptr } });
+    }
+
+    pub const PoolStatsSummary = struct {
+        attempts: usize,
+        successes: usize,
+        hit_rate: f64,
+    };
+
+    pub fn getPoolStats(self: *Store) struct {
+        small: PoolStatsSummary,
+        medium: PoolStatsSummary,
+        large: PoolStatsSummary,
+    } {
+
+        const small = self.small_pool.getStats();
+        const medium = self.medium_pool.getStats();
+        const large = self.large_pool.getStats();
+
+        return .{
+            .small = .{
+                .attempts = small.attempts,
+                .successes = small.successes,
+                .hit_rate = small.hit_rate,
+            },
+            .medium = .{
+                .attempts = medium.attempts,
+                .successes = medium.successes,
+                .hit_rate = medium.hit_rate,
+            },
+            .large = .{
+                .attempts = large.attempts,
+                .successes = large.successes,
+                .hit_rate = large.hit_rate,
+            },
+        };
+    }
+
+    /// Smart maintenance trigger with rate limiting
+    /// Call this after operations that modify the map (delete, put)
+    pub inline fn maybeMaintenance(self: *Store) void {
+        const now = std.time.milliTimestamp();
+
+        // Rate limit: Don't check more than once per 50ms to avoid overhead
+        if (now - self.last_maintenance_check < 50) return;
+        self.last_maintenance_check = now;
+
+        // Quick threshold checks
+        const capacity = self.map.capacity();
+        if (capacity == 0) return;
+
+        const entry_count = self.map.count();
+        const waste = capacity - entry_count;
+
+        // Only run maintenance if waste is significant
+        // Threshold 1: 50% waste (capacity is 2× entry_count)
+        // Threshold 2: 25% of capacity deleted since last rehash
+        if ((waste > capacity / 2) or (self.deletions_since_rehash > capacity / 4)) {
+            self.maintenance();
+        }
+    }
+
+    /// Maintenance function to prevent tombstone accumulation
+    /// Called automatically by maybeMaintenance() when thresholds are met
+    pub fn maintenance(self: *Store) void {
+        const capacity = self.map.capacity();
+        const entry_count = self.map.count();
+
+        // If map is empty, nothing to do
+        if (entry_count == 0 or capacity == 0) {
+            self.deletions_since_rehash = 0;
+            return;
+        }
+
+        // Estimate tombstone ratio
+        // After many deletions, capacity stays the same but entry_count decreases
+        // Rough heuristic: if capacity > 2 × entry_count, we likely have many tombstones
+        const estimated_waste_ratio = @as(f64, @floatFromInt(capacity - entry_count)) /
+            @as(f64, @floatFromInt(capacity));
+
+        // Rehash if:
+        // 1. Waste ratio > 50% (capacity is 2× entry_count or more)
+        // 2. OR we've deleted > capacity/4 keys since last rehash
+        const should_rehash = (estimated_waste_ratio > 0.5) or
+            (self.deletions_since_rehash > capacity / 4);
+
+        if (should_rehash) {
+            // Create new map with appropriate capacity for current size
+            var new_map = std.StringHashMapUnmanaged(ZedisObject){};
+            new_map.ensureTotalCapacity(self.base_allocator, entry_count) catch return;
+
+            // Copy all entries to new map
+            var it = self.map.iterator();
+            while (it.next()) |entry| {
+                new_map.putAssumeCapacity(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            // Deinit old map (this frees the internal storage but not our keys/values)
+            self.map.deinit(self.base_allocator);
+
+            // Swap to new map
+            self.map = new_map;
+            self.deletions_since_rehash = 0;
+        }
     }
 };
