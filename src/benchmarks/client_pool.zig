@@ -11,6 +11,25 @@ pub const ClientConnection = struct {
 
     pub fn init(allocator: Allocator, address: net.Address) !ClientConnection {
         const stream = try net.tcpConnectToAddress(address);
+
+        // Set socket timeout to 5 seconds to prevent hanging
+        const timeout = std.posix.timeval{
+            .sec = 5,
+            .usec = 0,
+        };
+        try std.posix.setsockopt(
+            stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.RCVTIMEO,
+            std.mem.asBytes(&timeout),
+        );
+        try std.posix.setsockopt(
+            stream.handle,
+            std.posix.SOL.SOCKET,
+            std.posix.SO.SNDTIMEO,
+            std.mem.asBytes(&timeout),
+        );
+
         return .{
             .stream = stream,
             .allocator = allocator,
@@ -30,7 +49,11 @@ pub const ClientConnection = struct {
     }
 
     pub fn readResponse(self: *ClientConnection, buffer: []u8) !usize {
-        return try self.stream.read(buffer);
+        const bytes_read = try self.stream.read(buffer);
+        if (bytes_read == 0) {
+            return error.ConnectionClosed;
+        }
+        return bytes_read;
     }
 
     pub fn isConnected(self: *ClientConnection) bool {
@@ -82,18 +105,18 @@ pub const ClientPool = struct {
 pub const WorkerContext = struct {
     client_id: usize,
     client: *ClientConnection,
-    workload_fn: *const fn (client: *ClientConnection, ctx: *WorkloadContext) anyerror!void,
+    workload_fn: *const fn (client: *ClientConnection, workload_ctx: *WorkloadContext, buffer: []u8) anyerror!void,
     workload_ctx: *WorkloadContext,
     latency_tracker: *metrics.LatencyTracker,
     ops_completed: std.atomic.Value(usize),
     should_stop: *std.atomic.Value(bool),
+    buffer: []u8, // Per-worker buffer to avoid race conditions
 };
 
 pub const WorkloadContext = struct {
     iterations: usize,
     current_iteration: std.atomic.Value(usize),
     start_time: i128,
-    buffer: []u8,
 };
 
 pub fn workerThreadFn(ctx: *WorkerContext) void {
@@ -103,7 +126,7 @@ pub fn workerThreadFn(ctx: *WorkerContext) void {
 
         const start = std.time.nanoTimestamp();
 
-        ctx.workload_fn(ctx.client, ctx.workload_ctx) catch |err| {
+        ctx.workload_fn(ctx.client, ctx.workload_ctx, ctx.buffer) catch |err| {
             std.log.err("Worker {} error: {}", .{ ctx.client_id, err });
             continue;
         };
@@ -120,7 +143,7 @@ pub fn workerThreadFn(ctx: *WorkerContext) void {
 pub fn runWorkload(
     allocator: Allocator,
     pool: *ClientPool,
-    workload_fn: *const fn (client: *ClientConnection, ctx: *WorkloadContext) anyerror!void,
+    workload_fn: *const fn (client: *ClientConnection, workload_ctx: *WorkloadContext, buffer: []u8) anyerror!void,
     iterations: usize,
 ) !struct {
     throughput: f64,
@@ -134,9 +157,20 @@ pub fn runWorkload(
         .iterations = iterations,
         .current_iteration = std.atomic.Value(usize).init(0),
         .start_time = std.time.nanoTimestamp(),
-        .buffer = try allocator.alloc(u8, 64 * 1024), // 64KB buffer per workload
     };
-    defer allocator.free(workload_ctx.buffer);
+
+    // Allocate per-worker buffers to avoid race conditions
+    const worker_buffers = try allocator.alloc([]u8, num_clients);
+    defer {
+        for (worker_buffers) |buf| {
+            allocator.free(buf);
+        }
+        allocator.free(worker_buffers);
+    }
+
+    for (worker_buffers) |*buf| {
+        buf.* = try allocator.alloc(u8, 4 * 1024); // 4KB buffer per worker
+    }
 
     // Setup latency trackers (one per client to avoid contention)
     const latency_trackers = try allocator.alloc(metrics.LatencyTracker, num_clients);
@@ -166,6 +200,7 @@ pub fn runWorkload(
             .latency_tracker = &latency_trackers[i],
             .ops_completed = std.atomic.Value(usize).init(0),
             .should_stop = &should_stop,
+            .buffer = worker_buffers[i],
         };
     }
 

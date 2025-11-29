@@ -7,8 +7,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout_writer = std.fs.File.stdout().writer(&.{});
-    var stdout = stdout_writer.interface;
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");
     try stdout.writeAll("█" ** 100);

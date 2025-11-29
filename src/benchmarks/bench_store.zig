@@ -122,8 +122,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.set (sequential)",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = true,
             },
@@ -150,8 +150,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.get (cached)",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = false, // Already populated
             },
@@ -178,8 +178,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.mixed (70R/30W)",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = true,
             },
@@ -198,8 +198,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.set (short strings)",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = true,
             },
@@ -218,8 +218,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.setInt (integers)",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = true,
             },
@@ -246,8 +246,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.exists",
-                .iterations = 100_000,
-                .warmup_iterations = 10_000,
+                .iterations = 500_000,
+                .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = false,
             },
@@ -266,8 +266,8 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             allocator,
             .{
                 .name = "Store.delete",
-                .iterations = 10_000, // Fewer iterations as we're deleting
-                .warmup_iterations = 1_000,
+                .iterations = 50_000, // Increased for better accuracy
+                .warmup_iterations = 5_000,
                 .track_latency = true,
                 .track_memory = true,
             },

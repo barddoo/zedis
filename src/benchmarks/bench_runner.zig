@@ -145,85 +145,45 @@ pub fn runBenchmarkAdvanced(
 /// Print benchmark results in a formatted table
 pub fn printResults(results: []const BenchmarkResult) void {
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 100 ++ "\n", .{});
-    std.debug.print("BENCHMARK RESULTS\n", .{});
-    std.debug.print("=" ** 100 ++ "\n\n", .{});
+    std.debug.print("=" ** 90 ++ "\n", .{});
+    std.debug.print("BENCHMARK SUMMARY\n", .{});
+    std.debug.print("=" ** 90 ++ "\n\n", .{});
 
     // Header
-    std.debug.print("{s:<40} {s:>12} {s:>15} {s:>15}\n", .{ "Benchmark", "Ops/sec", "Avg Latency", "Memory" });
-    std.debug.print("-" ** 100 ++ "\n", .{});
+    std.debug.print("{s:<42} {s:>15} {s:>12} {s:>12}\n", .{ "Benchmark", "Throughput", "p50", "p99" });
+    std.debug.print("-" ** 90 ++ "\n", .{});
 
     // Results
     for (results) |result| {
-        const avg_latency_ms = if (result.latency_stats) |stats|
-            @as(f64, @floatFromInt(stats.avg_ns)) / 1_000_000.0
+        const median_us = if (result.latency_stats) |stats|
+            @as(f64, @floatFromInt(stats.median_ns)) / 1_000.0
         else
             0.0;
 
-        const mem_kb = if (result.memory_diff) |diff|
-            @as(f64, @floatFromInt(@abs(diff.netBytes()))) / 1024.0
+        const p99_us = if (result.latency_stats) |stats|
+            @as(f64, @floatFromInt(stats.p99_ns)) / 1_000.0
         else
             0.0;
 
-        const mem_sign = if (result.memory_diff) |diff|
-            if (diff.netBytes() >= 0) "+" else "-"
-        else
-            " ";
-
-        std.debug.print("{s:<40} {d:>12.0} {d:>13.3}ms {s}{d:>13.2}KB\n", .{
+        std.debug.print("{s:<42} {d:>12.0} ops/s {d:>9.1}µs {d:>9.1}µs\n", .{
             result.name,
             result.throughput,
-            avg_latency_ms,
-            mem_sign,
-            mem_kb,
+            median_us,
+            p99_us,
         });
     }
 
-    std.debug.print("\n", .{});
-    std.debug.print("Detailed Statistics:\n", .{});
-    std.debug.print("-" ** 100 ++ "\n", .{});
-
-    for (results) |result| {
-        std.debug.print("\n{s}:\n", .{result.name});
-        std.debug.print("  Duration: {d:.2}ms\n", .{result.duration_ms});
-        std.debug.print("  Throughput: {d:.0} ops/sec\n", .{result.throughput});
-
-        if (result.latency_stats) |stats| {
-            std.debug.print("  Latency: min={d:.2}ms avg={d:.2}ms median={d:.2}ms p95={d:.2}ms p99={d:.2}ms max={d:.2}ms\n", .{
-                @as(f64, @floatFromInt(stats.min_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(stats.avg_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(stats.median_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(stats.p95_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(stats.p99_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(stats.max_ns)) / 1_000_000.0,
-            });
-        }
-
-        if (result.memory_diff) |diff| {
-            const net = diff.netBytes();
-            const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
-            const sign: u8 = if (net >= 0) '+' else '-';
-            std.debug.print("  Memory: {c}{d:.2}KB\n", .{ sign, net_kb });
-        }
-    }
-
-    std.debug.print("\n", .{});
-    std.debug.print("=" ** 100 ++ "\n", .{});
+    std.debug.print("\n" ++ "=" ** 90 ++ "\n", .{});
 }
 
 /// Print a single result immediately (for interactive benchmarks)
 pub fn printResult(result: BenchmarkResult) void {
-    std.debug.print("{s}: {d:.0} ops/sec", .{ result.name, result.throughput });
+    std.debug.print("{s}: {d:.0} ops/s", .{ result.name, result.throughput });
 
     if (result.latency_stats) |stats| {
-        const avg_ms = @as(f64, @floatFromInt(stats.avg_ns)) / 1_000_000.0;
-        std.debug.print(", avg={d:.3}ms", .{avg_ms});
-    }
-
-    if (result.memory_diff) |diff| {
-        const net_kb = @as(f64, @floatFromInt(@abs(diff.netBytes()))) / 1024.0;
-        const sign = if (diff.netBytes() >= 0) "+" else "-";
-        std.debug.print(", mem={s}{d:.2}KB", .{ sign, net_kb });
+        const p50_us = @as(f64, @floatFromInt(stats.median_ns)) / 1_000.0;
+        const p99_us = @as(f64, @floatFromInt(stats.p99_ns)) / 1_000.0;
+        std.debug.print(" | p50={d:.1}µs p99={d:.1}µs", .{ p50_us, p99_us });
     }
 
     std.debug.print("\n", .{});
