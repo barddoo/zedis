@@ -145,13 +145,13 @@ pub fn runBenchmarkAdvanced(
 /// Print benchmark results in a formatted table
 pub fn printResults(results: []const BenchmarkResult) void {
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 90 ++ "\n", .{});
+    std.debug.print("=" ** 110 ++ "\n", .{});
     std.debug.print("BENCHMARK SUMMARY\n", .{});
-    std.debug.print("=" ** 90 ++ "\n\n", .{});
+    std.debug.print("=" ** 110 ++ "\n\n", .{});
 
     // Header
-    std.debug.print("{s:<42} {s:>15} {s:>12} {s:>12}\n", .{ "Benchmark", "Throughput", "p50", "p99" });
-    std.debug.print("-" ** 90 ++ "\n", .{});
+    std.debug.print("{s:<42} {s:>15} {s:>12} {s:>12} {s:>18}\n", .{ "Benchmark", "Throughput", "p50", "p99", "Memory (net)" });
+    std.debug.print("-" ** 110 ++ "\n", .{});
 
     // Results
     for (results) |result| {
@@ -165,15 +165,24 @@ pub fn printResults(results: []const BenchmarkResult) void {
         else
             0.0;
 
-        std.debug.print("{s:<42} {d:>12.0} ops/s {d:>9.1}µs {d:>9.1}µs\n", .{
+        std.debug.print("{s:<42} {d:>12.0} ops/s {d:>9.1}µs {d:>9.1}µs", .{
             result.name,
             result.throughput,
             median_us,
             p99_us,
         });
+
+        if (result.memory_diff) |mem| {
+            const net = mem.netBytes();
+            const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
+            const sign: u8 = if (net >= 0) '+' else '-';
+            std.debug.print(" {c}{d:>10.2} KB\n", .{ sign, net_kb });
+        } else {
+            std.debug.print(" {s:>18}\n", .{"N/A"});
+        }
     }
 
-    std.debug.print("\n" ++ "=" ** 90 ++ "\n", .{});
+    std.debug.print("\n" ++ "=" ** 110 ++ "\n", .{});
 }
 
 /// Print a single result immediately (for interactive benchmarks)
@@ -184,6 +193,13 @@ pub fn printResult(result: BenchmarkResult) void {
         const p50_us = @as(f64, @floatFromInt(stats.median_ns)) / 1_000.0;
         const p99_us = @as(f64, @floatFromInt(stats.p99_ns)) / 1_000.0;
         std.debug.print(" | p50={d:.1}µs p99={d:.1}µs", .{ p50_us, p99_us });
+    }
+
+    if (result.memory_diff) |mem| {
+        const net = mem.netBytes();
+        const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
+        const sign: u8 = if (net >= 0) '+' else '-';
+        std.debug.print(" | mem={c}{d:.2}KB", .{ sign, net_kb });
     }
 
     std.debug.print("\n", .{});
