@@ -4,23 +4,25 @@ const config = @import("config.zig");
 const builtin = @import("builtin");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
     const cfg = config.readConfig(allocator) catch |err| {
-        std.log.err("Error reading config: {s}", .{@errorName(err)});
-        return;
+        std.log.err("Failed to read config: {s}", .{@errorName(err)});
+        return err;
     };
 
     // Create and start the server with configuration
     var redis_server = Server.initWithConfig(allocator, cfg.host, cfg.port, cfg) catch |err| {
-        std.log.err("Error server init: {s}", .{@errorName(err)});
-        return;
+        std.log.err("Failed to initialize server: {s}", .{@errorName(err)});
+        return err;
     };
     defer redis_server.deinit();
 
-    std.log.info("Zig Redis server listening on {s}:{d}", .{ cfg.host, cfg.port });
+    std.log.info("Zedis server listening on {s}:{d}", .{ cfg.host, cfg.port });
 
     redis_server.listen() catch |err| {
-        std.log.err("Error on server {s}", .{@errorName(err)});
+        std.log.err("Server error: {s}", .{@errorName(err)});
+        return err;
     };
 }
