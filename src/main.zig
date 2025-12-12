@@ -7,13 +7,17 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const cfg = config.readConfig(allocator) catch |err| {
+
+    var threaded: std.Io.Threaded = .init(allocator);
+    const io = threaded.io();
+
+    const cfg = config.readConfig(allocator, io) catch |err| {
         std.log.err("Failed to read config: {s}", .{@errorName(err)});
         return err;
     };
 
     // Create and start the server with configuration
-    var redis_server = Server.initWithConfig(allocator, cfg.host, cfg.port, cfg) catch |err| {
+    var redis_server = Server.initWithConfig(allocator, cfg.host, cfg.port, cfg, io) catch |err| {
         std.log.err("Failed to initialize server: {s}", .{@errorName(err)});
         return err;
     };

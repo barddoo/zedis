@@ -1,16 +1,17 @@
 const std = @import("std");
-const net = std.net;
 const Allocator = std.mem.Allocator;
 const metrics = @import("metrics.zig");
+const Io = std.Io;
 
 pub const ClientConnection = struct {
-    stream: net.Stream,
+    stream: Io.net.Stream,
     allocator: Allocator,
     request_count: std.atomic.Value(usize),
     connected: std.atomic.Value(bool),
+    io: Io,
 
-    pub fn init(allocator: Allocator, address: net.Address) !ClientConnection {
-        const stream = try net.tcpConnectToAddress(address);
+    pub fn init(allocator: Allocator, address: Io.net.IpAddress, io: Io) !ClientConnection {
+        const stream = try address.connect(io, .{ .mode = .stream });
 
         // Set socket timeout to 5 seconds to prevent hanging
         const timeout = std.posix.timeval{
@@ -18,38 +19,43 @@ pub const ClientConnection = struct {
             .usec = 0,
         };
         try std.posix.setsockopt(
-            stream.handle,
+            stream.socket.handle,
             std.posix.SOL.SOCKET,
             std.posix.SO.RCVTIMEO,
             std.mem.asBytes(&timeout),
         );
         try std.posix.setsockopt(
-            stream.handle,
+            stream.socket.handle,
             std.posix.SOL.SOCKET,
             std.posix.SO.SNDTIMEO,
             std.mem.asBytes(&timeout),
         );
-
         return .{
             .stream = stream,
             .allocator = allocator,
             .request_count = std.atomic.Value(usize).init(0),
             .connected = std.atomic.Value(bool).init(true),
+            .io = io,
         };
     }
 
     pub fn deinit(self: *ClientConnection) void {
-        self.stream.close();
+        self.stream.close(self.io);
         self.connected.store(false, .monotonic);
     }
 
     pub fn sendCommand(self: *ClientConnection, command: []const u8) !void {
-        try self.stream.writeAll(command);
+        var buffer: [4096]u8 = undefined;
+        var w = self.stream.writer(self.io, &buffer);
+        try w.interface.writeAll(command);
+        try w.interface.flush();
         _ = self.request_count.fetchAdd(1, .monotonic);
     }
 
     pub fn readResponse(self: *ClientConnection, buffer: []u8) !usize {
-        const bytes_read = try self.stream.read(buffer);
+        var read_buf: [4096]u8 = undefined;
+        var r = self.stream.reader(self.io, &read_buf);
+        const bytes_read = try r.interface.readSliceShort(buffer);
         if (bytes_read == 0) {
             return error.ConnectionClosed;
         }
@@ -64,14 +70,17 @@ pub const ClientConnection = struct {
 pub const ClientPool = struct {
     clients: []ClientConnection,
     allocator: Allocator,
-    address: net.Address,
+    address: Io.net.IpAddress,
 
     pub fn init(allocator: Allocator, num_clients: usize, host: []const u8, port: u16) !ClientPool {
-        const address = try net.Address.parseIp(host, port);
+        const address = try Io.net.IpAddress.parse(host, port);
         const clients = try allocator.alloc(ClientConnection, num_clients);
 
+        var threaded: Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+
         for (clients) |*client| {
-            client.* = try ClientConnection.init(allocator, address);
+            client.* = try ClientConnection.init(allocator, address, io);
         }
 
         return .{
@@ -116,7 +125,7 @@ pub const WorkerContext = struct {
 pub const WorkloadContext = struct {
     iterations: usize,
     current_iteration: std.atomic.Value(usize),
-    start_time: i128,
+    start_time: std.time.Instant,
 };
 
 pub fn workerThreadFn(ctx: *WorkerContext) void {
@@ -124,15 +133,15 @@ pub fn workerThreadFn(ctx: *WorkerContext) void {
         const iter = ctx.workload_ctx.current_iteration.fetchAdd(1, .monotonic);
         if (iter >= ctx.workload_ctx.iterations) break;
 
-        const start = std.time.nanoTimestamp();
+        const start = std.time.Instant.now() catch unreachable;
 
         ctx.workload_fn(ctx.client, ctx.workload_ctx, ctx.buffer) catch |err| {
             std.log.err("Worker {} error: {}", .{ ctx.client_id, err });
             continue;
         };
 
-        const end = std.time.nanoTimestamp();
-        const duration: u64 = @intCast(end - start);
+        const end = std.time.Instant.now() catch unreachable;
+        const duration: u64 = end.since(start);
 
         ctx.latency_tracker.record(duration) catch {};
         _ = ctx.ops_completed.fetchAdd(1, .monotonic);
@@ -156,7 +165,7 @@ pub fn runWorkload(
     var workload_ctx = WorkloadContext{
         .iterations = iterations,
         .current_iteration = std.atomic.Value(usize).init(0),
-        .start_time = std.time.nanoTimestamp(),
+        .start_time = try std.time.Instant.now(),
     };
 
     // Allocate per-worker buffers to avoid race conditions
@@ -208,7 +217,7 @@ pub fn runWorkload(
     const threads = try allocator.alloc(std.Thread, num_clients);
     defer allocator.free(threads);
 
-    const start_time = std.time.nanoTimestamp();
+    const start_time = try std.time.Instant.now();
 
     for (threads, 0..) |*thread, i| {
         thread.* = try std.Thread.spawn(.{}, workerThreadFn, .{&worker_contexts[i]});
@@ -219,8 +228,8 @@ pub fn runWorkload(
         thread.join();
     }
 
-    const end_time = std.time.nanoTimestamp();
-    const duration_ns = end_time - start_time;
+    const end_time = try std.time.Instant.now();
+    const duration_ns = end_time.since(start_time);
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
     // Merge all latency stats

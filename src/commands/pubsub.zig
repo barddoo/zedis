@@ -104,10 +104,9 @@ pub fn publish(client: *Client, args: []const Value, writer: *std.Io.Writer) !vo
                     message,
                 };
 
-                var sc_sw = subscriber_client.connection.stream.writer(&.{});
-                const sc_writer = &sc_sw.interface;
+                var sub_writer = subscriber_client.connection.writer(client.io, &.{});
                 // Try to deliver the message, but don't fail the entire publish if one delivery fails
-                resp.writeTupleAsArray(sc_writer, message_tuple) catch |err| {
+                resp.writeTupleAsArray(&sub_writer.interface, message_tuple) catch |err| {
                     std.log.warn("Failed to deliver message to client {}: {s}", .{ subscriber_id, @errorName(err) });
                     continue;
                 };

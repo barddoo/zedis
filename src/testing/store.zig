@@ -752,48 +752,6 @@ test "Store maybeMaintenance() triggers on 25% deletions threshold" {
     try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
 }
 
-test "Store pool stats tracking" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    var store = Store.init(allocator, 16);
-    defer store.deinit();
-
-    // Initially, stats should show zero attempts
-    const initial_stats = store.getPoolStats();
-    try testing.expectEqual(@as(usize, 0), initial_stats.small.attempts);
-    try testing.expectEqual(@as(usize, 0), initial_stats.medium.attempts);
-    try testing.expectEqual(@as(usize, 0), initial_stats.large.attempts);
-
-    // Add some small strings (should use small pool)
-    try store.set("key1", "small");
-    try store.set("key2", "tiny");
-    try store.set("key3", "short");
-
-    // Add some medium strings (should use medium pool)
-    const medium_value = "this is a medium sized value that should use the medium pool";
-    try store.set("key4", medium_value);
-    try store.set("key5", medium_value);
-
-    // Add some large strings (should use large pool)
-    const large_value = "this is a much larger value that exceeds the medium pool size and should use the large pool for allocation, hopefully this is long enough";
-    try store.set("key6", large_value);
-
-    // Check that pool stats have been updated
-    const final_stats = store.getPoolStats();
-    try testing.expect(final_stats.small.attempts > 0);
-    try testing.expect(final_stats.small.successes > 0);
-    try testing.expect(final_stats.small.hit_rate > 0.0);
-
-    // Verify hit rate calculation
-    try testing.expect(final_stats.small.hit_rate <= 1.0);
-    try testing.expectEqual(
-        final_stats.small.successes,
-        @as(usize, @intFromFloat(@as(f64, @floatFromInt(final_stats.small.attempts)) * final_stats.small.hit_rate))
-    );
-}
-
 test "Store deletion tracking increments counter" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

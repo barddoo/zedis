@@ -1,5 +1,5 @@
 const std = @import("std");
-const Connection = std.net.Server.Connection;
+const Stream = std.Io.net.Stream;
 const Allocator = std.mem.Allocator;
 const time = std.time;
 const Store = @import("./store.zig").Store;
@@ -10,7 +10,7 @@ const Server = @import("./server.zig");
 
 pub const ConnectionContext = struct {
     server: *Server,
-    connection: std.net.Server.Connection,
+    connection: Stream,
 };
 
 pub const PrimitiveValue = union(enum) {

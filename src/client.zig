@@ -1,5 +1,5 @@
 const std = @import("std");
-const Connection = std.net.Server.Connection;
+const Stream = std.Io.net.Stream;
 const posix = std.posix;
 const pollfd = posix.pollfd;
 const Parser = @import("parser.zig").Parser;
@@ -23,21 +23,22 @@ pub const Client = struct {
     authenticated: bool,
     client_id: u64,
     command_registry: *CommandRegistry,
-    connection: Connection,
+    connection: Stream,
     current_db: u8,
     databases: *[16]Store,
     is_in_pubsub_mode: bool,
     pubsub_context: *PubSubContext,
     server: *Server,
-    writer: std.net.Stream.Writer,
+    io: std.Io,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        connection: Connection,
+        connection: Stream,
         pubsub_context: *PubSubContext,
         registry: *CommandRegistry,
         server: *Server,
         databases: *[16]Store,
+        io: std.Io,
     ) Client {
         const id = next_client_id.fetchAdd(1, .monotonic);
 
@@ -52,12 +53,12 @@ pub const Client = struct {
             .is_in_pubsub_mode = false,
             .pubsub_context = pubsub_context,
             .server = server,
-            .writer = connection.stream.writer(&.{}),
+            .io = io,
         };
     }
 
     pub fn deinit(self: *Client) void {
-        self.connection.stream.close();
+        self.connection.close(self.io);
     }
 
     pub fn enterPubSubMode(self: *Client) void {
@@ -67,35 +68,30 @@ pub const Client = struct {
 
     pub fn handle(self: *Client) !void {
         var reader_buffer: [1024 * 16]u8 = undefined;
-        var sr = self.connection.stream.reader(&reader_buffer);
-        const reader = sr.interface();
-        var writer_buffer: [1024 * 16]u8 = undefined;
-        var sw = self.connection.stream.writer(&writer_buffer);
-        const writer = &sw.interface;
+        var sr = self.connection.reader(self.io, &reader_buffer);
+        const reader = &sr.interface;
 
-        // Create per-thread arena for temporary allocations
-        // This eliminates per-command malloc/free overhead
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        // Create per-command arena for parsing (will be freed after enqueueing)
+        // Use page_allocator directly as it's thread-safe (multiple clients parse concurrently)
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
         defer arena.deinit();
 
         while (true) {
-            // Use arena allocator for all temporary command processing
-            // All allocations will be bulk-freed by arena.reset()
+            // Use arena allocator for parsing (temporary)
             const arena_allocator = arena.allocator();
 
-            // Parse the incoming command from the client's stream.
+            // Parse the incoming command from the client's stream
             var parser = Parser.init(arena_allocator);
 
             var command = parser.parse(reader) catch |err| {
-                // If there's an error (like a closed connection), we stop handling this client.
+                // If there's an error (like a closed connection), we stop handling this client
                 if (err == error.EndOfStream) {
-                    // In pubsub mode, we might want to keep the connection open even on EndOfStream
                     if (self.is_in_pubsub_mode) {
                         std.log.debug("Client {} in pubsub mode, connection ended", .{self.client_id});
                     }
                     return;
                 }
-                // Socket error, the connection should be closed.
+                // Socket error, the connection should be closed
                 if (err == error.ReadFailed) {
                     if (self.is_in_pubsub_mode) {
                         std.log.debug("Client {} in pubsub mode, read failed", .{self.client_id});
@@ -103,7 +99,12 @@ pub const Client = struct {
                     return;
                 }
                 std.log.err("Parse error: {s}", .{@errorName(err)});
-                resp.writeError(writer, "ERR protocol error") catch {};
+
+                // Send error response directly (parse errors happen before enqueueing)
+                var writer_buffer: [1024]u8 = undefined;
+                var sw = self.connection.writer(self.io, &writer_buffer);
+                sw.interface.writeAll("-ERR protocol error\r\n") catch {};
+                sw.interface.flush() catch {};
 
                 // Reset arena to free any partially allocated memory from failed parse
                 _ = arena.reset(.retain_capacity);
@@ -111,11 +112,14 @@ pub const Client = struct {
             };
             defer command.deinit();
 
-            // Execute the parsed command.
-            try self.executeCommand(writer, command);
+            // Execute command directly (one thread per connection)
+            var writer_buffer: [1024 * 16]u8 = undefined;
+            var sw = self.connection.writer(self.io, &writer_buffer);
+            const writer = &sw.interface;
 
-            // Reset arena to bulk-free all temporary allocations from this command
-            // This is much faster than individual free() calls
+            try self.command_registry.executeCommandClient(self, writer, command.getArgs());
+
+            // Reset arena to free parsing allocations
             _ = arena.reset(.retain_capacity);
 
             // If we're in pubsub mode after executing a command, stay connected

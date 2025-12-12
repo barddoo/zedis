@@ -10,18 +10,17 @@ const WorkloadContext = client_pool.WorkloadContext;
 
 /// RESP protocol helper to build commands
 pub fn buildRespCommand(buffer: []u8, parts: []const []const u8) ![]const u8 {
-    var stream = std.io.fixedBufferStream(buffer);
-    const writer = stream.writer();
+    var pos: usize = 0;
 
     // Write array length
-    try writer.print("*{d}\r\n", .{parts.len});
+    pos += (try std.fmt.bufPrint(buffer[pos..], "*{d}\r\n", .{parts.len})).len;
 
     // Write each part as bulk string
     for (parts) |part| {
-        try writer.print("${d}\r\n{s}\r\n", .{ part.len, part });
+        pos += (try std.fmt.bufPrint(buffer[pos..], "${d}\r\n{s}\r\n", .{ part.len, part })).len;
     }
 
-    return stream.getWritten();
+    return buffer[0..pos];
 }
 
 /// Workload: Write-heavy (90% SET, 10% GET)
@@ -163,18 +162,21 @@ pub fn runLoadTest(
     try stdout.print("Clients: {d}, Operations: {d}\n", .{ config.num_clients, config.operations });
 
     // Wait a bit to ensure server is ready
-    std.Thread.sleep(100 * std.time.ns_per_ms);
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
+    try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms) }, io);
 
     // Create client pool
     var pool = try ClientPool.init(allocator, config.num_clients, config.host, config.port);
     defer pool.deinit();
 
     // Run workload
-    const start_time = std.time.nanoTimestamp();
+    const start_time = try std.time.Instant.now();
     const result = try client_pool.runWorkload(allocator, &pool, workload_fn, config.operations);
-    const end_time = std.time.nanoTimestamp();
+    const end_time = try std.time.Instant.now();
 
-    const duration_s = @as(f64, @floatFromInt(end_time - start_time)) / 1_000_000_000.0;
+    const duration_ns = end_time.since(start_time);
+    const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
     // Print results
     try stdout.print("Duration: {d:.2}s\n", .{duration_s});
@@ -208,7 +210,10 @@ pub fn runAllLoadTests(allocator: Allocator) !void {
         _ = try stdin_file.read(&stdin_buf);
     } else {
         try stdout.writeAll("Starting tests in 2 seconds...\n");
-        std.Thread.sleep(2 * std.time.ns_per_s);
+        // Sleep for 2 seconds
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(2 * std.time.ns_per_s) }, io);
     }
 
     const configs = [_]LoadTestConfig{

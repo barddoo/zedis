@@ -8,6 +8,7 @@ const ZedisList = @import("../list.zig").ZedisList;
 const ZedisListNode = @import("../list.zig").ZedisListNode;
 const Config = @import("../config.zig").Config;
 const fs = std.fs;
+const Io = std.Io;
 const eql = std.mem.eql;
 
 const DEFAULT_FILE_NAME = "test.rdb";
@@ -38,6 +39,7 @@ pub const Writer = struct {
     buffered_writer: std.fs.File.Writer,
     store: *Store,
     checksum: std.hash.crc.Crc64Redis,
+    io: Io,
 
     fn mapToOpCode(val: ZedisValue) u8 {
         return switch (val) {
@@ -69,7 +71,7 @@ pub const Writer = struct {
         try self.buffered_writer.interface.flush();
     }
 
-    pub fn init(allocator: std.mem.Allocator, store: *Store, fileName: []const u8, config: Config) !Writer {
+    pub fn init(allocator: std.mem.Allocator, store: *Store, fileName: []const u8, config: Config, io: Io) !Writer {
         fs.cwd().deleteFile(fileName) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
@@ -89,6 +91,7 @@ pub const Writer = struct {
             .buffered_writer = buffered_writer,
             .store = store,
             .checksum = std.hash.crc.Crc64Redis.init(),
+            .io = io,
         };
     }
 
@@ -137,7 +140,8 @@ pub const Writer = struct {
         const bits = if (@sizeOf(usize) == 8) 64 else 32;
         try self.writeMetadata("redis-bits", .{ .int = bits });
 
-        const now_timestamp = std.time.timestamp();
+        const ts = try Io.Clock.real.now(self.io);
+        const now_timestamp = ts.toMilliseconds();
         try self.writeMetadata("ctime", .{ .int = now_timestamp });
 
         // TODO

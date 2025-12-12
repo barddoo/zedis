@@ -1,11 +1,11 @@
 const std = @import("std");
-const SafeMemoryPool = @import("./safe_memory_pool.zig");
 const PrimitiveValue = @import("types.zig").PrimitiveValue;
 const ZedisList = @import("list.zig").ZedisList;
 const ZedisListNode = @import("list.zig").ZedisListNode;
 const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const CityHash64 = std.hash.CityHash64;
+const Io = std.Io;
 const string_match = @import("./util/string_match.zig").string_match;
 
 const assert = std.debug.assert;
@@ -14,11 +14,6 @@ const assert = std.debug.assert;
 const optimal_max_load_percentage = 80;
 
 const OptimizedHashMap = std.StringHashMapUnmanaged(ZedisObject);
-
-// Memory pool sizes optimized for Redis workloads
-const SMALL_STRING_SIZE = 32; // Redis keys are often small
-const MEDIUM_STRING_SIZE = 128; // Medium-sized values
-const LARGE_STRING_SIZE = 512; // Larger values but still pooled
 
 pub const ValueType = enum(u8) {
     string = 0,
@@ -67,17 +62,13 @@ pub const ZedisObject = struct {
 };
 
 pub const Store = struct {
-    base_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
     // Cache hash map
     map: OptimizedHashMap,
     // Expiration hash map
     expiration_map: std.StringHashMapUnmanaged(i64),
 
-    // Hybrid memory pools for different string sizes
-    small_pool: SafeMemoryPool, // 32 bytes - for keys
-    medium_pool: SafeMemoryPool, // 128 bytes - for small values
-    large_pool: SafeMemoryPool, // 512 bytes - for medium values
+    io: Io,
 
     access_counter: std.atomic.Value(u64),
 
@@ -90,25 +81,22 @@ pub const Store = struct {
         const current_load = (self.map.count() * 100) / self.map.capacity();
         if (current_load > optimal_max_load_percentage) {
             const new_capacity = self.map.capacity() * 2;
-            try self.map.ensureTotalCapacity(self.base_allocator, new_capacity);
+            try self.map.ensureTotalCapacity(self.allocator, new_capacity);
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator, initial_capacity: usize) Store {
-        var map: OptimizedHashMap = .{};
-        map.ensureTotalCapacity(allocator, @intCast(initial_capacity)) catch unreachable;
+    pub fn init(allocator: std.mem.Allocator, io: Io, initial_capacity: u32) Store {
+        var map: OptimizedHashMap = .empty;
+        map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
 
         return .{
-            .base_allocator = allocator,
             .allocator = allocator,
             .map = map,
             .expiration_map = .{},
-            .small_pool = .init(allocator, SMALL_STRING_SIZE),
-            .medium_pool = .init(allocator, MEDIUM_STRING_SIZE),
-            .large_pool = .init(allocator, LARGE_STRING_SIZE),
             .access_counter = .init(0),
             .deletions_since_rehash = 0,
             .last_maintenance_check = 0,
+            .io = io,
         };
     }
 
@@ -118,83 +106,32 @@ pub const Store = struct {
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
             // Free the key
-            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
+            if (entry.key_ptr.*.len > 0) self.allocator.free(entry.key_ptr.*);
 
             // Free the value
             switch (entry.value_ptr.*.value) {
                 .string => |str| {
-                    if (str.len > 0) self.smartFree(str);
+                    if (str.len > 0) self.allocator.free(str);
                 },
                 .int => {},
                 .list => |list_ptr| {
                     list_ptr.deinit();
-                    self.base_allocator.destroy(list_ptr);
+                    self.allocator.destroy(list_ptr);
                 },
                 .short_string => {},
                 .time_series => |ts_ptr| {
                     ts_ptr.deinit();
-                    self.base_allocator.destroy(ts_ptr);
+                    self.allocator.destroy(ts_ptr);
                 },
             }
         }
-        self.map.deinit(self.base_allocator);
+        self.map.deinit(self.allocator);
 
-        self.expiration_map.deinit(self.base_allocator);
-
-        // Clean up memory pools
-        self.small_pool.deinit();
-        self.medium_pool.deinit();
-        self.large_pool.deinit();
+        self.expiration_map.deinit(self.allocator);
     }
 
     pub inline fn size(self: Store) u32 {
         return @intCast(self.map.count());
-    }
-
-    /// Smart allocation using memory pools based on size
-    pub inline fn smartAlloc(self: *Store, len: usize) ![]u8 {
-        assert(len > 0);
-        if (len <= SMALL_STRING_SIZE) {
-            if (self.small_pool.alloc(len)) |result| {
-                return result;
-            } else |_| {}
-        } else if (len <= MEDIUM_STRING_SIZE) {
-            if (self.medium_pool.alloc(len)) |result| {
-                return result;
-            } else |_| {}
-        } else if (len <= LARGE_STRING_SIZE) {
-            if (self.large_pool.alloc(len)) |result| {
-                return result;
-            } else |_| {}
-        }
-
-        // Fallback to base allocator
-        return try self.base_allocator.alloc(u8, len);
-    }
-
-    /// Smart deallocation that returns memory to appropriate pool
-    pub inline fn smartFree(self: *Store, slice: []const u8) void {
-        if (slice.len == 0) return;
-
-        // Try pools in order of likelihood
-        if (slice.len <= SMALL_STRING_SIZE and self.small_pool.owns(slice)) {
-            self.small_pool.free(slice);
-        } else if (slice.len <= MEDIUM_STRING_SIZE and self.medium_pool.owns(slice)) {
-            self.medium_pool.free(slice);
-        } else if (slice.len <= LARGE_STRING_SIZE and self.large_pool.owns(slice)) {
-            self.large_pool.free(slice);
-        } else {
-            // Not from pools, use base allocator
-            self.base_allocator.free(slice);
-        }
-    }
-
-    /// Duplicate a string using smart allocation
-    pub inline fn dupeString(self: *Store, str: []const u8) ![]u8 {
-        assert(str.len > 0);
-        const buf = try self.smartAlloc(str.len);
-        @memcpy(buf, str);
-        return buf;
     }
 
     fn setString(self: *Store, key: []const u8, value: []const u8) !void {
@@ -235,25 +172,25 @@ pub const Store = struct {
         // Check if we need to resize before adding new entries
         try self.maybeResize();
 
-        const gop = try self.map.getOrPut(self.base_allocator, key);
+        const gop = try self.map.getOrPut(self.allocator, key);
 
         // Free old value if key existed
         if (gop.found_existing) {
             switch (gop.value_ptr.value) {
                 .string => |str| {
-                    if (str.len > 0) self.smartFree(str);
+                    if (str.len > 0) self.allocator.free(str);
                 },
                 .int => {},
                 .list => |list_ptr| {
                     list_ptr.deinit();
-                    self.base_allocator.destroy(list_ptr);
+                    self.allocator.destroy(list_ptr);
                 },
                 .short_string => {},
                 .time_series => return error.AlreadyExists,
             }
         } else {
             // New key - need to duplicate it for the HashMap to own
-            const owned_key = try self.dupeString(key);
+            const owned_key = try self.allocator.dupe(u8, key);
             gop.key_ptr.* = owned_key;
         }
 
@@ -261,7 +198,7 @@ pub const Store = struct {
         var new_object = object;
         switch (object.value) {
             .string => |str| {
-                const value_copy = try self.dupeString(str);
+                const value_copy = try self.allocator.dupe(u8, str);
                 new_object.value = .{ .string = value_copy };
             },
             .int => {}, // No allocation needed
@@ -286,17 +223,17 @@ pub const Store = struct {
                 // Free the value based on its type
                 switch (obj_ptr.value) {
                     .string => |str| {
-                        if (str.len > 0) self.smartFree(str);
+                        if (str.len > 0) self.allocator.free(str);
                     },
                     .int => {},
                     .list => |list_ptr| {
                         list_ptr.deinit();
-                        self.base_allocator.destroy(list_ptr);
+                        self.allocator.destroy(list_ptr);
                     },
                     .short_string => {},
                     .time_series => |ts_ptr| {
                         ts_ptr.deinit();
-                        self.base_allocator.destroy(ts_ptr);
+                        self.allocator.destroy(ts_ptr);
                     },
                 }
 
@@ -305,7 +242,7 @@ pub const Store = struct {
                 _ = self.expiration_map.remove(key);
 
                 // Free the key (now that it's no longer in any map)
-                if (stored_key.len > 0) self.smartFree(stored_key);
+                if (stored_key.len > 0) self.allocator.free(stored_key);
 
                 // Track deletion for maintenance
                 self.deletions_since_rehash += 1;
@@ -327,7 +264,9 @@ pub const Store = struct {
 
         // Check expiration
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+            if (now > expiration_time) {
                 _ = self.delete(key);
                 return false;
             }
@@ -355,14 +294,15 @@ pub const Store = struct {
 
     pub inline fn get(self: *Store, key: []const u8) ?*const ZedisObject {
         assert(key.len > 0);
-
         // Check existence first (Redis-style optimization)
         // This avoids expiration lookup for non-existent keys
         const obj_ptr = self.map.getPtr(key) orelse return null;
 
         // Only check expiration if key exists AND has TTL
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+            if (now > expiration_time) {
                 _ = self.delete(key);
                 return null;
             }
@@ -392,7 +332,9 @@ pub const Store = struct {
 
         // Check expiration before type checking
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+            if (now > expiration_time) {
                 _ = self.delete(key);
                 return null;
             }
@@ -413,7 +355,10 @@ pub const Store = struct {
 
         // Check expiration before type checking
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+
+            if (now > expiration_time) {
                 _ = self.delete(key);
                 return null;
             }
@@ -429,8 +374,8 @@ pub const Store = struct {
     pub fn createList(self: *Store, key: []const u8) !*ZedisList {
         assert(key.len > 0);
         // Create list - error if key already exists
-        const list_ptr = try self.base_allocator.create(ZedisList);
-        list_ptr.* = ZedisList.init(self.base_allocator);
+        const list_ptr = try self.allocator.create(ZedisList);
+        list_ptr.* = ZedisList.init(self.allocator);
         const zedis_object: ZedisObject = .{ .value = .{ .list = list_ptr } };
 
         try self.putObject(key, zedis_object);
@@ -452,7 +397,7 @@ pub const Store = struct {
         assert(time > 0);
         if (self.map.getKey(key)) |existing_key| {
             // Use the key from the map (already owned) for expiration map
-            try self.expiration_map.put(self.base_allocator, existing_key, time);
+            try self.expiration_map.put(self.allocator, existing_key, time);
             return true;
         }
         return false;
@@ -499,22 +444,22 @@ pub const Store = struct {
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
             // Free the key
-            if (entry.key_ptr.*.len > 0) self.smartFree(entry.key_ptr.*);
+            if (entry.key_ptr.*.len > 0) self.allocator.free(entry.key_ptr.*);
 
             // Free the value
             switch (entry.value_ptr.*.value) {
                 .string => |str| {
-                    if (str.len > 0) self.smartFree(str);
+                    if (str.len > 0) self.allocator.free(str);
                 },
                 .int => {},
                 .list => |list| {
                     list.deinit();
-                    self.base_allocator.destroy(list);
+                    self.allocator.destroy(list);
                 },
                 .short_string => {},
                 .time_series => |ts| {
                     ts.deinit();
-                    self.base_allocator.destroy(ts);
+                    self.allocator.destroy(ts);
                 },
             }
         }
@@ -533,7 +478,7 @@ pub const Store = struct {
         var oldest_key: ?[]const u8 = null;
 
         // Use a simple PRNG for sampling
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(0);
         const random = prng.random();
 
         // Sample up to sample_size random keys
@@ -574,50 +519,16 @@ pub const Store = struct {
 
     pub fn createTimeSeries(self: *Store, key: []const u8, ts: TimeSeries) !void {
         assert(key.len > 0);
-        const ts_ptr = try self.base_allocator.create(TimeSeries);
+        const ts_ptr = try self.allocator.create(TimeSeries);
         ts_ptr.* = ts;
         try self.putObject(key, .{ .value = .{ .time_series = ts_ptr } });
-    }
-
-    pub const PoolStatsSummary = struct {
-        attempts: usize,
-        successes: usize,
-        hit_rate: f64,
-    };
-
-    pub fn getPoolStats(self: *Store) struct {
-        small: PoolStatsSummary,
-        medium: PoolStatsSummary,
-        large: PoolStatsSummary,
-    } {
-
-        const small = self.small_pool.getStats();
-        const medium = self.medium_pool.getStats();
-        const large = self.large_pool.getStats();
-
-        return .{
-            .small = .{
-                .attempts = small.attempts,
-                .successes = small.successes,
-                .hit_rate = small.hit_rate,
-            },
-            .medium = .{
-                .attempts = medium.attempts,
-                .successes = medium.successes,
-                .hit_rate = medium.hit_rate,
-            },
-            .large = .{
-                .attempts = large.attempts,
-                .successes = large.successes,
-                .hit_rate = large.hit_rate,
-            },
-        };
     }
 
     /// Smart maintenance trigger with rate limiting
     /// Call this after operations that modify the map (delete, put)
     pub inline fn maybeMaintenance(self: *Store) void {
-        const now = std.time.milliTimestamp();
+        const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+        const now = timestamp.toMilliseconds();
 
         // Rate limit: Don't check more than once per 50ms to avoid overhead
         if (now - self.last_maintenance_check < 50) return;
@@ -665,7 +576,7 @@ pub const Store = struct {
         if (should_rehash) {
             // Create new map with appropriate capacity for current size
             var new_map = std.StringHashMapUnmanaged(ZedisObject){};
-            new_map.ensureTotalCapacity(self.base_allocator, entry_count) catch return;
+            new_map.ensureTotalCapacity(self.allocator, entry_count) catch return;
 
             // Copy all entries to new map
             var it = self.map.iterator();
@@ -674,7 +585,7 @@ pub const Store = struct {
             }
 
             // Deinit old map (this frees the internal storage but not our keys/values)
-            self.map.deinit(self.base_allocator);
+            self.map.deinit(self.allocator);
 
             // Swap to new map
             self.map = new_map;

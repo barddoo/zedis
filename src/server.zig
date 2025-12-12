@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Connection = std.net.Server.Connection;
+const Stream = std.Io.net.Stream;
 const time = std.time;
 const types = @import("types.zig");
 const ConnectionContext = types.ConnectionContext;
@@ -14,6 +14,7 @@ const PubSubContext = pubsub.PubSubContext;
 const config_module = @import("config.zig");
 const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
+const Io = std.Io;
 
 const Server = @This();
 
@@ -24,12 +25,14 @@ config: config_module.Config,
 base_allocator: std.mem.Allocator,
 
 // Network
-address: std.net.Address,
-listener: std.net.Server,
+address: std.Io.net.IpAddress,
+listener: std.Io.net.Server,
+io: std.Io,
 
 // Fixed allocations (pre-allocated, never freed individually)
 client_pool: []Client,
 client_pool_bitmap: std.bit_set.DynamicBitSet,
+client_pool_mutex: std.Thread.Mutex,
 
 // Map of channel_name -> array of client_id
 pubsub_map: std.StringHashMap([]u64),
@@ -50,16 +53,16 @@ createdTime: i64,
 // AOF logging
 aof_writer: aof.Writer,
 
-// Initializes the server with hybrid allocation strategy
-pub fn init(base_allocator: Allocator, host: []const u8, port: u16) !Server {
-    return initWithConfig(base_allocator, host, port, config_module.Config{});
-}
+pub fn initWithConfig(
+    base_allocator: Allocator,
+    host: []const u8,
+    port: u16,
+    config: config_module.Config,
+    io: Io,
+) !Server {
+    const address = try std.Io.net.IpAddress.parse(host, port);
 
-pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, config: config_module.Config) !Server {
-    const address = try std.net.Address.parseIp(host, port);
-    const listener = try address.listen(.{
-        .reuse_address = true,
-    });
+    const listener = try address.listen(io, .{ .kernel_backlog = 128 * 10 });
 
     // Initialize the KV allocator with eviction support
     var kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
@@ -67,7 +70,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
     for (&databases) |*db| {
-        db.* = Store.init(kv_allocator.allocator(), config.initial_capacity);
+        db.* = Store.init(kv_allocator.allocator(), io, config.initial_capacity);
     }
 
     // Link KV allocator to database 0 for LRU eviction
@@ -84,16 +87,21 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     const client_pool = try base_allocator.alloc(Client, config.max_clients);
     @memset(client_pool, undefined);
 
+    const ts = try Io.Clock.real.now(io);
+    const now = ts.toMilliseconds();
+
     var server = Server{
         .config = config,
         .base_allocator = base_allocator,
         .address = address,
         .listener = listener,
         .pubsub_map = .init(base_allocator),
+        .io = io,
 
         // Fixed allocations - heap allocated
         .client_pool = client_pool,
         .client_pool_bitmap = try .initFull(base_allocator, config.max_clients),
+        .client_pool_mutex = .{},
 
         // Arena for temporary allocations
         .temp_arena = temp_arena,
@@ -106,7 +114,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
 
         // Metadata
         .redisVersion = undefined,
-        .createdTime = time.timestamp(),
+        .createdTime = now,
 
         // AOF
         .aof_writer = try aof.Writer.init(false),
@@ -125,7 +133,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
     // 'true' to be replaced with user option (use aof/rdb on boot)
     // Note: AOF/RDB currently only loads into database 0
     if (true) {
-        if (aof.Reader.init(server.temp_arena.allocator(), &server.databases[0], &server.registry)) |reader_value| {
+        if (aof.Reader.init(server.temp_arena.allocator(), &server.databases[0], &server.registry, io)) |reader_value| {
             var reader = reader_value;
             std.log.info("Loading AOF into database 0", .{});
             reader.read() catch |err| {
@@ -164,7 +172,7 @@ pub fn initWithConfig(base_allocator: Allocator, host: []const u8, port: u16, co
 
 pub fn deinit(self: *Server) void {
     // Network cleanup
-    self.listener.deinit();
+    self.listener.deinit(self.io);
 
     // Databases cleanup (uses KV allocator)
     for (&self.databases) |*db| {
@@ -196,46 +204,33 @@ pub fn deinit(self: *Server) void {
 }
 
 // The main server loop. It waits for incoming connections and
-// spawns a new thread pool task to handle each client.
+// handles each client (one thread per connection).
 pub fn listen(self: *Server) !void {
+    var connection_group: std.Io.Group = .init;
+    defer connection_group.wait(self.io); // Wait for all clients to finish
+
     while (true) {
-        const conn = self.listener.accept() catch |err| {
+        const conn = self.listener.accept(self.io) catch |err| {
             std.log.err("Error accepting connection: {s}", .{@errorName(err)});
             continue;
         };
 
-        const context = self.temp_arena.allocator().create(ConnectionContext) catch |err| {
-            std.log.err("Failed to allocate connection context: {s}", .{@errorName(err)});
-            conn.stream.close();
-            continue;
-        };
-
-        context.* = ConnectionContext{
-            .server = self,
-            .connection = conn,
-        };
-
-        const thread = std.Thread.spawn(.{}, handleConnectionWrapper, .{context}) catch |err| {
-            std.log.err("Failed to spawn thread for connection: {s}", .{@errorName(err)});
-            // Context will be cleaned up with arena reset
-            conn.stream.close();
-            continue;
-        };
-        thread.detach();
+        // Handle this client on its own thread
+        connection_group.async(self.io, handleConnectionAsync, .{ self, conn });
     }
 }
 
-fn handleConnectionWrapper(context: *ConnectionContext) void {
-    context.server.handleConnection(context.connection) catch |err| {
-        std.log.err("Error handling connection: {s}", .{@errorName(err)});
+fn handleConnectionAsync(self: *Server, conn: Stream) void {
+    self.handleConnection(conn) catch |err| {
+        std.log.err("Connection error: {s}", .{@errorName(err)});
     };
 }
 
-fn handleConnection(self: *Server, conn: std.net.Server.Connection) !void {
+fn handleConnection(self: *Server, conn: Stream) !void {
     // Allocate client from fixed pool
     const client_slot = self.allocateClient() orelse {
         std.log.warn("Maximum client connections reached, rejecting connection", .{});
-        conn.stream.close();
+        conn.close(self.io);
         return;
     };
 
@@ -247,6 +242,7 @@ fn handleConnection(self: *Server, conn: std.net.Server.Connection) !void {
         &self.registry,
         self,
         &self.databases,
+        self.io,
     );
 
     defer {
@@ -268,14 +264,20 @@ fn handleConnection(self: *Server, conn: std.net.Server.Connection) !void {
     std.log.debug("Client {} handled", .{client_slot.client_id});
 }
 
-// Client pool management methods
+// Client pool management methods (thread-safe)
 pub fn allocateClient(self: *Server) ?*Client {
+    self.client_pool_mutex.lock();
+    defer self.client_pool_mutex.unlock();
+
     const first_free = self.client_pool_bitmap.findFirstSet() orelse return null;
     self.client_pool_bitmap.unset(first_free);
     return &self.client_pool[first_free];
 }
 
 pub fn deallocateClient(self: *Server, client: *Client) void {
+    self.client_pool_mutex.lock();
+    defer self.client_pool_mutex.unlock();
+
     // Find the client index in the pool
     const pool_ptr = @intFromPtr(&self.client_pool[0]);
     const client_ptr = @intFromPtr(client);

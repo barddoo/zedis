@@ -9,29 +9,24 @@ const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const Client = @import("../client.zig").Client;
 const aof = @import("../aof/aof.zig");
+const Io = std.Io;
 
 const CommandBenchContext = struct {
     store: Store,
     registry: CommandRegistry,
     allocator: Allocator,
-    buffer: []u8,
-    writer_buffer: std.io.FixedBufferStream([]u8),
-    writer_impl: std.io.FixedBufferStream([]u8).Writer,
     writer: std.Io.Writer,
     client: Client,
     aof_writer: aof.Writer,
     counter: std.atomic.Value(usize),
 
     pub fn init(allocator: Allocator) !CommandBenchContext {
-        const store = Store.init(allocator, 8192);
+        var threaded: Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
+        const store = Store.init(allocator, io, 8192);
         const registry = try initRegistry(allocator);
 
-        // Create a discarding writer for benchmarking (we don't need output)
-        const buffer = try allocator.alloc(u8, 1024 * 1024); // 1MB buffer
-        var writer_buffer = std.io.fixedBufferStream(buffer);
-        const writer_impl = writer_buffer.writer();
-
-        // Use discarding writer for benchmarking
+        // Use discarding writer for benchmarking (we don't need output)
         const discarding = std.Io.Writer.Discarding.init(&.{});
         const writer = discarding.writer;
 
@@ -45,9 +40,6 @@ const CommandBenchContext = struct {
             .store = store,
             .registry = registry,
             .allocator = allocator,
-            .buffer = buffer,
-            .writer_buffer = writer_buffer,
-            .writer_impl = writer_impl,
             .writer = writer,
             .client = dummy_client,
             .aof_writer = aof_writer,
@@ -58,11 +50,11 @@ const CommandBenchContext = struct {
     pub fn deinit(self: *CommandBenchContext) void {
         self.registry.deinit();
         self.store.deinit();
-        self.allocator.free(self.buffer);
     }
 
     pub fn resetWriter(self: *CommandBenchContext) void {
-        self.writer_buffer.reset();
+        // No-op since we're using a discarding writer
+        _ = self;
     }
 };
 

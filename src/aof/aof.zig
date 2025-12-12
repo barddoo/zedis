@@ -5,6 +5,7 @@ const Command = @import("../parser.zig").Command;
 const Registry = @import("../commands/registry.zig").CommandRegistry;
 const Client = @import("../client.zig").Client;
 const Store = @import("../store.zig").Store;
+const Io = std.Io;
 
 const DEFAULT_NAME = "test.aof";
 
@@ -49,17 +50,19 @@ pub const Reader = struct {
     store: *Store,
     registry: *Registry,
     reader_buffer: [8192]u8 = undefined,
+    io: Io,
 
     // take path when ready to
-    pub fn init(allocator: std.mem.Allocator, store: *Store, registry: *Registry) !Reader {
+    pub fn init(allocator: std.mem.Allocator, store: *Store, registry: *Registry, io: std.Io) !Reader {
         const file = try std.fs.cwd().openFile(DEFAULT_NAME, .{ .mode = .read_only });
         var result = Reader{
             .file_reader = undefined,
             .allocator = allocator,
             .store = store,
             .registry = registry,
+            .io = io,
         };
-        result.file_reader = file.reader(&result.reader_buffer);
+        result.file_reader = file.reader(io, &result.reader_buffer);
         return result;
     }
 
@@ -80,7 +83,7 @@ pub const Reader = struct {
             command.deinit();
         }
 
-        self.file_reader.file.close();
+        self.file_reader.file.close(self.io);
     }
 };
 

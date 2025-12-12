@@ -5,6 +5,7 @@ const ZedisObject = storeModule.ZedisObject;
 const Client = @import("../client.zig").Client;
 const Value = @import("../parser.zig").Value;
 const resp = @import("./resp.zig");
+const Io = std.Io;
 
 pub fn set(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
@@ -110,15 +111,20 @@ pub fn expire(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
 
     const result = if (expiration_seconds < 0)
         store.delete(key)
-    else
-        store.expire(key, std.time.milliTimestamp() + (expiration_seconds * 1000)) catch false;
+    else blk: {
+        const ts = try Io.Clock.real.now(store.io);
+        const current_time = ts.toMilliseconds();
 
-    try resp.writeInt(writer, @intFromBool(result));
+        break :blk store.expire(key, current_time + (expiration_seconds * 1000));
+    };
+
+    try resp.writeInt(writer, @intFromBool(try result));
 }
 
 pub fn expireAt(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
-    const current_time = std.time.milliTimestamp();
+    const ts = try Io.Clock.real.now(store.io);
+    const current_time = ts.toMilliseconds();
     const expiration_timestamp = args[2].asInt() catch {
         return resp.writeInt(writer, 0);
     };
@@ -151,15 +157,14 @@ pub fn append(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
         };
 
         // Concatenate current value with append value
-        const allocator = store.base_allocator;
-        const concatenated = try std.fmt.allocPrint(allocator, "{s}{s}", .{ current_str, append_value });
+        const concatenated = try std.fmt.allocPrint(store.allocator, "{s}{s}", .{ current_str, append_value });
         new_value = concatenated;
         needs_free = true;
     } else {
         new_value = append_value;
     }
 
-    defer if (needs_free) store.base_allocator.free(new_value);
+    defer if (needs_free) store.allocator.free(new_value);
     try store.set(key, new_value);
 
     try resp.writeInt(writer, new_value.len);
@@ -259,7 +264,9 @@ pub fn setex(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 
     // Set expiration
     if (seconds > 0) {
-        const expiration_time = std.time.milliTimestamp() + (seconds * 1000);
+        const ts = try Io.Clock.real.now(store.io);
+        const now = ts.toMilliseconds();
+        const expiration_time = now + (seconds * 1000);
         _ = try store.expire(key, expiration_time);
     }
 

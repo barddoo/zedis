@@ -75,7 +75,7 @@ pub fn ts_create(writer: *std.Io.Writer, store: *Store, args: []const Value) !vo
     }
 
     const ts = try TimeSeries.init(
-        store.base_allocator,
+        store.allocator,
         retention_ms,
         if (duplicate_policy) |dp| .fromString(dp) else null,
         chunk_size,

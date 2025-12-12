@@ -79,7 +79,7 @@ pub fn rename(writer: *std.Io.Writer, store: *Store, args: []const Value) !void 
 }
 
 pub fn randomkey(writer: *std.Io.Writer, store: *Store, _: []const Value) !void {
-    var random = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var random = std.Random.DefaultPrng.init(@intCast(0));
     const key = store.randomKey(random.random());
 
     if (key) |k| {

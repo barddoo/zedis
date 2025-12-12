@@ -43,7 +43,7 @@ pub fn lpush(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 
     for (args[2..]) |arg| {
         // Duplicate string since arg.asSlice() points to temporary parser buffer
-        const value_str = try store.base_allocator.dupe(u8, arg.asSlice());
+        const value_str = try store.allocator.dupe(u8, arg.asSlice());
         try list.prepend(.{ .string = value_str });
     }
 
@@ -57,7 +57,7 @@ pub fn rpush(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
 
     for (args[2..]) |arg| {
         // Duplicate string since arg.asSlice() points to temporary parser buffer
-        const value_str = try store.base_allocator.dupe(u8, arg.asSlice());
+        const value_str = try store.allocator.dupe(u8, arg.asSlice());
         try list.append(.{ .string = value_str });
     }
 
@@ -182,7 +182,7 @@ pub fn lset(writer: *std.Io.Writer, store: *Store, args: []const Value) !void {
     };
 
     // Duplicate string since value points to temporary parser buffer
-    const value_str = try store.base_allocator.dupe(u8, value);
+    const value_str = try store.allocator.dupe(u8, value);
     try list.setByIndex(actual_index, .{ .string = value_str });
 
     try resp.writeOK(writer);

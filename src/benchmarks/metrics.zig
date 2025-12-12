@@ -91,19 +91,20 @@ pub const LatencyTracker = struct {
 /// Tracks throughput over time
 pub const ThroughputCounter = struct {
     operations: usize,
-    start_ns: i128,
-    end_ns: i128,
+    start_instant: std.time.Instant,
+    end_instant: std.time.Instant,
 
     pub fn init() ThroughputCounter {
+        const now = std.time.Instant.now() catch unreachable;
         return .{
             .operations = 0,
-            .start_ns = 0,
-            .end_ns = 0,
+            .start_instant = now,
+            .end_instant = now,
         };
     }
 
     pub fn start(self: *ThroughputCounter) void {
-        self.start_ns = std.time.nanoTimestamp();
+        self.start_instant = std.time.Instant.now() catch unreachable;
         self.operations = 0;
     }
 
@@ -112,18 +113,18 @@ pub const ThroughputCounter = struct {
     }
 
     pub fn stop(self: *ThroughputCounter) void {
-        self.end_ns = std.time.nanoTimestamp();
+        self.end_instant = std.time.Instant.now() catch unreachable;
     }
 
     pub fn opsPerSecond(self: ThroughputCounter) f64 {
-        const duration_ns = self.end_ns - self.start_ns;
-        if (duration_ns <= 0) return 0.0;
+        const duration_ns = self.end_instant.since(self.start_instant);
+        if (duration_ns == 0) return 0.0;
         const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
         return @as(f64, @floatFromInt(self.operations)) / duration_s;
     }
 
     pub fn durationMs(self: ThroughputCounter) f64 {
-        const duration_ns = self.end_ns - self.start_ns;
+        const duration_ns = self.end_instant.since(self.start_instant);
         return @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
     }
 };

@@ -21,7 +21,7 @@ pub fn echo(writer: *std.Io.Writer, args: []const Value) !void {
 pub fn quit(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     _ = args; // Unused parameter
     try resp.writeOK(writer);
-    client.connection.stream.close();
+    client.connection.close(client.io);
 }
 
 pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {

@@ -150,7 +150,7 @@ pub const Config = struct {
     max_subscribers_per_channel: u32 = 1000, // Max subscribers per channel (production: hundreds per channel)
     kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store (production headroom)
     temp_arena_size: usize = 512 * 1024 * 1024, // 512MB for temporary allocations
-    initial_capacity: usize = 8192, // Initial hash map capacity for Store (reduces early rehashing)
+    initial_capacity: u32 = 1_000_000, // Initial hash map capacity for Store (reduces early rehashing)
     eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
     requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
     rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
@@ -177,25 +177,25 @@ pub const Config = struct {
     }
 };
 
-pub fn readConfig(allocator: std.mem.Allocator) !Config {
+pub fn readConfig(allocator: std.mem.Allocator, io: std.Io) !Config {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
     // If config file path is provided as argument, read it
     if (args.len > 1) {
-        return try readFile(allocator, args[1]);
+        return try readFile(allocator, io, args[1]);
     }
 
     // Return default config
     return .{};
 }
 
-fn readFile(allocator: std.mem.Allocator, file_name: []const u8) !Config {
+fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
     var file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
     defer file.close();
 
     var buffer: [1024 * 8]u8 = undefined;
-    var file_reader = file.reader(&buffer);
+    var file_reader = file.reader(io, &buffer);
     var reader = &file_reader.interface;
 
     var config: Config = .{};
@@ -301,7 +301,7 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
     } else if (eql(u8, key, "temp-arena-size")) {
         config.temp_arena_size = try parseMemorySize(trimmed_value);
     } else if (eql(u8, key, "initial-capacity")) {
-        config.initial_capacity = try parseInt(usize, trimmed_value, 10);
+        config.initial_capacity = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "eviction-policy") or eql(u8, key, "maxmemory-policy")) {
         if (eql(u8, trimmed_value, "noeviction")) {
             config.eviction_policy = .noeviction;

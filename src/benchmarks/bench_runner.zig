@@ -1,6 +1,7 @@
 const std = @import("std");
 const metrics = @import("metrics.zig");
 const Allocator = std.mem.Allocator;
+const Io = std.Io;
 
 pub const BenchmarkResult = struct {
     name: []const u8,
@@ -49,13 +50,13 @@ pub fn runBenchmark(
 
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        const start = std.time.nanoTimestamp();
+        const start = try std.time.Instant.now();
 
         try benchFn(if (options.track_memory) tracking_allocator.allocator() else arena_allocator);
 
         if (options.track_latency) {
-            const end = std.time.nanoTimestamp();
-            const duration: u64 = @intCast(end - start);
+            const end = try std.time.Instant.now();
+            const duration: u64 = end.since(start);
             try latency_tracker.record(duration);
         }
 
@@ -116,13 +117,13 @@ pub fn runBenchmarkAdvanced(
 
     var i: usize = 0;
     while (i < options.iterations) : (i += 1) {
-        const start = std.time.nanoTimestamp();
+        const start = try std.time.Instant.now();
 
         try opFn(&ctx);
 
         if (options.track_latency) {
-            const end = std.time.nanoTimestamp();
-            const duration: u64 = @intCast(end - start);
+            const end = try std.time.Instant.now();
+            const duration: u64 = end.since(start);
             try latency_tracker.record(duration);
         }
 
