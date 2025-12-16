@@ -80,16 +80,16 @@ pub const ResponseFuture = struct {
 /// Task sent to shard for execution
 /// Each task owns an arena allocator for command arguments
 pub const ShardTask = struct {
-    command_args: []Value,        // Command arguments (owned by task arena)
-    response_future: *ResponseFuture,  // Where to send result
-    client_db_index: u8,          // Which database (0-15) to use
-    arena: *std.heap.ArenaAllocator,  // Arena for this task
-    allocator: std.mem.Allocator,     // Allocator that created the arena pointer
+    command_args: []Value, // Command arguments (owned by task arena)
+    response_future: *ResponseFuture, // Where to send result
+    client_db_index: u8, // Which database (0-15) to use
+    arena: *std.heap.ArenaAllocator, // Arena for this task
+    allocator: std.mem.Allocator, // Allocator that created the arena pointer
 
     pub fn deinit(self: *ShardTask) void {
         const arena_ptr = self.arena;
         arena_ptr.deinit();
-        self.allocator.destroy(arena_ptr);  // Free the arena pointer itself
+        self.allocator.destroy(arena_ptr); // Free the arena pointer itself
     }
 };
 
@@ -97,11 +97,11 @@ pub const ShardTask = struct {
 /// Each shard runs in its own thread with no lock contention during execution
 pub const Shard = struct {
     shard_id: usize,
-    databases: [16]Store,         // Exclusively owned by this shard (shared-nothing!)
+    databases: [16]Store, // Exclusively owned by this shard (shared-nothing!)
     message_queue: std.Io.Queue(ShardTask),
     message_queue_buffer: []ShardTask,
-    registry: CommandRegistry,    // Each shard owns its registry copy (thread-safe!)
-    kv_allocator: *KeyValueAllocator,  // Heap-allocated to prevent move issues
+    registry: CommandRegistry, // Each shard owns its registry copy (thread-safe!)
+    kv_allocator: *KeyValueAllocator, // Heap-allocated to prevent move issues
     io: Io,
     running: std.atomic.Value(bool),
     thread: ?std.Thread,
@@ -109,7 +109,7 @@ pub const Shard = struct {
     pub fn init(
         shard_id: usize,
         base_allocator: Allocator,
-        registry: CommandRegistry,  // Take ownership of registry copy
+        registry: CommandRegistry, // Take ownership of registry copy
         config: config_mod.Config,
         io: Io,
         num_shards: u8,
@@ -135,7 +135,7 @@ pub const Shard = struct {
             .databases = undefined, // Will initialize below
             .message_queue = std.Io.Queue(ShardTask).init(queue_buffer),
             .message_queue_buffer = queue_buffer,
-            .registry = registry,  // Each shard gets its own registry copy
+            .registry = registry, // Each shard gets its own registry copy
             .kv_allocator = kv_allocator,
             .io = io,
             .running = std.atomic.Value(bool).init(false),
@@ -182,13 +182,13 @@ pub const Shard = struct {
             const count = self.message_queue.get(
                 self.io,
                 &task_buffer,
-                1,  // min: block until at least 1 task
-            ) catch break;  // Canceled = shutdown
+                1, // min: block until at least 1 task
+            ) catch break; // Canceled = shutdown
 
-            if (count == 0) break;  // Queue closed
+            if (count == 0) break; // Queue closed
 
             var task = task_buffer[0];
-            defer task.deinit();  // Clean up task arena
+            defer task.deinit(); // Clean up task arena
 
             self.executeTask(task);
         }

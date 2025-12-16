@@ -79,7 +79,7 @@ pub fn aggregateKEYS(
 
                 // Extract key
                 if (i + len <= response.len) {
-                    const key = response[i..i+len];
+                    const key = response[i .. i + len];
                     try keys_set.put(try allocator.dupe(u8, key), {});
                     i += len + 2; // Skip key + \r\n
                 } else {
