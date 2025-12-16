@@ -11,7 +11,7 @@ test "EXISTS command with existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -34,7 +34,7 @@ test "EXISTS command with non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -55,7 +55,7 @@ test "KEYS command with wildcard pattern" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -82,7 +82,7 @@ test "KEYS command with empty store" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -103,7 +103,7 @@ test "TTL command with non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -124,7 +124,7 @@ test "TTL command with key without expiration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -147,14 +147,17 @@ test "TTL command with key with expiration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
     try store.set("mykey", "value");
-    const future_time = std.time.milliTimestamp() + 10000; // 10 seconds in future
+    const timestamp = try Io.Clock.real.now(testing.io);
+    const now = timestamp.toMilliseconds();
+
+    const future_time = now + 10000; // 10 seconds in future
     _ = try store.expire("mykey", future_time);
 
     const args = [_]Value{
@@ -174,14 +177,18 @@ test "PERSIST command with key having expiration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
     try store.set("mykey", "value");
-    const future_time = std.time.milliTimestamp() + 10000;
+
+    const timestamp = try Io.Clock.real.now(testing.io);
+    const now = timestamp.toMilliseconds();
+
+    const future_time = now + 10000;
     _ = try store.expire("mykey", future_time);
 
     const args = [_]Value{
@@ -203,7 +210,7 @@ test "PERSIST command with key without expiration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -226,7 +233,7 @@ test "TYPE command with string value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -249,7 +256,7 @@ test "TYPE command with integer value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -272,7 +279,7 @@ test "TYPE command with list value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -295,7 +302,7 @@ test "TYPE command with non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -316,7 +323,7 @@ test "RENAME command with existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -348,7 +355,7 @@ test "RENAME command with non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -369,7 +376,7 @@ test "RANDOMKEY command with non-empty store" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -397,7 +404,7 @@ test "RANDOMKEY command with empty store" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -417,7 +424,7 @@ test "KEYS command returns all keys when pattern is wildcard" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -448,7 +455,7 @@ test "RENAME overwrites existing destination key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

@@ -2,7 +2,7 @@ const std = @import("std");
 const config_module = @import("config.zig");
 const Store = @import("store.zig").Store;
 
-const KeyValueAllocator = @This();
+pub const KeyValueAllocator = @This();
 
 base_allocator: std.mem.Allocator,
 memory_pool: []u8,

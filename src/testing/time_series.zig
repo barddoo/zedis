@@ -522,7 +522,7 @@ test "TS.INCRBY increments from zero" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -573,7 +573,7 @@ test "TS.INCRBY increments from existing value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -625,7 +625,7 @@ test "TS.DECRBY decrements value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -677,7 +677,7 @@ test "TS.ALTER changes retention" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -715,7 +715,7 @@ test "TS.ALTER changes duplicate policy" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -937,7 +937,7 @@ test "TS.RANGE command with COUNT parameter" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -1608,7 +1608,7 @@ test "TS.RANGE command with aggregation parameter" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

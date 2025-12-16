@@ -283,7 +283,9 @@ pub const Store = struct {
 
         // Check expiration before returning type
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+            if (now > expiration_time) {
                 _ = self.delete(key);
                 return null;
             }
@@ -406,7 +408,10 @@ pub const Store = struct {
     pub inline fn isExpired(self: Store, key: []const u8) bool {
         assert(key.len > 0);
         if (self.expiration_map.get(key)) |expiration_time| {
-            return std.time.milliTimestamp() > expiration_time;
+            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const now = timestamp.toMilliseconds();
+
+            return now > expiration_time;
         }
         return false;
     }

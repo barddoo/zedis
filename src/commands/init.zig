@@ -20,6 +20,19 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Ping the server",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
+    });
+
+    try registry.register(.{
+        .name = "CONFIG",
+        .handler = .{ .default = connection_commands.config },
+        .min_args = 1,
+        .max_args = null,
+        .description = "Get or set configuration parameters",
+        .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -29,6 +42,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Echo the given string",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -38,6 +53,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Close the connection",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -47,6 +64,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Set string value of a key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -56,6 +75,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Get string value of a key",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -65,6 +86,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Increment the value of a key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -74,6 +97,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Decrement the value of a key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -83,6 +108,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Show help message",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -92,6 +119,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Delete key",
         .write_to_aof = true,
+        .routing_type = .multi_key,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -101,6 +130,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "The SAVE commands performs a synchronous save of the dataset producing a point in time snapshot of all the data inside the Redis instance, in the form of an RDB file.",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -110,6 +141,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Publish message",
         .write_to_aof = false,
+        .routing_type = .pubsub,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -119,6 +152,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Subscribe to channels",
         .write_to_aof = false,
+        .routing_type = .pubsub,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -129,6 +164,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Expire key",
         // TODO: convert to expireat
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -138,6 +175,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Expire key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -147,6 +186,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Authenticate to the server",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -156,6 +197,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Select a database (0-15)",
         .write_to_aof = false,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     // List commands: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
@@ -168,6 +211,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Prepend one or multiple values to a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -178,6 +223,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Append one or multiple values to a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -188,6 +235,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Remove and return the first element of a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -198,6 +247,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Remove and return the last element of a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -208,6 +259,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Get the length of a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -218,6 +271,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Get an element from a list by its index",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -228,6 +283,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Set the value of an element in a list by its index",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -238,6 +295,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .description = "Get a range of elements from a list",
         // TODO: test
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -247,6 +306,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Append a value to a key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -256,6 +317,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Get the length of the value stored in a key",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -265,6 +328,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Set a key and return its old value",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -274,6 +339,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Get the values of multiple keys",
         .write_to_aof = false,
+        .routing_type = .multi_key,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -283,6 +350,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Set multiple key-value pairs",
         .write_to_aof = true,
+        .routing_type = .multi_key,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -292,6 +361,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 4,
         .description = "Set a key with expiration time",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -301,6 +372,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Set a key only if it doesn't exist",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -310,6 +383,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Increment a key by a specific amount",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -319,6 +394,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Decrement a key by a specific amount",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -328,6 +405,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Increment a key by a floating point number",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     // Key commands
@@ -339,6 +418,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Find all keys matching a pattern",
         .write_to_aof = false,
+        .routing_type = .multi_key,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -348,6 +429,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Check if key exists",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -357,6 +440,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Get remaining time to live of a key",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -366,6 +451,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Remove expiration from a key",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -375,6 +462,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Get the data type of a key",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -384,6 +473,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Rename a key",
         .write_to_aof = true,
+        .routing_type = .multi_key,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -393,6 +484,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Return a random key",
         .write_to_aof = false,
+        .routing_type = .keyless,
+        .key_arg_index = null,
     });
 
     // Time series commands
@@ -403,6 +496,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Create a new time series",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -412,6 +507,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Add a new sample to a time series",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -421,6 +518,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 2,
         .description = "Get the last sample from a time series",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -430,6 +529,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 4,
         .description = "Increment the last value and add as a new sample",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -439,6 +540,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 4,
         .description = "Decrement the last value and add as a new sample",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -448,6 +551,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Alter time series properties",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -457,6 +562,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Alter time series properties",
         .write_to_aof = true,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     try registry.register(.{
@@ -466,6 +573,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Query a range of samples from a time series",
         .write_to_aof = false,
+        .routing_type = .single_key,
+        .key_arg_index = 1,
     });
 
     // Server commands
@@ -477,6 +586,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Get database size",
         .write_to_aof = false,
+        .routing_type = .keyless,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -486,6 +597,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Flush the current database",
         .write_to_aof = true,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     try registry.register(.{
@@ -495,6 +608,8 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .max_args = 1,
         .description = "Flush all databases",
         .write_to_aof = true,
+        .routing_type = .client_only,
+        .key_arg_index = null,
     });
 
     return registry;

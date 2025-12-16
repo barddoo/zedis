@@ -2,6 +2,7 @@ const std = @import("std");
 const Client = @import("./client.zig").Client;
 const eql = std.mem.eql;
 const parseInt = std.fmt.parseInt;
+const Io = std.Io;
 
 const Self = @This();
 
@@ -150,10 +151,13 @@ pub const Config = struct {
     max_subscribers_per_channel: u32 = 1000, // Max subscribers per channel (production: hundreds per channel)
     kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store (production headroom)
     temp_arena_size: usize = 512 * 1024 * 1024, // 512MB for temporary allocations
-    initial_capacity: u32 = 1_000_000, // Initial hash map capacity for Store (reduces early rehashing)
+    initial_capacity: u32 = 100_000, // Initial hash map capacity for Store (reduces early rehashing)
     eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
     requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
     rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
+
+    // Multi-threading / sharding configuration (DragonflyDB-inspired)
+    num_workers: ?u8 = null, // Number of shard threads (null = default 4, recommend ≤ CPU cores)
 
     // Computed constants (calculated from other fields)
     pub fn clientPoolSize(self: Config) usize {
@@ -177,7 +181,7 @@ pub const Config = struct {
     }
 };
 
-pub fn readConfig(allocator: std.mem.Allocator, io: std.Io) !Config {
+pub fn readConfig(allocator: std.mem.Allocator, io: Io) !Config {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -190,7 +194,7 @@ pub fn readConfig(allocator: std.mem.Allocator, io: std.Io) !Config {
     return .{};
 }
 
-fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
+fn readFile(allocator: std.mem.Allocator, io: Io, file_name: []const u8) !Config {
     var file = try std.fs.cwd().openFile(file_name, .{ .mode = .read_only });
     defer file.close();
 
@@ -314,6 +318,10 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
         config.requirepass = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "rdb-write-buffer-size")) {
         config.rdb_write_buffer_size = try parseMemorySize(trimmed_value);
+    } else if (eql(u8, key, "num-workers") or eql(u8, key, "worker-threads") or eql(u8, key, "num-shards")) {
+        const num = try parseInt(u8, trimmed_value, 10);
+        if (num < 1 or num > 64) return error.InvalidWorkerCount;
+        config.num_workers = num;
     }
 }
 

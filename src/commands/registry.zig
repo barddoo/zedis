@@ -4,6 +4,9 @@ const Value = @import("../parser.zig").Value;
 const Store = @import("../store.zig").Store;
 const aof = @import("../aof/aof.zig");
 const resp = @import("./resp.zig");
+const error_handler = @import("../error_handler.zig");
+const ClientError = error_handler.ClientError;
+const handleCommandError = error_handler.handleCommandError;
 
 pub const CommandError = error{
     WrongNumberOfArguments,
@@ -34,6 +37,16 @@ pub const ClientHandler = *const fn (client: *Client, args: []const Value, write
 // Requires store
 pub const StoreHandler = *const fn (writer: *std.Io.Writer, store: *Store, args: []const Value) anyerror!void;
 
+/// Routing strategy for commands in multi-shard architecture
+/// Inspired by DragonflyDB's shared-nothing design
+pub const CommandRoutingType = enum {
+    single_key, // Route to one shard based on hash(key) % num_shards
+    multi_key, // Broadcast to all shards, aggregate results (coordinator pattern)
+    keyless, // Execute on client thread (no key routing)
+    pubsub, // Execute on client thread (pub/sub operations)
+    client_only, // Execute on client thread (AUTH, SELECT, PING, etc)
+};
+
 pub const CommandInfo = struct {
     name: []const u8,
     handler: CommandHandler,
@@ -41,6 +54,8 @@ pub const CommandInfo = struct {
     max_args: ?usize, // null means unlimited
     description: []const u8,
     write_to_aof: bool,
+    routing_type: CommandRoutingType,
+    key_arg_index: ?usize, // Which argument is the key (usually 1), null for multi/keyless
 };
 
 // Command registry that maps command names to their handlers
@@ -59,37 +74,38 @@ pub const CommandRegistry = struct {
         self.commands.deinit();
     }
 
+    /// Clone the registry for thread-safe concurrent access
+    pub fn clone(self: *const CommandRegistry, allocator: std.mem.Allocator) !CommandRegistry {
+        var new_registry = CommandRegistry.init(allocator);
+
+        // Copy all command entries from original registry
+        var iter = self.commands.iterator();
+        while (iter.next()) |entry| {
+            try new_registry.commands.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+
+        return new_registry;
+    }
+
     pub fn register(self: *CommandRegistry, info: CommandInfo) !void {
         try self.commands.put(info.name, info);
     }
 
     pub fn get(self: *CommandRegistry, name: []const u8) ?CommandInfo {
-        return self.commands.get(name);
-    }
+        // Fast path: try exact match first (for already-uppercase names)
+        if (self.commands.get(name)) |cmd| {
+            return cmd;
+        }
 
-    fn handleCommandError(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
-        const msg = switch (err) {
-            error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
-            error.ValueNotInteger => "ERR value is not an integer or out of range",
-            error.InvalidFloat => "ERR value is not a valid float",
-            error.Overflow => "ERR increment or decrement would overflow",
-            error.KeyNotFound => "ERR no such key",
-            error.IndexOutOfRange => "ERR index out of range",
-            error.NoSuchKey => "ERR no such key",
-            error.AuthNoPasswordSet => "ERR Client sent AUTH, but no password is set",
-            error.AuthInvalidPassword => "ERR invalid password",
-            error.InvalidDatabaseIndex => "ERR invalid database index (must be 0-15)",
-            error.AlreadyExists => "ERR key already exists",
-            error.TSDB_DuplicateTimestamp => "ERR duplicate timestamp",
-            else => blk: {
-                std.log.err("Handler for command '{s}' failed with error: {s}", .{
-                    command_name,
-                    @errorName(err),
-                });
-                break :blk "ERR while processing command";
-            },
-        };
-        resp.writeError(writer, msg) catch {};
+        // Normalize to uppercase for case-insensitive lookup (single pass)
+        var buf: [32]u8 = undefined;
+        if (name.len > buf.len) return null;
+
+        for (name, 0..) |c, i| {
+            buf[i] = std.ascii.toUpper(c);
+        }
+
+        return self.commands.get(buf[0..name.len]);
     }
 
     pub fn executeCommandClient(
@@ -118,6 +134,49 @@ pub const CommandRegistry = struct {
         try self.executeCommand(&writer, &dummy_client, store, &aof_writer, args);
     }
 
+    /// Execute command on shard thread (shared-nothing execution)
+    /// Only executes store_handler commands since shards don't have full client context
+    pub fn executeCommandShard(
+        self: *CommandRegistry,
+        writer: *std.Io.Writer,
+        store: *Store,
+        args: []const Value,
+    ) !void {
+        if (args.len == 0) {
+            return error.EmptyCommand;
+        }
+
+        const command_name = args[0].asSlice();
+
+        if (self.get(command_name)) |cmd_info| {
+            // Validate argument count
+            if (args.len < cmd_info.min_args) {
+                return error.WrongNumberOfArguments;
+            }
+            if (cmd_info.max_args) |max_args| {
+                if (args.len > max_args) {
+                    return error.WrongNumberOfArguments;
+                }
+            }
+
+            // Only execute store_handler commands (shards don't have clients)
+            switch (cmd_info.handler) {
+                .store_handler => |handler| {
+                    handler(writer, store, args) catch |err| {
+                        handleCommandError(writer, cmd_info.name, err);
+                        return;
+                    };
+                },
+                else => {
+                    // This should never happen in shard context
+                    return error.CommandNotSupportedInShard;
+                },
+            }
+        } else {
+            return error.UnknownCommand;
+        }
+    }
+
     pub fn executeCommand(
         self: *CommandRegistry,
         writer: *std.Io.Writer,
@@ -127,39 +186,27 @@ pub const CommandRegistry = struct {
         args: []const Value,
     ) !void {
         if (args.len == 0) {
-            return resp.writeError(writer, "ERR empty command");
+            return error.EmptyCommand;
         }
 
         const command_name = args[0].asSlice();
 
-        var buf: [32]u8 = undefined;
-        if (command_name.len > buf.len) return error.CommandTooLong;
-
-        for (command_name, 0..) |c, i| {
-            buf[i] = std.ascii.toUpper(c);
-        }
-        const upper_name = buf[0..command_name.len];
-
-        for (command_name, 0..) |c, i| {
-            upper_name[i] = std.ascii.toUpper(c);
-        }
-
-        // Skip auth check for commands that don't need it
-        if (!std.mem.eql(u8, upper_name, "AUTH") and
-            !std.mem.eql(u8, upper_name, "PING") and
+        // Skip auth check for commands that don't need it (case-insensitive)
+        if (!std.ascii.eqlIgnoreCase(command_name, "AUTH") and
+            !std.ascii.eqlIgnoreCase(command_name, "PING") and
             !client.isAuthenticated())
         {
-            return resp.writeError(writer, "NOAUTH Authentication required");
+            return error.AuthenticationRequired;
         }
 
-        if (self.get(upper_name)) |cmd_info| {
+        if (self.get(command_name)) |cmd_info| {
             // Validate argument count
             if (args.len < cmd_info.min_args) {
-                return resp.writeError(writer, "ERR wrong number of arguments");
+                return error.WrongNumberOfArguments;
             }
             if (cmd_info.max_args) |max_args| {
                 if (args.len > max_args) {
-                    return resp.writeError(writer, "ERR wrong number of arguments");
+                    return error.WrongNumberOfArguments;
                 }
             }
 
@@ -192,7 +239,7 @@ pub const CommandRegistry = struct {
                 }
             }
         } else {
-            resp.writeError(writer, "ERR unknown command") catch {};
+            return error.UnknownCommand;
         }
     }
 };

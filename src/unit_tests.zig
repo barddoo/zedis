@@ -23,9 +23,11 @@ comptime {
     // AOF tests
     _ = @import("aof/aof.zig");
 
-    // Test utilities
-    _ = @import("test_utils.zig");
-
     // Test runner framework
     _ = @import("test_runner.zig");
+
+    // Recent changes tests
+    _ = @import("commands/connection_test.zig");
+    _ = @import("error_handler_test.zig");
+    _ = @import("commands/registry_test.zig");
 }
