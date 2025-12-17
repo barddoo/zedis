@@ -205,10 +205,10 @@ pub fn deinit(self: *Server) void {
 }
 
 // The main server loop. It waits for incoming connections and
-// handles each client (one thread per connection).
+// handles each client concurrently using group async.
 pub fn listen(self: *Server) !void {
-    var connection_group: Io.Group = .init;
-    defer connection_group.wait(self.io); // Wait for all clients to finish
+    var group = std.Io.Group.init;
+    defer group.wait(self.io); // Ensure all connections finish on shutdown
 
     while (true) {
         const conn = self.listener.accept(self.io) catch |err| {
@@ -216,11 +216,16 @@ pub fn listen(self: *Server) !void {
             continue;
         };
 
-        // Handle this client on its own thread
-        connection_group.async(self.io, handleConnectionAsync, .{ self, conn });
+        // Handle connection concurrently using group async
+        group.concurrent(self.io, Server.handleConnectionAsync, .{ self, conn }) catch |err| {
+            std.log.err("Failed to spawn connection handler: {s}", .{@errorName(err)});
+            conn.close(self.io);
+            continue;
+        };
     }
 }
 
+// Wrapper for handleConnection that doesn't return errors (required by group.concurrent)
 fn handleConnectionAsync(self: *Server, conn: Stream) void {
     self.handleConnection(conn) catch |err| {
         std.log.err("Connection error: {s}", .{@errorName(err)});
@@ -236,7 +241,7 @@ fn handleConnection(self: *Server, conn: Stream) !void {
     };
 
     // Initialize client in the allocated slot with its dedicated registry
-    client_info.client.* = Client.init(
+    client_info.client.* = try Client.init(
         self.base_allocator,
         conn,
         &self.pubsub_context,

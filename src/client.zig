@@ -17,9 +17,10 @@ const Server = @import("./server.zig");
 const PubSubContext = @import("./commands/pubsub.zig").PubSubContext;
 const Config = @import("./config.zig").Config;
 const resp = @import("./commands/resp.zig");
-const Shard = @import("./worker/shard.zig").Shard;
-const ResponseFuture = @import("./worker/shard.zig").ResponseFuture;
-const ShardTask = @import("./worker/shard.zig").ShardTask;
+const shard_mod = @import("./worker/shard.zig");
+const Shard = shard_mod.Shard;
+const ShardTask = shard_mod.ShardTask;
+const Response = shard_mod.Response;
 const aggregator = @import("./coordinator/aggregator.zig");
 const error_handler = @import("./error_handler.zig");
 const ClientError = error_handler.ClientError;
@@ -43,6 +44,11 @@ pub const Client = struct {
     server: *Server,
     io: std.Io,
 
+    // Async response queue for lock-free shard communication (pointer-based)
+    // Large queue to support pipelined requests (redis-benchmark uses heavy pipelining)
+    response_queue_buffer: *[256]*Response,
+    response_queue: std.Io.Queue(*Response),
+
     pub fn init(
         allocator: std.mem.Allocator,
         connection: Stream,
@@ -50,10 +56,14 @@ pub const Client = struct {
         registry: *CommandRegistry,
         server: *Server,
         io: std.Io,
-    ) Client {
+    ) !Client {
         const id = next_client_id.fetchAdd(1, .monotonic);
 
-        return .{
+        // Allocate response queue buffer on heap (pointer-based for safety)
+        // 256-deep to handle pipelined requests from redis-benchmark
+        const response_buffer = try allocator.create([256]*Response);
+
+        var client = Client{
             .allocator = allocator,
             .authenticated = false,
             .client_id = id,
@@ -64,10 +74,18 @@ pub const Client = struct {
             .pubsub_context = pubsub_context,
             .server = server,
             .io = io,
+            .response_queue_buffer = response_buffer,
+            .response_queue = undefined,
         };
+
+        // Initialize response queue (256-deep buffer for Response pointers)
+        client.response_queue = std.Io.Queue(*Response).init(response_buffer);
+
+        return client;
     }
 
     pub fn deinit(self: *Client) void {
+        self.allocator.destroy(self.response_queue_buffer);
         self.connection.close(self.io);
     }
 
@@ -136,6 +154,7 @@ pub const Client = struct {
             // Extract command name for error handling
             const command_name = if (args.len > 0) args[0].asSlice() else "";
 
+            // Route command (sends task to shard, returns immediately)
             self.routeCommand(args) catch |err| {
                 // Use centralized error handler
                 handleCommandError(writer, command_name, err);
@@ -143,6 +162,28 @@ pub const Client = struct {
                 _ = arena.reset(.retain_capacity);
                 continue;
             };
+
+            // Collect response from queue (shards execute async, send response via queue)
+            const response_ptr = self.response_queue.getOne(self.io) catch |err| {
+                std.log.err("Client {} failed to get response: {s}", .{ self.client_id, @errorName(err) });
+                handleCommandError(writer, command_name, ClientError.ProtocolError);
+                writer.flush() catch {};
+                _ = arena.reset(.retain_capacity);
+                continue;
+            };
+            defer {
+                response_ptr.arena.deinit();
+                response_ptr.allocator.destroy(response_ptr.arena);
+                std.heap.page_allocator.destroy(response_ptr);
+            }
+
+            // Send response to client
+            writer.writeAll(response_ptr.data) catch |write_err| {
+                std.log.err("Client {} failed to write response: {s}", .{ self.client_id, @errorName(write_err) });
+                _ = arena.reset(.retain_capacity);
+                continue;
+            };
+            writer.flush() catch {};
 
             // Reset arena to free parsing allocations
             _ = arena.reset(.retain_capacity);
@@ -152,6 +193,13 @@ pub const Client = struct {
                 std.log.debug("Client {} staying in pubsub mode", .{self.client_id});
             }
         }
+    }
+
+    /// Route command to shard (called via group.async)
+    fn routeCommandToShard(self: *Client, args: []const Value) void {
+        self.routeCommand(args) catch |err| {
+            std.log.err("Client {} routing error: {s}", .{ self.client_id, @errorName(err) });
+        };
     }
 
     /// Route command based on its routing type (DragonflyDB-inspired coordinator pattern)
@@ -204,10 +252,6 @@ pub const Client = struct {
             task_args[i] = .{ .data = copied };
         }
 
-        // Create response future
-        var response_future = ResponseFuture.init(self.allocator);
-        defer response_future.deinit();
-
         // Create task
         // Use page_allocator for arena pointer (thread-safe, proper alignment)
         const task_arena_ptr = try std.heap.page_allocator.create(std.heap.ArenaAllocator);
@@ -215,48 +259,26 @@ pub const Client = struct {
 
         const task = ShardTask{
             .command_args = task_args,
-            .response_future = &response_future,
+            .response_queue = &self.response_queue,  // Async response via queue
             .client_db_index = self.current_db,
             .arena = task_arena_ptr,
             .allocator = std.heap.page_allocator,
         };
 
-        // Enqueue task to shard
+        // Enqueue task to shard (group async - don't wait for response here)
         const shard = &self.server.shards[shard_id];
         _ = shard.message_queue.put(self.io, &.{task}, 1) catch |err| {
+            task_arena_ptr.deinit();
             std.heap.page_allocator.destroy(task_arena_ptr);
-            std.log.err("Failed to enqueue task to shard {}: {s}", .{ shard_id, @errorName(err) });
+            std.log.err("Client {} failed to enqueue task to shard {}: {s}", .{ self.client_id, shard_id, @errorName(err) });
             return ClientError.EnqueueFailed;
         };
-
-        // Wait for response from shard
-        const response = response_future.wait() catch {
-            return ClientError.CommandFailed;
-        };
-
-        // Send response to client
-        var writer_buffer: [LARGE_BUFFER_SIZE]u8 = undefined;
-        var sw = self.connection.writer(self.io, &writer_buffer);
-        sw.interface.writeAll(response) catch {};
-        sw.interface.flush() catch {};
+        // Response will be collected by main loop using group async pattern
     }
 
     /// Route multi-key command to all shards and aggregate results
     fn routeMultiKeyCommand(self: *Client, args: []const Value, command_name: []const u8) !void {
         const num_shards = self.server.num_shards;
-
-        // Create response futures for all shards
-        var futures = try self.allocator.alloc(ResponseFuture, num_shards);
-        defer self.allocator.free(futures);
-
-        for (futures) |*future| {
-            future.* = ResponseFuture.init(self.allocator);
-        }
-        defer {
-            for (futures) |*future| {
-                future.deinit();
-            }
-        }
 
         // Broadcast command to all shards
         for (0..num_shards) |shard_id| {
@@ -280,29 +302,49 @@ pub const Client = struct {
 
             const task = ShardTask{
                 .command_args = task_args,
-                .response_future = &futures[shard_id],
+                .response_queue = &self.response_queue,  // All shards write to same queue
                 .client_db_index = self.current_db,
                 .arena = task_arena_ptr,
                 .allocator = std.heap.page_allocator,
             };
 
-            // Enqueue to shard
+            // Enqueue to shard (non-blocking)
             const shard = &self.server.shards[shard_id];
             _ = shard.message_queue.put(self.io, &.{task}, 1) catch |err| {
+                task_arena_ptr.deinit();
                 std.heap.page_allocator.destroy(task_arena_ptr);
                 std.log.err("Failed to enqueue task to shard {}: {s}", .{ shard_id, @errorName(err) });
                 return ClientError.EnqueueFailed;
             };
         }
 
-        // Wait for all responses
+        // Collect responses from all shards (async via queue)
         var responses = try self.allocator.alloc([]const u8, num_shards);
         defer self.allocator.free(responses);
 
-        for (futures, 0..) |*future, i| {
-            responses[i] = future.wait() catch {
-                return ClientError.ShardCommandFailed;
-            };
+        var response_arenas = try self.allocator.alloc(*std.heap.ArenaAllocator, num_shards);
+        defer self.allocator.free(response_arenas);
+
+        var response_allocators = try self.allocator.alloc(std.mem.Allocator, num_shards);
+        defer self.allocator.free(response_allocators);
+
+        var response_ptrs = try self.allocator.alloc(*Response, num_shards);
+        defer self.allocator.free(response_ptrs);
+
+        for (0..num_shards) |i| {
+            const response_ptr = try self.response_queue.getOne(self.io);
+            response_ptrs[i] = response_ptr;
+            responses[i] = response_ptr.data;
+            response_arenas[i] = response_ptr.arena;
+            response_allocators[i] = response_ptr.allocator;
+        }
+
+        defer {
+            for (response_arenas, response_allocators, response_ptrs) |arena, alloc, ptr| {
+                arena.deinit();
+                alloc.destroy(arena);
+                std.heap.page_allocator.destroy(ptr);
+            }
         }
 
         // Aggregate responses based on command type

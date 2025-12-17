@@ -8,83 +8,21 @@ const resp = @import("../commands/resp.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
-/// Response future for async result delivery between client and shard threads
-/// Uses atomic operations and condition variables for thread-safe synchronization
-pub const ResponseFuture = struct {
-    state: std.atomic.Value(FutureState),
-    mutex: std.Thread.Mutex,
-    condition: std.Thread.Condition,
-    response: ?[]const u8,
-    error_msg: ?[]const u8,
-    allocator: Allocator,
-
-    pub const FutureState = enum(u8) {
-        pending,
-        completed,
-        error_state,
-    };
-
-    pub fn init(allocator: Allocator) ResponseFuture {
-        return .{
-            .state = std.atomic.Value(FutureState).init(.pending),
-            .mutex = .{},
-            .condition = .{},
-            .response = null,
-            .error_msg = null,
-            .allocator = allocator,
-        };
-    }
-
-    /// Wait for shard to complete the task (blocks until result available)
-    pub fn wait(self: *ResponseFuture) ![]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        while (self.state.load(.acquire) == .pending) {
-            self.condition.wait(&self.mutex);
-        }
-
-        return switch (self.state.load(.acquire)) {
-            .completed => self.response.?,
-            .error_state => error.CommandFailed,
-            .pending => unreachable,
-        };
-    }
-
-    /// Complete the future with success result
-    pub fn complete(self: *ResponseFuture, response: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        self.response = response;
-        self.state.store(.completed, .release);
-        self.condition.signal();
-    }
-
-    /// Complete the future with error
-    pub fn completeError(self: *ResponseFuture, error_msg: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        self.error_msg = error_msg;
-        self.state.store(.error_state, .release);
-        self.condition.signal();
-    }
-
-    pub fn deinit(self: *ResponseFuture) void {
-        if (self.response) |r| self.allocator.free(r);
-        if (self.error_msg) |e| self.allocator.free(e);
-    }
+/// Response from shard containing RESP-formatted data
+pub const Response = struct {
+    data: []const u8,       // RESP-formatted response
+    arena: *std.heap.ArenaAllocator,  // Arena that owns the response data
+    allocator: std.mem.Allocator,     // Allocator for the arena pointer
 };
 
-/// Task sent to shard for execution
+/// Task sent to shard for execution (async, non-blocking)
 /// Each task owns an arena allocator for command arguments
 pub const ShardTask = struct {
-    command_args: []Value, // Command arguments (owned by task arena)
-    response_future: *ResponseFuture, // Where to send result
-    client_db_index: u8, // Which database (0-15) to use
-    arena: *std.heap.ArenaAllocator, // Arena for this task
-    allocator: std.mem.Allocator, // Allocator that created the arena pointer
+    command_args: []Value,                     // Command arguments (owned by task arena)
+    response_queue: *std.Io.Queue(*Response),  // Lock-free queue for response pointers
+    client_db_index: u8,                       // Which database (0-15) to use
+    arena: *std.heap.ArenaAllocator,           // Arena for this task
+    allocator: std.mem.Allocator,              // Allocator that created the arena pointer
 
     pub fn deinit(self: *ShardTask) void {
         const arena_ptr = self.arena;
@@ -187,8 +125,8 @@ pub const Shard = struct {
 
             if (count == 0) break; // Queue closed
 
-            var task = task_buffer[0];
-            defer task.deinit(); // Clean up task arena
+            const task = task_buffer[0];
+            // Note: task arena ownership is transferred to Response (client will free it)
 
             self.executeTask(task);
         }
@@ -196,7 +134,7 @@ pub const Shard = struct {
 
     /// Execute task on this shard's databases (shared-nothing execution!)
     fn executeTask(self: *Shard, task: ShardTask) void {
-        // Create RESP response buffer
+        // Create RESP response buffer using task's arena
         var response_buf: [4096]u8 = undefined;
         var writer = std.Io.Writer.fixed(&response_buf);
 
@@ -210,41 +148,68 @@ pub const Shard = struct {
             store,
             task.command_args,
         ) catch |err| {
-            // On error, format error message and complete future
-            const error_msg = formatError(task.response_future.allocator, err) catch "-ERR unknown error\r\n";
-            task.response_future.completeError(error_msg);
+            // On error, format error message
+            formatError(&writer, err);
+        };
+
+        // Allocate response data in task arena (will be freed by client)
+        const buffered = writer.buffered();
+        const response_data = task.arena.allocator().dupe(u8, buffered) catch {
+            // If OOM, send minimal error
+            const oom_error = "-ERR out of memory\r\n";
+            const oom_data = task.arena.allocator().dupe(u8, oom_error) catch return;
+
+            // Allocate Response on heap
+            const response_ptr = std.heap.page_allocator.create(Response) catch return;
+            response_ptr.* = Response{
+                .data = oom_data,
+                .arena = task.arena,
+                .allocator = task.allocator,
+            };
+
+            task.response_queue.putOne(self.io, response_ptr) catch {
+                std.heap.page_allocator.destroy(response_ptr);
+            };
             return;
         };
 
-        // Complete future with result
-        const buffered = writer.buffered();
-        const result = task.response_future.allocator.dupe(u8, buffered) catch {
-            task.response_future.completeError("-ERR out of memory\r\n");
+        // Allocate Response on heap (safer for queue transfer)
+        const response_ptr = std.heap.page_allocator.create(Response) catch {
+            // Cleanup arena if can't allocate response
+            task.arena.deinit();
+            task.allocator.destroy(task.arena);
             return;
         };
-        task.response_future.complete(result) catch {
-            task.response_future.completeError("-ERR failed to complete future\r\n");
+
+        response_ptr.* = Response{
+            .data = response_data,
+            .arena = task.arena,
+            .allocator = task.allocator,
+        };
+
+        // Non-blocking enqueue (client will receive pointer asynchronously)
+        task.response_queue.putOne(self.io, response_ptr) catch {
+            // Client disconnected - cleanup everything
+            response_ptr.arena.deinit();
+            response_ptr.allocator.destroy(response_ptr.arena);
+            std.heap.page_allocator.destroy(response_ptr);
         };
     }
 
-    fn formatError(allocator: Allocator, err: anyerror) ![]const u8 {
+    fn formatError(writer: *std.Io.Writer, err: anyerror) void {
         const msg = switch (err) {
             error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
-            error.ValueNotInteger => "ERR value is not an integer or out of range",
-            error.InvalidFloat => "ERR value is not a valid float",
-            error.Overflow => "ERR increment or decrement would overflow",
-            error.KeyNotFound => "ERR no such key",
-            error.IndexOutOfRange => "ERR index out of range",
-            error.NoSuchKey => "ERR no such key",
-            else => "ERR while processing command",
+            error.ValueNotInteger => "value is not an integer or out of range",
+            error.InvalidFloat => "value is not a valid float",
+            error.Overflow => "increment or decrement would overflow",
+            error.KeyNotFound => "no such key",
+            error.IndexOutOfRange => "index out of range",
+            error.NoSuchKey => "no such key",
+            else => "while processing command",
         };
 
         // Format as RESP error
-        var buf: [256]u8 = undefined;
-        var writer = std.Io.Writer.fixed(&buf);
-        try resp.writeError(&writer, msg);
-        const buffered = writer.buffered();
-        return try allocator.dupe(u8, buffered);
+        resp.writeError(writer, msg) catch {};
     }
 
     /// Stop the shard thread
