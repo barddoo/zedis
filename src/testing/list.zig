@@ -12,7 +12,7 @@ test "LPUSH single element to new list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -39,7 +39,7 @@ test "LPUSH multiple elements to new list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -68,7 +68,7 @@ test "LPUSH to existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -105,7 +105,7 @@ test "RPUSH single element to new list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -131,7 +131,7 @@ test "RPUSH multiple elements to new list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -160,7 +160,7 @@ test "LPOP from list with single element" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -194,7 +194,7 @@ test "LPOP from non-existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -215,7 +215,7 @@ test "LPOP with count from list with multiple elements" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -254,7 +254,7 @@ test "LPOP with count of 0" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -286,7 +286,7 @@ test "RPOP from list with single element" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -316,7 +316,7 @@ test "RPOP with count from list with multiple elements" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -356,7 +356,7 @@ test "LLEN on existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -388,7 +388,7 @@ test "LLEN on non-existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -409,7 +409,7 @@ test "LLEN on empty list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -445,7 +445,7 @@ test "Mixed LPUSH and RPUSH operations" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -493,7 +493,7 @@ test "LPOP and RPOP from the same list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -543,7 +543,7 @@ test "LINDEX get first element" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -576,7 +576,7 @@ test "LINDEX get last element with negative index" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -609,7 +609,7 @@ test "LINDEX with out of range index" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -640,7 +640,7 @@ test "LINDEX on non-existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -663,7 +663,7 @@ test "LSET update element at index" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -708,7 +708,7 @@ test "LSET with negative index" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -753,7 +753,7 @@ test "LSET on non-existing key" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -775,7 +775,7 @@ test "LSET with out of range index" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -808,7 +808,7 @@ test "LRANGE get all elements" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -842,7 +842,7 @@ test "LRANGE get subset of elements" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -878,7 +878,7 @@ test "LRANGE with negative indices" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -914,7 +914,7 @@ test "LRANGE on non-existing list" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -937,7 +937,7 @@ test "LRANGE with out of range indices" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -970,7 +970,7 @@ test "LRANGE with reversed range" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var store = Store.init(allocator, testing.io, 16);
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

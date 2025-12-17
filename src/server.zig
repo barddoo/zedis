@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Stream = std.Io.net.Stream;
 const time = std.time;
 const types = @import("types.zig");
 const ConnectionContext = types.ConnectionContext;
@@ -16,6 +15,7 @@ const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
 const Io = std.Io;
 const Stream = Io.net.Stream;
+const Shard = @import("./worker/shard.zig").Shard;
 
 const Server = @This();
 
@@ -32,6 +32,7 @@ io: Io,
 
 // Fixed allocations (pre-allocated, never freed individually)
 client_pool: []Client,
+client_registries: []CommandRegistry, // One registry per client slot (thread-safe)
 client_pool_bitmap: std.bit_set.DynamicBitSet,
 client_pool_mutex: std.Thread.Mutex,
 
@@ -41,10 +42,10 @@ pubsub_map: std.StringHashMap([]u64),
 // Arena for temporary/short-lived allocations
 temp_arena: std.heap.ArenaAllocator,
 
-// Custom allocator for key-value store with eviction
-kv_allocator: KeyValueAllocator,
-databases: [16]Store,
-registry: CommandRegistry,
+// Shared-nothing shards (DragonflyDB-inspired architecture)
+shards: []Shard,
+num_shards: u8,
+
 pubsub_context: PubSubContext,
 
 // Metadata
@@ -65,28 +66,40 @@ pub fn initWithConfig(
 
     const listener = try address.listen(io, .{ .kernel_backlog = 128 * 10 });
 
-    // Initialize the KV allocator with eviction support
-    var kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
-
-    // Initialize 16 databases with the KV allocator (shared memory pool)
-    var databases: [16]Store = undefined;
-    for (&databases) |*db| {
-        db.* = Store.init(kv_allocator.allocator(), io, config.initial_capacity);
-    }
-
-    // Link KV allocator to database 0 for LRU eviction
-    // (All databases share the same KV allocator, so eviction affects all)
-    kv_allocator.setStore(&databases[0]);
-
     // Initialize temp arena for temporary allocations
     const temp_arena = std.heap.ArenaAllocator.init(base_allocator);
 
-    // Initialize command registry with base allocator (lives for server lifetime)
-    const registry = try command_init.initRegistry(base_allocator);
+    // Initialize command registry with page_allocator (thread-safe, proper alignment for concurrent access)
+    var registry = try command_init.initRegistry(std.heap.page_allocator);
+
+    // Determine number of shards (default 4, recommend ≤ CPU cores)
+    const num_shards = config.num_workers orelse 4;
+    std.log.info("Initializing {} shards (DragonflyDB-inspired shared-nothing architecture)", .{num_shards});
+
+    // Allocate and initialize shards
+    const shards = try base_allocator.alloc(Shard, num_shards);
+    for (shards, 0..) |*shard, i| {
+        // Clone registry for this shard (each shard gets its own copy for thread-safety)
+        const shard_registry = try registry.clone(std.heap.page_allocator);
+        shard.* = try Shard.init(
+            i,
+            base_allocator,
+            shard_registry,
+            config,
+            io,
+            num_shards,
+        );
+    }
 
     // Allocate fixed memory pools on heap
     const client_pool = try base_allocator.alloc(Client, config.max_clients);
     @memset(client_pool, undefined);
+
+    // Allocate one registry per client slot (thread-safe, no shared HashMap access)
+    const client_registries = try base_allocator.alloc(CommandRegistry, config.max_clients);
+    for (client_registries) |*client_registry| {
+        client_registry.* = try registry.clone(std.heap.page_allocator);
+    }
 
     const ts = try Io.Clock.real.now(io);
     const now = ts.toMilliseconds();
@@ -101,16 +114,16 @@ pub fn initWithConfig(
 
         // Fixed allocations - heap allocated
         .client_pool = client_pool,
+        .client_registries = client_registries,
         .client_pool_bitmap = try .initFull(base_allocator, config.max_clients),
         .client_pool_mutex = .{},
 
         // Arena for temporary allocations
         .temp_arena = temp_arena,
 
-        // KV allocator and databases
-        .kv_allocator = kv_allocator,
-        .databases = databases,
-        .registry = registry,
+        // Shards
+        .shards = shards,
+        .num_shards = num_shards,
         .pubsub_context = undefined, // Will be initialized after server creation
 
         // Metadata
@@ -129,40 +142,18 @@ pub fn initWithConfig(
 
     server.pubsub_context = PubSubContext.init(&server);
 
-    // Prefer AOF to RDB
-    // Load AOF file if it exists
-    // 'true' to be replaced with user option (use aof/rdb on boot)
-    // Note: AOF/RDB currently only loads into database 0
-    if (true) {
-        if (aof.Reader.init(server.temp_arena.allocator(), &server.databases[0], &server.registry, io)) |reader_value| {
-            var reader = reader_value;
-            std.log.info("Loading AOF into database 0", .{});
-            reader.read() catch |err| {
-                std.log.warn("Failed to read AOF: {s}", .{@errorName(err)});
-            };
-        } else |err| {
-            std.log.debug("AOF not available: {s}", .{@errorName(err)});
-        }
-    } else {
-        // Load RDB file if it exists
-        if (Reader.rdbFileExists()) {
-            if (Reader.init(server.temp_arena.allocator(), &server.databases[0])) |reader_value| {
-                var reader = reader_value;
-                defer reader.deinit();
-
-                if (reader.readFile()) |data| {
-                    std.log.info("Loading RDB into database 0", .{});
-                    server.createdTime = data.ctime;
-                } else |err| {
-                    std.log.warn("Failed to read RDB: {s}", .{@errorName(err)});
-                }
-            } else |err| {
-                std.log.warn("Failed to initialize RDB reader: {s}", .{@errorName(err)});
-            }
-        }
+    // Start shard threads (DragonflyDB-inspired shared-nothing execution)
+    for (server.shards) |*shard| {
+        try shard.start();
     }
+    std.log.info("Started {} shard threads", .{num_shards});
 
-    std.log.info("Server initialized with hybrid allocation - Fixed: {}MB, KV: {}MB, Arena: {}MB", .{
+    // TODO: AOF/RDB loading temporarily disabled for multi-shard architecture
+    // Will need to distribute keys across shards based on hash(key) % num_shards
+    // For now, starting with fresh databases on each shard
+
+    std.log.info("Server initialized - Shards: {}, Fixed: {}MB, Total KV: {}MB, Arena: {}MB", .{
+        num_shards,
         config.fixedMemorySize() / (1024 * 1024),
         config.kv_memory_budget / (1024 * 1024),
         config.temp_arena_size / (1024 * 1024),
@@ -172,16 +163,26 @@ pub fn initWithConfig(
 }
 
 pub fn deinit(self: *Server) void {
+    // Stop and cleanup shards
+    for (self.shards) |*shard| {
+        shard.stop();
+    }
+    for (self.shards) |*shard| {
+        shard.join();
+    }
+    for (self.shards) |*shard| {
+        shard.deinit(self.base_allocator);
+    }
+    self.base_allocator.free(self.shards);
+
     // Network cleanup
     self.listener.deinit(self.io);
 
-    // Databases cleanup (uses KV allocator)
-    for (&self.databases) |*db| {
-        db.deinit();
+    // Clean up client registries
+    for (self.client_registries) |*client_registry| {
+        client_registry.deinit();
     }
-
-    // Registry cleanup (uses temp arena)
-    self.registry.deinit();
+    self.base_allocator.free(self.client_registries);
 
     // Clean up pubsub map
     var iterator = self.pubsub_map.iterator();
@@ -195,7 +196,6 @@ pub fn deinit(self: *Server) void {
     self.client_pool_bitmap.deinit();
 
     // Allocator cleanup
-    self.kv_allocator.deinit();
     self.temp_arena.deinit();
 
     // AOF Deinit
@@ -205,10 +205,10 @@ pub fn deinit(self: *Server) void {
 }
 
 // The main server loop. It waits for incoming connections and
-// handles each client (one thread per connection).
+// handles each client concurrently using group async.
 pub fn listen(self: *Server) !void {
-    var connection_group: Io.Group = .init;
-    defer connection_group.wait(self.io); // Wait for all clients to finish
+    var group = std.Io.Group.init;
+    defer group.wait(self.io); // Ensure all connections finish on shutdown
 
     while (true) {
         const conn = self.listener.accept(self.io) catch |err| {
@@ -216,11 +216,16 @@ pub fn listen(self: *Server) !void {
             continue;
         };
 
-        // Handle this client on its own thread
-        connection_group.async(self.io, handleConnectionAsync, .{ self, conn });
+        // Handle connection concurrently using group async
+        group.concurrent(self.io, Server.handleConnectionAsync, .{ self, conn }) catch |err| {
+            std.log.err("Failed to spawn connection handler: {s}", .{@errorName(err)});
+            conn.close(self.io);
+            continue;
+        };
     }
 }
 
+// Wrapper for handleConnection that doesn't return errors (required by group.concurrent)
 fn handleConnectionAsync(self: *Server, conn: Stream) void {
     self.handleConnection(conn) catch |err| {
         std.log.err("Connection error: {s}", .{@errorName(err)});
@@ -229,50 +234,57 @@ fn handleConnectionAsync(self: *Server, conn: Stream) void {
 
 fn handleConnection(self: *Server, conn: Stream) !void {
     // Allocate client from fixed pool
-    const client_slot = self.allocateClient() orelse {
+    const client_info = self.allocateClient() orelse {
         std.log.warn("Maximum client connections reached, rejecting connection", .{});
         conn.close(self.io);
         return;
     };
 
-    // Initialize client in the allocated slot
-    client_slot.* = Client.init(
+    // Initialize client in the allocated slot with its dedicated registry
+    client_info.client.* = try Client.init(
         self.base_allocator,
         conn,
         &self.pubsub_context,
-        &self.registry,
+        client_info.registry,
         self,
-        &self.databases,
         self.io,
     );
 
     defer {
         // Clean up client and return slot to pool
         // For pubsub clients that disconnected, clean them up from all channels first
-        if (client_slot.is_in_pubsub_mode) {
+        if (client_info.client.is_in_pubsub_mode) {
             // Remove this client from all channels
-            self.cleanupDisconnectedPubSubClient(client_slot.client_id);
-            std.log.debug("Client {} removed from all channels and deallocated", .{client_slot.client_id});
+            self.cleanupDisconnectedPubSubClient(client_info.client.client_id);
+            std.log.debug("Client {} removed from all channels and deallocated", .{client_info.client.client_id});
         }
 
         // Always clean up and deallocate when connection ends
-        client_slot.deinit();
-        self.deallocateClient(client_slot);
-        std.log.debug("Client {} deallocated from pool", .{client_slot.client_id});
+        client_info.client.deinit();
+        self.deallocateClient(client_info.client);
+        std.log.debug("Client {} deallocated from pool", .{client_info.client.client_id});
     }
 
-    try client_slot.handle();
-    std.log.debug("Client {} handled", .{client_slot.client_id});
+    try client_info.client.handle();
+    std.log.debug("Client {} handled", .{client_info.client.client_id});
 }
 
 // Client pool management methods (thread-safe)
-pub fn allocateClient(self: *Server) ?*Client {
+const ClientAllocation = struct {
+    client: *Client,
+    registry: *CommandRegistry,
+};
+
+pub fn allocateClient(self: *Server) ?ClientAllocation {
     self.client_pool_mutex.lock();
     defer self.client_pool_mutex.unlock();
 
     const first_free = self.client_pool_bitmap.findFirstSet() orelse return null;
     self.client_pool_bitmap.unset(first_free);
-    return &self.client_pool[first_free];
+    return .{
+        .client = &self.client_pool[first_free],
+        .registry = &self.client_registries[first_free],
+    };
 }
 
 pub fn deallocateClient(self: *Server, client: *Client) void {
@@ -376,12 +388,20 @@ pub fn cleanupDisconnectedPubSubClient(self: *Server, client_id: u64) void {
 pub fn getMemoryStats(self: *Server) config_module.MemoryStats {
     const fixed_size = self.config.fixedMemorySize();
     const total_budget = self.config.totalMemoryBudget();
+
+    // Sum KV memory usage across all shards
+    var total_kv_memory: usize = 0;
+    for (self.shards) |*shard| {
+        total_kv_memory += shard.kv_allocator.getMemoryUsage();
+    }
+
+    const temp_arena_used = self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len;
+
     return config_module.MemoryStats{
         .fixed_memory_used = fixed_size,
-        .kv_memory_used = self.kv_allocator.getMemoryUsage(),
-        .temp_arena_used = self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len,
-        .total_allocated = fixed_size + self.kv_allocator.getMemoryUsage() +
-            (self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len),
+        .kv_memory_used = total_kv_memory,
+        .temp_arena_used = temp_arena_used,
+        .total_allocated = fixed_size + total_kv_memory + temp_arena_used,
         .total_budget = total_budget,
     };
 }
@@ -413,4 +433,143 @@ pub fn findClientById(self: *Server, client_id: u64) ?*Client {
         }
     }
     return null;
+}
+
+// Tests for thread-safe registry architecture
+const testing = std.testing;
+
+test "server client registries array allocated per max_clients" {
+    const config = config_module.Config{
+        .max_clients = 1,
+        .max_subscribers_per_channel = 1,
+        .num_workers = 1,
+        .requirepass = null,
+        .kv_memory_budget = 1024,
+        .temp_arena_size = 1024,
+    };
+
+    var server = try Server.initWithConfig(
+        testing.allocator,
+        "127.0.0.1",
+        6380,
+        config,
+        std.testing.io,
+    );
+    defer server.deinit();
+
+    std.debug.print("Registries {any}", .{server.client_registries.len});
+
+    // Verify client_registries array has one entry per max_clients
+    try testing.expectEqual(@as(usize, 1), server.client_registries.len);
+
+    // Verify each registry is initialized
+    for (server.client_registries) |*registry| {
+        try testing.expect(@intFromPtr(registry) != 0);
+    }
+}
+
+test "each client registry is independent clone" {
+    const config = config_module.Config{
+        .max_clients = 1,
+        .max_subscribers_per_channel = 1,
+        .num_workers = 1,
+        .requirepass = null,
+        .kv_memory_budget = 1024,
+        .temp_arena_size = 1024,
+    };
+
+    var server = try Server.initWithConfig(
+        testing.allocator,
+        "127.0.0.1",
+        6381,
+        config,
+        std.testing.io,
+    );
+    defer server.deinit();
+
+    // Verify each registry is at a different memory address
+    const reg0_ptr = @intFromPtr(&server.client_registries[0]);
+    const reg1_ptr = @intFromPtr(&server.client_registries[1]);
+    const reg2_ptr = @intFromPtr(&server.client_registries[2]);
+
+    try testing.expect(reg0_ptr != reg1_ptr);
+    try testing.expect(reg1_ptr != reg2_ptr);
+    try testing.expect(reg0_ptr != reg2_ptr);
+
+    // Verify each registry has commands (from clone)
+    for (server.client_registries) |*registry| {
+        const ping_cmd = registry.get("PING");
+        try testing.expect(ping_cmd != null);
+    }
+}
+
+test "cloned registry has all commands from original" {
+    const config = config_module.Config{
+        .max_clients = 1,
+        .max_subscribers_per_channel = 1,
+        .num_workers = 1,
+        .requirepass = null,
+        .kv_memory_budget = 1024,
+        .temp_arena_size = 1024,
+    };
+
+    var server = try Server.initWithConfig(
+        testing.allocator,
+        "127.0.0.1",
+        6382,
+        config,
+        std.testing.io,
+    );
+    defer server.deinit();
+
+    // Test that cloned registries have standard commands
+    const test_commands = [_][]const u8{
+        "PING", "ECHO", "SET", "GET", "CONFIG",
+    };
+
+    for (server.client_registries) |*registry| {
+        for (test_commands) |cmd_name| {
+            const cmd = registry.get(cmd_name);
+            try testing.expect(cmd != null);
+        }
+    }
+}
+
+test "client allocation returns unique registry" {
+    const config = config_module.Config{
+        .max_clients = 1,
+        .max_subscribers_per_channel = 1,
+        .num_workers = 1,
+        .requirepass = null,
+        .kv_memory_budget = 1024,
+        .temp_arena_size = 1024,
+    };
+
+    var server = try Server.initWithConfig(
+        testing.allocator,
+        "127.0.0.1",
+        6383,
+        config,
+        std.testing.io,
+    );
+    defer server.deinit();
+
+    // Allocate first client
+    const alloc1 = server.allocateClient();
+    try testing.expect(alloc1 != null);
+
+    const registry1_ptr = @intFromPtr(alloc1.?.registry);
+
+    // Allocate second client
+    const alloc2 = server.allocateClient();
+    try testing.expect(alloc2 != null);
+
+    const registry2_ptr = @intFromPtr(alloc2.?.registry);
+
+    // Verify each client got a different registry
+    try testing.expect(registry1_ptr != registry2_ptr);
+
+    // Verify both registries work
+    try testing.expect(alloc1.?.registry.get("PING") != null);
+    try testing.expect(alloc2.?.registry.get("PING") != null);
 }

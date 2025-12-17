@@ -55,6 +55,22 @@ pub fn select(client: *Client, args: []const Value, writer: *std.Io.Writer) !voi
     try resp.writeOK(writer);
 }
 
+// CONFIG command implementation - minimal support for redis-benchmark compatibility
+pub fn config(writer: *std.Io.Writer, args: []const Value) !void {
+    // redis-benchmark sends: CONFIG GET <param>
+    // We return empty array to keep it happy
+    if (args.len >= 2) {
+        const subcommand = args[1].asSlice();
+        if (std.ascii.eqlIgnoreCase(subcommand, "GET")) {
+            // Return empty array - redis-benchmark will continue
+            try resp.writeListLen(writer, 0);
+            return;
+        }
+    }
+    // For other CONFIG subcommands, return empty array
+    try resp.writeListLen(writer, 0);
+}
+
 // HELP command implementation
 pub fn help(writer: *std.Io.Writer, args: []const Value) !void {
     _ = args; // Unused parameter

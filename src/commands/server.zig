@@ -7,14 +7,20 @@ const Value = @import("../parser.zig").Value;
 const resp = @import("./resp.zig");
 
 pub fn flush_all(client: *Client, _: []const Value, writer: *std.Io.Writer) !void {
-    for (client.databases) |*db| {
-        db.flush_db();
+    // Flush all databases across all shards
+    for (client.server.shards) |*shard| {
+        for (&shard.databases) |*db| {
+            db.flush_db();
+        }
     }
     try resp.writeOK(writer);
 }
 
 pub fn flush_db(client: *Client, _: []const Value, writer: *std.Io.Writer) !void {
-    client.getCurrentStore().flush_db();
+    // Flush current database across all shards
+    for (client.server.shards) |*shard| {
+        shard.databases[client.current_db].flush_db();
+    }
     try resp.writeOK(writer);
 }
 

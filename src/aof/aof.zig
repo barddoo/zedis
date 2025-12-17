@@ -87,8 +87,9 @@ pub const Reader = struct {
     }
 };
 
+const testing = std.testing;
+
 test "aof reading test" {
-    const testing = std.testing;
     const reg_init = @import("../commands/init.zig");
 
     // Read a command and test that the value is stored as expected
@@ -99,13 +100,13 @@ test "aof reading test" {
 
     var registry = try reg_init.initRegistry(std.testing.allocator);
     defer registry.deinit();
-    var store: Store = .init(testing.allocator, 4096);
+    var store: Store = .init(testing.allocator, testing.io, 2);
     defer store.deinit();
 
-    var reader_buffer: [8192]u8 = undefined;
+    var reader_buffer: [256]u8 = undefined;
     var aof_reader: Reader = undefined;
     aof_reader.allocator = testing.allocator;
-    aof_reader.file_reader = test_file.reader(&reader_buffer);
+    aof_reader.file_reader = test_file.reader(testing.io, &reader_buffer);
     aof_reader.store = &store;
     aof_reader.registry = &registry;
 
@@ -113,8 +114,8 @@ test "aof reading test" {
 
     try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
 }
+
 test "aof writing test" {
-    const testing = std.testing;
     const reg_init = @import("../commands/init.zig");
 
     // Execute a command and test that it writes it correctly
@@ -125,7 +126,7 @@ test "aof writing test" {
     const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
 
     var registry = try reg_init.initRegistry(std.testing.allocator);
-    var store: Store = .init(testing.allocator, 4096);
+    var store: Store = .init(testing.allocator, testing.io, 1);
     var parser = Parser.init(testing.allocator);
     defer registry.deinit();
     defer store.deinit();
@@ -147,7 +148,7 @@ test "aof writing test" {
     try registry.executeCommand(&writer, &dummy_client, &store, &aof_writer, cmd.getArgs());
 
     var file_reader_buffer: [8192]u8 = undefined;
-    var file_reader = test_file.reader(&file_reader_buffer);
+    var file_reader = test_file.reader(testing.io, &file_reader_buffer);
 
     try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
     const buf = try testing.allocator.alloc(u8, 1024);
