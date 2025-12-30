@@ -31,7 +31,7 @@ pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
         return error.AuthNoPasswordSet;
     }
 
-    if (std.mem.eql(u8, password, client.server.config.requirepass.?)) {
+    if (std.mem.eql(u8, password, client.server.config.require_pass.?)) {
         client.authenticated = true;
         try resp.writeOK(writer);
     } else {

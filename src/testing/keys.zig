@@ -3,6 +3,7 @@ const Store = @import("../store.zig").Store;
 const Value = @import("../parser.zig").Value;
 const testing = std.testing;
 const keys_commands = @import("../commands/keys.zig");
+const mem = std.mem;
 const Io = std.Io;
 const Writer = Io.Writer;
 
@@ -74,7 +75,7 @@ test "KEYS command with wildcard pattern" {
 
     const output = writer.buffered();
     // Should return array of 3 keys
-    try testing.expect(std.mem.startsWith(u8, output, "*3\r\n"));
+    try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
 }
 
 test "KEYS command with empty store" {
@@ -166,7 +167,7 @@ test "TTL command with key with expiration" {
 
     const output = writer.buffered();
     // Should return the expiration timestamp
-    try testing.expect(std.mem.startsWith(u8, output, ":"));
+    try testing.expect(mem.startsWith(u8, output, ":"));
 }
 
 test "PERSIST command with key having expiration" {
@@ -387,9 +388,9 @@ test "RANDOMKEY command with non-empty store" {
 
     const output = writer.buffered();
     // Should return a bulk string (key)
-    try testing.expect(std.mem.startsWith(u8, output, "$"));
+    try testing.expect(mem.startsWith(u8, output, "$"));
     // Should not be null
-    try testing.expect(!std.mem.eql(u8, output, "$-1\r\n"));
+    try testing.expect(!mem.eql(u8, output, "$-1\r\n"));
 }
 
 test "RANDOMKEY command with empty store" {
@@ -436,11 +437,11 @@ test "KEYS command returns all keys when pattern is wildcard" {
 
     const output = writer.buffered();
     // Should return array with 3 elements
-    try testing.expect(std.mem.startsWith(u8, output, "*3\r\n"));
+    try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
     // Verify all keys are present in output
-    try testing.expect(std.mem.indexOf(u8, output, "apple") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "banana") != null);
-    try testing.expect(std.mem.indexOf(u8, output, "count") != null);
+    try testing.expect(mem.indexOf(u8, output, "apple") != null);
+    try testing.expect(mem.indexOf(u8, output, "banana") != null);
+    try testing.expect(mem.indexOf(u8, output, "count") != null);
 }
 
 test "RENAME overwrites existing destination key" {

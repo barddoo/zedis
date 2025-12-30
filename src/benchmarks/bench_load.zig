@@ -155,7 +155,7 @@ pub fn runLoadTest(
     workload_name: []const u8,
     workload_fn: *const fn (client: *ClientConnection, workload_ctx: *WorkloadContext, buffer: []u8) anyerror!void,
 ) !void {
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    var stdout_writer = std.Io.File.stdout().writer(&.{});
     const stdout = &stdout_writer.interface;
 
     try stdout.print("\n--- Load Test: {s} ---\n", .{workload_name});
@@ -186,7 +186,7 @@ pub fn runLoadTest(
 }
 
 pub fn runAllLoadTests(allocator: Allocator) !void {
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    var stdout_writer = std.Io.File.stdout().writer(&.{});
     const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");
@@ -201,7 +201,7 @@ pub fn runAllLoadTests(allocator: Allocator) !void {
     try stdout.writeAll("\n\n");
 
     // Check if stdin is a terminal (interactive mode)
-    const stdin_file = std.fs.File.stdin();
+    const stdin_file = std.Io.File.stdin();
     const is_terminal = stdin_file.isTty();
 
     if (is_terminal) {

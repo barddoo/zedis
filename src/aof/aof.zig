@@ -1,11 +1,15 @@
 const std = @import("std");
 const Server = @import("../server.zig");
-const Parser = @import("../parser.zig").Parser;
+const Parser = @import("../parser.zig");
 const Command = @import("../parser.zig").Command;
 const Registry = @import("../commands/registry.zig").CommandRegistry;
 const Client = @import("../client.zig").Client;
 const Store = @import("../store.zig").Store;
 const Io = std.Io;
+const File = Io.File;
+const Dir = Io.Dir;
+const builtin = @import("builtin");
+const posix = std.posix;
 
 const DEFAULT_NAME = "test.aof";
 
@@ -15,16 +19,17 @@ const DEFAULT_NAME = "test.aof";
 
 pub const Writer = struct {
     enabled: bool,
-    file_writer: ?std.fs.File.Writer,
+    file_writer: ?Io.File.Writer,
 
     // take path when ready to
-    pub fn init(enabled: bool) !Writer {
-        var fw: std.fs.File.Writer = undefined;
+    pub fn init(io: Io, enabled: bool) !Writer {
+        var fw: File.Writer = undefined;
         if (enabled) {
-            const file = std.fs.cwd().openFile(DEFAULT_NAME, .{ .mode = .write_only }) catch
-                try std.fs.cwd().createFile(DEFAULT_NAME, .{});
-            fw = file.writer(&.{});
-            try fw.seekTo(try file.getEndPos());
+            const file = Dir.cwd().openFile(io, DEFAULT_NAME, .{ .mode = .write_only }) catch
+                try Dir.cwd().createFile(io, DEFAULT_NAME, .{});
+            fw = file.writer(io, &.{});
+            const length = try file.length(io);
+            try fw.seekTo(length);
         }
         return .{
             .enabled = enabled,
@@ -32,9 +37,9 @@ pub const Writer = struct {
         };
     }
 
-    pub fn deinit(self: *Writer) void {
+    pub fn deinit(self: *Writer, io: Io) void {
         if (self.file_writer) |fw| {
-            fw.file.close();
+            fw.file.close(io);
         }
     }
 
@@ -45,7 +50,7 @@ pub const Writer = struct {
 };
 
 pub const Reader = struct {
-    file_reader: std.fs.File.Reader,
+    file_reader: Io.File.Reader,
     allocator: std.mem.Allocator,
     store: *Store,
     registry: *Registry,
@@ -54,7 +59,7 @@ pub const Reader = struct {
 
     // take path when ready to
     pub fn init(allocator: std.mem.Allocator, store: *Store, registry: *Registry, io: Io) !Reader {
-        const file = try std.fs.cwd().openFile(DEFAULT_NAME, .{ .mode = .read_only });
+        const file = try Dir.cwd().openFile(io, DEFAULT_NAME, .{ .mode = .read_only });
         var result = Reader{
             .file_reader = undefined,
             .allocator = allocator,
@@ -93,8 +98,9 @@ test "aof reading test" {
 
     // Read a command and test that the value is stored as expected
     const test_file_data = "*3\r\n$3\r\nset\r\n$1\r\nt\r\n$4\r\ntest\r\n";
-    const test_file = try std.fs.cwd().createFile("aof_reading_test.aof", .{ .read = true });
-    defer std.fs.cwd().deleteFile("aof_reading_test.aof") catch {};
+    const cwd = Dir.cwd();
+    const test_file = try cwd.createFile("aof_reading_test.aof", .{ .read = true });
+    defer cwd.deleteFile("aof_reading_test.aof") catch {};
     try test_file.writeAll(test_file_data);
 
     var registry = try reg_init.initRegistry(std.testing.allocator);
@@ -119,8 +125,9 @@ test "aof writing test" {
 
     // Execute a command and test that it writes it correctly
     const test_file_name = "aof_writing_test.aof";
-    const test_file = try std.fs.cwd().createFile(test_file_name, .{ .read = true });
-    defer std.fs.cwd().deleteFile("aof_writing_test.aof") catch {};
+    const cwd = Dir.cwd();
+    const test_file = try cwd.createFile(test_file_name, .{ .read = true });
+    defer cwd.deleteFile("aof_writing_test.aof") catch {};
 
     const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
 

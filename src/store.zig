@@ -6,6 +6,8 @@ const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const CityHash64 = std.hash.CityHash64;
 const Io = std.Io;
+const Clock = @import("clock.zig");
+const Config = @import("config.zig");
 const string_match = @import("./util/string_match.zig").string_match;
 
 const assert = std.debug.assert;
@@ -69,6 +71,7 @@ pub const Store = struct {
     expiration_map: std.StringHashMapUnmanaged(i64),
 
     io: Io,
+    clock: Clock,
 
     access_counter: std.atomic.Value(u64),
 
@@ -85,9 +88,13 @@ pub const Store = struct {
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator, io: Io, initial_capacity: u32) Store {
+    pub fn init(allocator: std.mem.Allocator, io: Io, initial_capacity: u32, config: Config) !Store {
         var map: OptimizedHashMap = .empty;
-        map.ensureTotalCapacity(allocator, initial_capacity) catch unreachable;
+        try map.ensureTotalCapacity(allocator, initial_capacity);
+
+        // Initialize clock but DON'T start thread yet
+        // Thread will be started after Store is in its final location
+        const clock: Clock = try .init(io, config);
 
         return .{
             .allocator = allocator,
@@ -97,6 +104,7 @@ pub const Store = struct {
             .deletions_since_rehash = 0,
             .last_maintenance_check = 0,
             .io = io,
+            .clock = clock,
         };
     }
 
@@ -264,7 +272,7 @@ pub const Store = struct {
 
         // Check expiration
         if (self.expiration_map.get(key)) |expiration_time| {
-            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const timestamp = self.clock.now() catch unreachable;
             const now = timestamp.toMilliseconds();
             if (now > expiration_time) {
                 _ = self.delete(key);
@@ -300,7 +308,7 @@ pub const Store = struct {
 
         // Only check expiration if key exists AND has TTL
         if (self.expiration_map.get(key)) |expiration_time| {
-            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const timestamp = self.clock.now() catch unreachable;
             const now = timestamp.toMilliseconds();
             if (now > expiration_time) {
                 _ = self.delete(key);
@@ -332,7 +340,7 @@ pub const Store = struct {
 
         // Check expiration before type checking
         if (self.expiration_map.get(key)) |expiration_time| {
-            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const timestamp = self.clock.now() catch unreachable;
             const now = timestamp.toMilliseconds();
             if (now > expiration_time) {
                 _ = self.delete(key);
@@ -355,7 +363,7 @@ pub const Store = struct {
 
         // Check expiration before type checking
         if (self.expiration_map.get(key)) |expiration_time| {
-            const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+            const timestamp = self.clock.now() catch unreachable;
             const now = timestamp.toMilliseconds();
 
             if (now > expiration_time) {
@@ -527,7 +535,7 @@ pub const Store = struct {
     /// Smart maintenance trigger with rate limiting
     /// Call this after operations that modify the map (delete, put)
     pub inline fn maybeMaintenance(self: *Store) void {
-        const timestamp = Io.Clock.real.now(self.io) catch unreachable;
+        const timestamp = self.clock.now() catch unreachable;
         const now = timestamp.toMilliseconds();
 
         // Rate limit: Don't check more than once per 50ms to avoid overhead

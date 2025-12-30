@@ -2,6 +2,9 @@ const std = @import("std");
 const fmt = std.fmt;
 const Io = std.Io;
 const Reader = Io.Reader;
+const Allocator = std.mem.Allocator;
+
+const Parser = @This();
 
 // Represents a value in the RESP protocol, which is a bulk string.
 pub const Value = struct {
@@ -41,9 +44,9 @@ pub const Command = struct {
     small_count: u8 = 0,
     // Large args storage: only allocated when > 6 args
     large_args: ?std.ArrayList(Value) = null,
-    allocator: std.mem.Allocator,
+    allocator: Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) Command {
+    pub fn init(allocator: Allocator) Command {
         return .{
             .small_args_buf = undefined,
             .small_count = 0,
@@ -134,92 +137,90 @@ pub const Command = struct {
     }
 };
 
-pub const Parser = struct {
-    allocator: std.mem.Allocator,
+allocator: Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) Parser {
-        return .{ .allocator = allocator };
+pub fn init(allocator: Allocator) Parser {
+    return .{ .allocator = allocator };
+}
+
+// Main parsing function. It expects a command to be a RESP array of bulk strings:
+// *<num>\r\n$<len>\r\n<data>\r\n ...
+// Uses Redis-style pre-allocation with 1024 cap to prevent DoS attacks
+pub fn parse(self: *Parser, reader: *Reader) !Command {
+    const line = try Parser.readLine(reader);
+
+    if (line.len == 0 or line[0] != '*') {
+        return error.InvalidProtocol;
     }
 
-    // Main parsing function. It expects a command to be a RESP array of bulk strings:
-    // *<num>\r\n$<len>\r\n<data>\r\n ...
-    // Uses Redis-style pre-allocation with 1024 cap to prevent DoS attacks
-    pub fn parse(self: *Parser, reader: *Reader) !Command {
-        const line = try Parser.readLine(reader);
+    const count = fmt.parseInt(usize, line[1..], 10) catch return error.InvalidProtocol;
 
-        if (line.len == 0 or line[0] != '*') {
+    // Redis-style: pre-allocate with safety cap at 1024 to prevent malicious requests
+    // from allocating huge arrays (e.g., "*999999999\r\n")
+    const initial_capacity = @min(count, 1024);
+    var command = Command.init(self.allocator);
+    errdefer command.deinit(); // Clean up on error to prevent memory leaks
+
+    try command.ensureCapacity(initial_capacity);
+
+    for (0..count) |_| {
+        const bulk_line = try Parser.readLine(reader);
+        if (bulk_line.len == 0 or bulk_line[0] != '$') {
             return error.InvalidProtocol;
         }
 
-        const count = fmt.parseInt(usize, line[1..], 10) catch return error.InvalidProtocol;
-
-        // Redis-style: pre-allocate with safety cap at 1024 to prevent malicious requests
-        // from allocating huge arrays (e.g., "*999999999\r\n")
-        const initial_capacity = @min(count, 1024);
-        var command = Command.init(self.allocator);
-        errdefer command.deinit(); // Clean up on error to prevent memory leaks
-
-        try command.ensureCapacity(initial_capacity);
-
-        for (0..count) |_| {
-            const bulk_line = try Parser.readLine(reader);
-            if (bulk_line.len == 0 or bulk_line[0] != '$') {
-                return error.InvalidProtocol;
-            }
-
-            const data = try self.readBulkData(reader, bulk_line);
-            try command.addArg(.{ .data = data });
-        }
-
-        return command;
+        const data = try self.readBulkData(reader, bulk_line);
+        try command.addArg(.{ .data = data });
     }
 
-    // Reads bulk string data based on the length specified in the bulk_line.
-    fn readBulkData(self: *Parser, reader: *Reader, bulk_line: []const u8) ![]const u8 {
-        const len = fmt.parseInt(i64, bulk_line[1..], 10) catch return error.InvalidProtocol;
+    return command;
+}
 
-        if (len < 0) {
-            return error.InvalidProtocol; // Null bulk strings not supported in this example
-        }
+// Reads bulk string data based on the length specified in the bulk_line.
+fn readBulkData(self: *Parser, reader: *Reader, bulk_line: []const u8) ![]const u8 {
+    const len = fmt.parseInt(i64, bulk_line[1..], 10) catch return error.InvalidProtocol;
 
-        const ulen: usize = @intCast(len);
-        const data = try self.allocator.alloc(u8, ulen);
-        errdefer self.allocator.free(data);
-
-        // Read exact number of bytes (uses buffered reading)
-        try reader.readSliceAll(data);
-
-        // Expect trailing CRLF after the bulk string payload
-        const cr = try reader.takeByte();
-        const lf = try reader.takeByte();
-        if (cr != '\r' or lf != '\n') {
-            return error.InvalidProtocol;
-        }
-
-        return data;
+    if (len < 0) {
+        return error.InvalidProtocol; // Null bulk strings not supported in this example
     }
 
-    // Reads a RESP line terminated by CRLF. Returns slice of internal buffer
-    fn readLine(reader: *Reader) ![]const u8 {
-        // Read until '\n' delimiter (inclusive, so \n is consumed)
-        const line_with_crlf = reader.takeDelimiterInclusive('\n') catch |err| {
-            if (err == error.ReadFailed) return error.EndOfStream;
-            return err;
-        };
+    const ulen: usize = @intCast(len);
+    const data = try self.allocator.alloc(u8, ulen);
+    errdefer self.allocator.free(data);
 
-        // RESP requires CRLF, so verify the line ends with \r\n
-        if (line_with_crlf.len < 2 or
-            line_with_crlf[line_with_crlf.len - 2] != '\r' or
-            line_with_crlf[line_with_crlf.len - 1] != '\n')
-        {
-            return error.InvalidProtocol;
-        }
+    // Read exact number of bytes (uses buffered reading)
+    try reader.readSliceAll(data);
 
-        const line_len = line_with_crlf.len - 2; // Remove trailing \r\n
-
-        return line_with_crlf[0..line_len];
+    // Expect trailing CRLF after the bulk string payload
+    const cr = try reader.takeByte();
+    const lf = try reader.takeByte();
+    if (cr != '\r' or lf != '\n') {
+        return error.InvalidProtocol;
     }
-};
+
+    return data;
+}
+
+// Reads a RESP line terminated by CRLF. Returns slice of internal buffer
+fn readLine(reader: *Reader) ![]const u8 {
+    // Read until '\n' delimiter (inclusive, so \n is consumed)
+    const line_with_crlf = reader.takeDelimiterInclusive('\n') catch |err| {
+        if (err == error.ReadFailed) return error.EndOfStream;
+        return err;
+    };
+
+    // RESP requires CRLF, so verify the line ends with \r\n
+    if (line_with_crlf.len < 2 or
+        line_with_crlf[line_with_crlf.len - 2] != '\r' or
+        line_with_crlf[line_with_crlf.len - 1] != '\n')
+    {
+        return error.InvalidProtocol;
+    }
+
+    const line_len = line_with_crlf.len - 2; // Remove trailing \r\n
+
+    return line_with_crlf[0..line_len];
+}
 
 const testing = std.testing;
 
@@ -614,7 +615,7 @@ test "Command convenience methods" {
     defer command.deinit();
 
     const data1 = try testing.allocator.dupe(u8, "GET");
-    const data2 = try testing.allocator.dupe(u8, "mykey");
+    const data2 = try testing.allocator.dupe(u8, "my-key");
 
     try command.addArg(.{ .data = data1 });
     try command.addArg(.{ .data = data2 });
@@ -628,7 +629,7 @@ test "Command convenience methods" {
 
     // Test getArgSlice
     try testing.expectEqualStrings("GET", command.getArgSlice(0).?);
-    try testing.expectEqualStrings("mykey", command.getArgSlice(1).?);
+    try testing.expectEqualStrings("my-key", command.getArgSlice(1).?);
     try testing.expect(command.getArgSlice(2) == null); // Out of bounds
 }
 

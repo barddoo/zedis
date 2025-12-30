@@ -6,7 +6,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    const io: std.Io.Threaded = .init_single_threaded;
+    var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");

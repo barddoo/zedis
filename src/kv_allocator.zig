@@ -1,22 +1,25 @@
 const std = @import("std");
-const config_module = @import("config.zig");
+const Config = @import("config.zig");
 const Store = @import("store.zig").Store;
+const mem = std.mem;
+
+const log = std.log.scoped(.kv_allocator);
 
 const KeyValueAllocator = @This();
 
-base_allocator: std.mem.Allocator,
+base_allocator: mem.Allocator,
 memory_pool: []u8,
 pool_allocator: std.heap.FixedBufferAllocator,
 memory_used: std.atomic.Value(usize),
 memory_budget: usize,
-eviction_policy: config_module.EvictionPolicy,
+eviction_policy: Config.EvictionPolicy,
 
 // Reference to store for eviction (set after init)
 store: ?*Store = null,
 
 const Self = @This();
 
-pub fn init(base_allocator: std.mem.Allocator, budget: usize, eviction_policy: config_module.EvictionPolicy) !Self {
+pub fn init(base_allocator: mem.Allocator, budget: usize, eviction_policy: Config.EvictionPolicy) !Self {
     const memory_pool = try base_allocator.alloc(u8, budget);
 
     return .{
@@ -38,19 +41,19 @@ pub fn deinit(self: *Self) void {
     self.base_allocator.free(self.memory_pool);
 }
 
-pub fn allocator(self: *Self) std.mem.Allocator {
+pub fn allocator(self: *Self) mem.Allocator {
     return .{
         .ptr = self,
         .vtable = &.{
             .alloc = alloc,
             .resize = resize,
             .free = free,
-            .remap = std.mem.Allocator.noRemap,
+            .remap = mem.Allocator.noRemap,
         },
     };
 }
 
-fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+fn alloc(ctx: *anyopaque, len: usize, ptr_align: mem.Alignment, ret_addr: usize) ?[*]u8 {
     const self: *Self = @ptrCast(@alignCast(ctx));
 
     // Try allocation first
@@ -72,7 +75,7 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: us
     return null;
 }
 
-fn resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+fn resize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) bool {
     const self: *Self = @ptrCast(@alignCast(ctx));
 
     if (self.pool_allocator.allocator().rawResize(buf, buf_align, new_len, ret_addr)) {
@@ -87,7 +90,7 @@ fn resize(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usi
     return false;
 }
 
-fn free(ctx: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
+fn free(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, ret_addr: usize) void {
     const self: *Self = @ptrCast(@alignCast(ctx));
 
     self.pool_allocator.allocator().rawFree(buf, buf_align, ret_addr);
@@ -109,7 +112,7 @@ fn evictMemory(self: *Self, needed_bytes: usize) void {
                 // Delete the key
                 if (!store.delete(victim_key)) break;
 
-                std.log.debug("Evicted key via allkeys-lru: {s}", .{victim_key});
+                log.debug("Evicted key via allkeys-lru: {s}", .{victim_key});
             }
         },
 
@@ -120,7 +123,7 @@ fn evictMemory(self: *Self, needed_bytes: usize) void {
                 const victim_key = store.sampleLRUKey(5, true) orelse break;
                 if (!store.delete(victim_key)) break;
 
-                std.log.debug("Evicted key via volatile-lru: {s}", .{victim_key});
+                log.debug("Evicted key via volatile-lru: {s}", .{victim_key});
             }
         },
     }

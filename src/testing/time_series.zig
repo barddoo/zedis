@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const testing = std.testing;
 const ts_mod = @import("../time_series.zig");
 const TimeSeries = ts_mod.TimeSeries;
@@ -542,7 +543,7 @@ test "TS.INCRBY increments from zero" {
     try ts_commands.ts_create(&writer, &store, &create_args);
 
     // Increment by 5.0 (should start from 0.0)
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const incrby_args = [_]Value{
         .{ .data = "TS.INCRBY" },
@@ -556,7 +557,7 @@ test "TS.INCRBY increments from zero" {
     try testing.expectEqualStrings(":1000\r\n", writer.buffered());
 
     // Verify value is 5.0 (formatted as "5" in RESP)
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
         .{ .data = "TS.GET" },
@@ -565,7 +566,7 @@ test "TS.INCRBY increments from zero" {
     try ts_commands.ts_get(&writer, &store, &get_args);
 
     const output = writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, output, "$1\r\n5\r\n") != null or std.mem.indexOf(u8, output, "$3\r\n5.0\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, "$1\r\n5\r\n") != null or mem.indexOf(u8, output, "$3\r\n5.0\r\n") != null);
 }
 
 test "TS.INCRBY increments from existing value" {
@@ -586,7 +587,7 @@ test "TS.INCRBY increments from existing value" {
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const add_args = [_]Value{
         .{ .data = "TS.ADD" },
@@ -597,7 +598,7 @@ test "TS.INCRBY increments from existing value" {
     try ts_commands.ts_add(&writer, &store, &add_args);
 
     // Increment by 3.0
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const incrby_args = [_]Value{
         .{ .data = "TS.INCRBY" },
@@ -608,7 +609,7 @@ test "TS.INCRBY increments from existing value" {
     try ts_commands.ts_incrby(&writer, &store, &incrby_args);
 
     // Verify value is 13.0 (formatted as "13" in RESP)
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
         .{ .data = "TS.GET" },
@@ -617,7 +618,7 @@ test "TS.INCRBY increments from existing value" {
     try ts_commands.ts_get(&writer, &store, &get_args);
 
     const output = writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, output, "$2\r\n13\r\n") != null or std.mem.indexOf(u8, output, "$4\r\n13.0\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, "$2\r\n13\r\n") != null or mem.indexOf(u8, output, "$4\r\n13.0\r\n") != null);
 }
 
 test "TS.DECRBY decrements value" {
@@ -638,7 +639,7 @@ test "TS.DECRBY decrements value" {
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const add_args = [_]Value{
         .{ .data = "TS.ADD" },
@@ -649,7 +650,7 @@ test "TS.DECRBY decrements value" {
     try ts_commands.ts_add(&writer, &store, &add_args);
 
     // Decrement by 7.0
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const decrby_args = [_]Value{
         .{ .data = "TS.DECRBY" },
@@ -660,7 +661,7 @@ test "TS.DECRBY decrements value" {
     try ts_commands.ts_decrby(&writer, &store, &decrby_args);
 
     // Verify value is 13.0 (formatted as "13" in RESP)
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
         .{ .data = "TS.GET" },
@@ -669,7 +670,7 @@ test "TS.DECRBY decrements value" {
     try ts_commands.ts_get(&writer, &store, &get_args);
 
     const output = writer.buffered();
-    try testing.expect(std.mem.indexOf(u8, output, "$2\r\n13\r\n") != null or std.mem.indexOf(u8, output, "$4\r\n13.0\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, "$2\r\n13\r\n") != null or mem.indexOf(u8, output, "$4\r\n13.0\r\n") != null);
 }
 
 test "TS.ALTER changes retention" {
@@ -693,7 +694,7 @@ test "TS.ALTER changes retention" {
     try ts_commands.ts_create(&writer, &store, &create_args);
 
     // Alter retention to 5000
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const alter_args = [_]Value{
         .{ .data = "TS.ALTER" },
@@ -731,7 +732,7 @@ test "TS.ALTER changes duplicate policy" {
     try ts_commands.ts_create(&writer, &store, &create_args);
 
     // Alter to LAST policy
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const alter_args = [_]Value{
         .{ .data = "TS.ALTER" },
@@ -955,7 +956,7 @@ test "TS.RANGE command with COUNT parameter" {
     // Add 5 samples
     var i: usize = 0;
     while (i < 5) : (i += 1) {
-        buffer = std.mem.zeroes([4096]u8);
+        buffer = mem.zeroes([4096]u8);
         writer = Writer.fixed(&buffer);
         const timestamp_str = try std.fmt.allocPrint(allocator, "{d}", .{1000 + i * 100});
         const value_str = try std.fmt.allocPrint(allocator, "{d}.0", .{i * 10});
@@ -969,7 +970,7 @@ test "TS.RANGE command with COUNT parameter" {
     }
 
     // Range with COUNT 3
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const range_args = [_]Value{
         .{ .data = "TS.RANGE" },
@@ -983,7 +984,7 @@ test "TS.RANGE command with COUNT parameter" {
 
     const output = writer.buffered();
     // Should return array of 3 elements
-    try testing.expect(std.mem.startsWith(u8, output, "*3\r\n"));
+    try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
 }
 
 test "TS.RANGE with 5000 random samples using compressed encoding" {
@@ -1626,7 +1627,7 @@ test "TS.RANGE command with aggregation parameter" {
     const values = [_][]const u8{ "10", "20", "30", "40", "50", "60" };
 
     for (timestamps, values) |ts_str, val_str| {
-        buffer = std.mem.zeroes([4096]u8);
+        buffer = mem.zeroes([4096]u8);
         writer = Writer.fixed(&buffer);
         const add_args = [_]Value{
             .{ .data = "TS.ADD" },
@@ -1638,7 +1639,7 @@ test "TS.RANGE command with aggregation parameter" {
     }
 
     // Range with AVG aggregation, bucket size 1000
-    buffer = std.mem.zeroes([4096]u8);
+    buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const range_args = [_]Value{
         .{ .data = "TS.RANGE" },
@@ -1653,5 +1654,5 @@ test "TS.RANGE command with aggregation parameter" {
 
     const output = writer.buffered();
     // Should return 3 buckets: [0-999], [1000-1999], [2000-2999]
-    try testing.expect(std.mem.startsWith(u8, output, "*3\r\n"));
+    try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
 }

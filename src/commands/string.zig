@@ -113,7 +113,7 @@ pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
     const result = if (expiration_seconds < 0)
         store.delete(key)
     else blk: {
-        const ts = try Io.Clock.real.now(store.io);
+        const ts = try store.clock.now();
         const current_time = ts.toMilliseconds();
 
         break :blk store.expire(key, current_time + (expiration_seconds * 1000));
@@ -124,7 +124,7 @@ pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
 
 pub fn expireAt(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].asSlice();
-    const ts = try Io.Clock.real.now(store.io);
+    const ts = try store.clock.now();
     const current_time = ts.toMilliseconds();
     const expiration_timestamp = args[2].asInt() catch {
         return resp.writeInt(writer, 0);
@@ -265,7 +265,7 @@ pub fn setex(writer: *Writer, store: *Store, args: []const Value) !void {
 
     // Set expiration
     if (seconds > 0) {
-        const ts = try Io.Clock.real.now(store.io);
+        const ts = try store.clock.now();
         const now = ts.toMilliseconds();
         const expiration_time = now + (seconds * 1000);
         _ = try store.expire(key, expiration_time);

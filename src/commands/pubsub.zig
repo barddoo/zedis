@@ -1,4 +1,5 @@
 const std = @import("std");
+const mem = std.mem;
 const Client = @import("../client.zig").Client;
 const store = @import("../store.zig");
 const ZedisValue = store.ZedisValue;
@@ -136,7 +137,7 @@ fn testPublish(client: *MockClient, args: []const Value) !void {
     var channel_id: ?u32 = null;
     for (channels[0..client.pubsub_context.getChannelCount()], 0..) |existing_name, i| {
         if (existing_name) |name| {
-            if (std.mem.eql(u8, name, channel_name)) {
+            if (mem.eql(u8, name, channel_name)) {
                 channel_id = @intCast(i);
                 break;
             }
@@ -370,10 +371,10 @@ test "subscribe command - single channel subscription" {
 
     // Check response format: *3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n
     const output = client.getOutput();
-    try testing.expect(std.mem.indexOf(u8, output, "*3\r\n") != null); // Array of 3 elements
-    try testing.expect(std.mem.indexOf(u8, output, "$9\r\nsubscribe\r\n") != null); // "subscribe"
-    try testing.expect(std.mem.indexOf(u8, output, "$4\r\nnews\r\n") != null); // "news"
-    try testing.expect(std.mem.indexOf(u8, output, ":1\r\n") != null); // subscription count
+    try testing.expect(mem.indexOf(u8, output, "*3\r\n") != null); // Array of 3 elements
+    try testing.expect(mem.indexOf(u8, output, "$9\r\nsubscribe\r\n") != null); // "subscribe"
+    try testing.expect(mem.indexOf(u8, output, "$4\r\nnews\r\n") != null); // "news"
+    try testing.expect(mem.indexOf(u8, output, ":1\r\n") != null); // subscription count
 
     // Verify client is subscribed
     const channel_id = context.findOrCreateChannel("news").?;
@@ -413,9 +414,9 @@ test "subscribe command - multiple channel subscriptions" {
 
     // Should have responses for all three subscriptions
     // Each response should have subscription count increasing
-    try testing.expect(std.mem.indexOf(u8, output, ":1\r\n") != null);
-    try testing.expect(std.mem.indexOf(u8, output, ":2\r\n") != null);
-    try testing.expect(std.mem.indexOf(u8, output, ":3\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, ":1\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, ":2\r\n") != null);
+    try testing.expect(mem.indexOf(u8, output, ":3\r\n") != null);
 
     // Verify all channels exist and client is subscribed
     const news_id = context.findOrCreateChannel("news").?;
@@ -462,7 +463,7 @@ test "subscribe command - channel limit reached" {
     try testSubscribe(&client, &args);
 
     const output = client.getOutput();
-    try testing.expect(std.mem.indexOf(u8, output, "ERR maximum number of channels reached") != null);
+    try testing.expect(mem.indexOf(u8, output, "ERR maximum number of channels reached") != null);
 }
 
 test "publish command - single subscriber" {
@@ -502,14 +503,14 @@ test "publish command - single subscriber" {
 
     // Check publisher response (number of messages sent)
     const pub_output = publisher.getOutput();
-    try testing.expect(std.mem.indexOf(u8, pub_output, ":1\r\n") != null);
+    try testing.expect(mem.indexOf(u8, pub_output, ":1\r\n") != null);
 
     // Check subscriber received message
     const sub_output = subscriber.getOutput();
-    try testing.expect(std.mem.indexOf(u8, sub_output, "*3\r\n") != null); // Array of 3 elements
-    try testing.expect(std.mem.indexOf(u8, sub_output, "$7\r\nmessage\r\n") != null); // "message"
-    try testing.expect(std.mem.indexOf(u8, sub_output, "$4\r\nnews\r\n") != null); // "news"
-    try testing.expect(std.mem.indexOf(u8, sub_output, "$14\r\nBreaking news!\r\n") != null); // "Breaking news!" (14 chars)
+    try testing.expect(mem.indexOf(u8, sub_output, "*3\r\n") != null); // Array of 3 elements
+    try testing.expect(mem.indexOf(u8, sub_output, "$7\r\nmessage\r\n") != null); // "message"
+    try testing.expect(mem.indexOf(u8, sub_output, "$4\r\nnews\r\n") != null); // "news"
+    try testing.expect(mem.indexOf(u8, sub_output, "$14\r\nBreaking news!\r\n") != null); // "Breaking news!" (14 chars)
 }
 
 test "publish command - multiple subscribers" {
@@ -557,7 +558,7 @@ test "publish command - multiple subscribers" {
 
     // Check publisher response (should be 3 messages sent)
     const pub_output = publisher.getOutput();
-    try testing.expect(std.mem.indexOf(u8, pub_output, ":3\r\n") != null);
+    try testing.expect(mem.indexOf(u8, pub_output, ":3\r\n") != null);
 
     // Check all subscribers received the message
     const sub1_output = subscriber1.getOutput();
@@ -565,10 +566,10 @@ test "publish command - multiple subscribers" {
     const sub3_output = subscriber3.getOutput();
 
     for ([_][]const u8{ sub1_output, sub2_output, sub3_output }) |output| {
-        try testing.expect(std.mem.indexOf(u8, output, "*3\r\n") != null);
-        try testing.expect(std.mem.indexOf(u8, output, "$7\r\nmessage\r\n") != null);
-        try testing.expect(std.mem.indexOf(u8, output, "$9\r\nbroadcast\r\n") != null);
-        try testing.expect(std.mem.indexOf(u8, output, "$15\r\nHello everyone!\r\n") != null);
+        try testing.expect(mem.indexOf(u8, output, "*3\r\n") != null);
+        try testing.expect(mem.indexOf(u8, output, "$7\r\nmessage\r\n") != null);
+        try testing.expect(mem.indexOf(u8, output, "$9\r\nbroadcast\r\n") != null);
+        try testing.expect(mem.indexOf(u8, output, "$15\r\nHello everyone!\r\n") != null);
     }
 }
 
@@ -601,7 +602,7 @@ test "publish command - non-existent channel" {
 
     // Should return 0 messages sent
     const pub_output = publisher.getOutput();
-    try testing.expect(std.mem.indexOf(u8, pub_output, ":0\r\n") != null);
+    try testing.expect(mem.indexOf(u8, pub_output, ":0\r\n") != null);
 }
 
 test "publish command - empty channel" {
@@ -636,7 +637,7 @@ test "publish command - empty channel" {
 
     // Should return 0 messages sent
     const pub_output = publisher.getOutput();
-    try testing.expect(std.mem.indexOf(u8, pub_output, ":0\r\n") != null);
+    try testing.expect(mem.indexOf(u8, pub_output, ":0\r\n") != null);
 }
 
 test "subscriber limit per channel error" {
@@ -670,5 +671,5 @@ test "subscriber limit per channel error" {
 
     try testSubscribe(&client, &args);
     const output = client.getOutput();
-    try testing.expect(std.mem.indexOf(u8, output, "ERR maximum subscribers per channel reached") != null);
+    try testing.expect(mem.indexOf(u8, output, "ERR maximum subscribers per channel reached") != null);
 }

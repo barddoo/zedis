@@ -6,10 +6,11 @@ const ZedisValue = storeModule.ZedisValue;
 const ValueType = storeModule.ValueType;
 const ZedisList = @import("../list.zig").ZedisList;
 const ZedisListNode = @import("../list.zig").ZedisListNode;
-const Config = @import("../config.zig").Config;
-const fs = std.fs;
+const Config = @import("../config.zig");
 const Io = std.Io;
-const eql = std.mem.eql;
+const Dir = Io.Dir;
+const mem = std.mem;
+const eql = mem.eql;
 
 const DEFAULT_FILE_NAME = "test.rdb";
 
@@ -30,13 +31,13 @@ const INT_PREFIX_32_BITS = 0xC2;
 const VALUE_TYPE_STR = 0x00;
 
 pub const RdbWriteError = error{ StringTooLarge, NumberTooLarge };
-pub const RdbError = RdbWriteError || std.fs.File.WriteError || error{WriteFailed};
+pub const RdbError = RdbWriteError || std.fmt.BufPrintError || error{WriteFailed};
 
 pub const Writer = struct {
-    allocator: std.mem.Allocator,
+    allocator: mem.Allocator,
     buffer: []u8,
-    file: std.fs.File,
-    buffered_writer: std.fs.File.Writer,
+    file: Io.File,
+    buffered_writer: Io.File.Writer,
     store: *Store,
     checksum: std.hash.crc.Crc64Redis,
     io: Io,
@@ -57,7 +58,7 @@ pub const Writer = struct {
 
     inline fn writeInt(self: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
-        std.mem.writeInt(T, &buf, value, endian);
+        mem.writeInt(T, &buf, value, endian);
         self.checksum.update(&buf);
         try self.buffered_writer.interface.writeAll(&buf);
     }
@@ -71,18 +72,18 @@ pub const Writer = struct {
         try self.buffered_writer.interface.flush();
     }
 
-    pub fn init(allocator: std.mem.Allocator, store: *Store, fileName: []const u8, config: Config, io: Io) !Writer {
-        fs.cwd().deleteFile(fileName) catch |err| switch (err) {
+    pub fn init(allocator: mem.Allocator, store: *Store, fileName: []const u8, config: Config, io: Io) !Writer {
+        Dir.cwd().deleteFile(io, fileName) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
-        const file = try std.fs.cwd().createFile(fileName, .{ .truncate = true });
+        const file = try Dir.cwd().createFile(io, fileName, .{ .truncate = true });
 
         // Allocate buffer using configured size (default 256KB for optimal SSD throughput)
         const buffer = try allocator.alloc(u8, config.rdb_write_buffer_size);
         errdefer allocator.free(buffer);
 
-        const buffered_writer = file.writer(buffer);
+        const buffered_writer = file.writer(io, buffer);
 
         return .{
             .allocator = allocator,
@@ -97,7 +98,7 @@ pub const Writer = struct {
 
     pub fn deinit(self: *Writer) void {
         _ = self.flush() catch {};
-        self.file.close();
+        self.file.close(self.io);
         self.allocator.free(self.buffer);
     }
 
@@ -140,7 +141,7 @@ pub const Writer = struct {
         const bits = if (@sizeOf(usize) == 8) 64 else 32;
         try self.writeMetadata("redis-bits", .{ .int = bits });
 
-        const ts = try Io.Clock.real.now(self.io);
+        const ts = try self.store.clock.now();
         const now_timestamp = ts.toMilliseconds();
         try self.writeMetadata("ctime", .{ .int = now_timestamp });
 
@@ -258,10 +259,10 @@ pub const Writer = struct {
 };
 
 pub const Reader = struct {
-    allocator: std.mem.Allocator,
+    allocator: mem.Allocator,
     buffer: []u8,
-    file: std.fs.File,
-    reader: std.fs.File.Reader,
+    file: Io.File,
+    reader: Io.File.Reader,
     store: *Store,
 
     const MAGIC_STRING = "REDIS";
@@ -279,8 +280,8 @@ pub const Reader = struct {
         select_db: u64,
     };
 
-    pub fn init(allocator: std.mem.Allocator, store: *Store) !Reader {
-        const file = try fs.cwd().openFile(DEFAULT_FILE_NAME, .{});
+    pub fn init(allocator: mem.Allocator, store: *Store) !Reader {
+        const file = try Dir.cwd().openFile(DEFAULT_FILE_NAME, .{});
 
         const buffer = try allocator.alloc(u8, 1024 * 100);
 
@@ -290,7 +291,7 @@ pub const Reader = struct {
     }
 
     pub fn rdbFileExists() bool {
-        fs.cwd().access(DEFAULT_FILE_NAME, .{}) catch {
+        Dir.cwd().access(DEFAULT_FILE_NAME, .{}) catch {
             return false;
         };
 
@@ -377,7 +378,7 @@ pub const Reader = struct {
     }
 
     fn assert(incoming_byes: []u8, expected: []const u8) void {
-        std.debug.assert(std.mem.eql(u8, incoming_byes, expected));
+        std.debug.assert(mem.eql(u8, incoming_byes, expected));
     }
 
     fn readLength(self: *Reader) !u64 {
@@ -464,7 +465,7 @@ test "ZDB init and deinit" {
     const config = Config{};
     var zdb = try Writer.init(allocator, &store, test_file, config);
     defer zdb.deinit();
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(test_file) catch {};
 
     try testing.expect(zdb.allocator.ptr == allocator.ptr);
     try testing.expect(zdb.store == &store);
@@ -480,14 +481,14 @@ test "ZDB writeFile creates valid RDB header" {
     const config = Config{};
     var zdb = try Writer.init(allocator, &store, test_file, config);
     defer zdb.deinit();
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(test_file) catch {};
 
     try zdb.writeFile();
 
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
     defer allocator.free(file_content);
 
-    try testing.expect(std.mem.startsWith(u8, file_content, "REDIS0012"));
+    try testing.expect(mem.startsWith(u8, file_content, "REDIS0012"));
     try testing.expect(file_content[9] == 0xFA); // metadata marker
 }
 
@@ -501,17 +502,17 @@ test "ZDB writeString writes correct format" {
     const config = Config{};
     var zdb = try Writer.init(allocator, &store, test_file, config);
     defer zdb.deinit();
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(test_file) catch {};
 
     try zdb.genericWrite(.{ .string = "test" });
     try zdb.flush();
     try zdb.file.sync();
 
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
     defer allocator.free(file_content);
 
     try testing.expectEqual(@as(u8, 4), file_content[0]);
-    try testing.expect(std.mem.eql(u8, file_content[1..5], "test"));
+    try testing.expect(mem.eql(u8, file_content[1..5], "test"));
 }
 
 test "ZDB writeMetadata writes correct format" {
@@ -524,7 +525,7 @@ test "ZDB writeMetadata writes correct format" {
     const config = Config{};
     var zdb = try Writer.init(allocator, &store, test_file, config);
     defer zdb.deinit();
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(test_file) catch {};
 
     const key = "test";
     const value = "random";
@@ -532,18 +533,18 @@ test "ZDB writeMetadata writes correct format" {
     try zdb.flush();
     try zdb.file.sync();
 
-    const file_content = try std.fs.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
     defer allocator.free(file_content);
 
     try testing.expectEqual(0xFA, file_content[0]);
     // Key
     try testing.expectEqual(key.len, file_content[1]);
-    try testing.expect(std.mem.eql(u8, file_content[2..6], key));
+    try testing.expect(mem.eql(u8, file_content[2..6], key));
 
     // Value
     try testing.expectEqual(value.len, file_content[key.len + 2]);
 
     const valueStart = 3 + key.len;
     const valueEnd = valueStart + value.len;
-    try testing.expect(std.mem.eql(u8, file_content[valueStart..valueEnd], value));
+    try testing.expect(mem.eql(u8, file_content[valueStart..valueEnd], value));
 }

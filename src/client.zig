@@ -2,7 +2,7 @@ const std = @import("std");
 const Stream = std.Io.net.Stream;
 const posix = std.posix;
 const pollfd = posix.pollfd;
-const Parser = @import("parser.zig").Parser;
+const Parser = @import("parser.zig");
 const store_mod = @import("store.zig");
 const Store = store_mod.Store;
 const ZedisObject = store_mod.ZedisObject;
@@ -13,8 +13,10 @@ const Command = @import("parser.zig").Command;
 const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
 const Server = @import("./server.zig");
 const PubSubContext = @import("./commands/pubsub.zig").PubSubContext;
-const Config = @import("./config.zig").Config;
+const Config = @import("./config.zig");
 const resp = @import("./commands/resp.zig");
+
+const log = std.log.scoped(.client);
 
 var next_client_id: std.atomic.Value(u64) = .init(1);
 
@@ -63,7 +65,7 @@ pub const Client = struct {
 
     pub fn enterPubSubMode(self: *Client) void {
         self.is_in_pubsub_mode = true;
-        std.log.debug("Client {} entered pubsub mode", .{self.client_id});
+        log.debug("Client {} entered pubsub mode", .{self.client_id});
     }
 
     pub fn handle(self: *Client) !void {
@@ -87,18 +89,18 @@ pub const Client = struct {
                 // If there's an error (like a closed connection), we stop handling this client
                 if (err == error.EndOfStream) {
                     if (self.is_in_pubsub_mode) {
-                        std.log.debug("Client {} in pubsub mode, connection ended", .{self.client_id});
+                        log.debug("Client {} in pubsub mode, connection ended", .{self.client_id});
                     }
                     return;
                 }
                 // Socket error, the connection should be closed
                 if (err == error.ReadFailed) {
                     if (self.is_in_pubsub_mode) {
-                        std.log.debug("Client {} in pubsub mode, read failed", .{self.client_id});
+                        log.debug("Client {} in pubsub mode, read failed", .{self.client_id});
                     }
                     return;
                 }
-                std.log.err("Parse error: {s}", .{@errorName(err)});
+                log.err("Parse error: {s}", .{@errorName(err)});
 
                 // Send error response directly (parse errors happen before enqueueing)
                 var writer_buffer: [1024]u8 = undefined;
@@ -124,7 +126,7 @@ pub const Client = struct {
 
             // If we're in pubsub mode after executing a command, stay connected
             if (self.is_in_pubsub_mode) {
-                std.log.debug("Client {} staying in pubsub mode", .{self.client_id});
+                log.debug("Client {} staying in pubsub mode", .{self.client_id});
             }
         }
     }

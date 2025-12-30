@@ -1,11 +1,5 @@
 const std = @import("std");
 const Stream = std.Io.net.Stream;
-const Allocator = std.mem.Allocator;
-const time = std.time;
-const Store = @import("./store.zig").Store;
-const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
-const config_module = @import("./config.zig");
-const KeyValueAllocator = @import("./kv_allocator.zig");
 const Server = @import("./server.zig");
 
 pub const ConnectionContext = struct {

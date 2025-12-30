@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Stream = std.Io.net.Stream;
 const time = std.time;
 const types = @import("types.zig");
 const ConnectionContext = types.ConnectionContext;
@@ -11,16 +10,18 @@ const Reader = @import("./rdb/zdb.zig").Reader;
 const Store = @import("store.zig").Store;
 const pubsub = @import("./commands/pubsub.zig");
 const PubSubContext = pubsub.PubSubContext;
-const config_module = @import("config.zig");
+const Config = @import("config.zig");
 const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
 const Io = std.Io;
 const Stream = Io.net.Stream;
 
+const log = std.log.scoped(.server);
+
 const Server = @This();
 
 // Configuration
-config: config_module.Config,
+config: Config,
 
 // Base allocator (only for server initialization)
 base_allocator: std.mem.Allocator,
@@ -58,7 +59,7 @@ pub fn initWithConfig(
     base_allocator: Allocator,
     host: []const u8,
     port: u16,
-    config: config_module.Config,
+    config: Config,
     io: Io,
 ) !Server {
     const address = try Io.net.IpAddress.parse(host, port);
@@ -71,7 +72,12 @@ pub fn initWithConfig(
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
     for (&databases) |*db| {
-        db.* = Store.init(kv_allocator.allocator(), io, config.initial_capacity);
+        db.* = try Store.init(kv_allocator.allocator(), io, config.initial_capacity, config);
+    }
+
+    // Start clock threads AFTER all stores are in their final locations
+    for (&databases) |*db| {
+        try db.clock.start();
     }
 
     // Link KV allocator to database 0 for LRU eviction
@@ -88,7 +94,8 @@ pub fn initWithConfig(
     const client_pool = try base_allocator.alloc(Client, config.max_clients);
     @memset(client_pool, undefined);
 
-    const ts = try Io.Clock.real.now(io);
+    // Use database clock for timestamp
+    const ts = try databases[0].clock.now();
     const now = ts.toMilliseconds();
 
     var server = Server{
@@ -118,13 +125,13 @@ pub fn initWithConfig(
         .createdTime = now,
 
         // AOF
-        .aof_writer = try aof.Writer.init(false),
+        .aof_writer = try aof.Writer.init(io, false),
     };
 
     if (config.requiresAuth()) {
-        std.log.info("Authentication required", .{});
+        log.info("Authentication required", .{});
     } else {
-        std.log.debug("No authentication required", .{});
+        log.debug("No authentication required", .{});
     }
 
     server.pubsub_context = PubSubContext.init(&server);
@@ -136,12 +143,12 @@ pub fn initWithConfig(
     if (true) {
         if (aof.Reader.init(server.temp_arena.allocator(), &server.databases[0], &server.registry, io)) |reader_value| {
             var reader = reader_value;
-            std.log.info("Loading AOF into database 0", .{});
+            log.info("Loading AOF into database 0", .{});
             reader.read() catch |err| {
-                std.log.warn("Failed to read AOF: {s}", .{@errorName(err)});
+                log.warn("Failed to read AOF: {s}", .{@errorName(err)});
             };
         } else |err| {
-            std.log.debug("AOF not available: {s}", .{@errorName(err)});
+            log.debug("AOF not available: {s}", .{@errorName(err)});
         }
     } else {
         // Load RDB file if it exists
@@ -151,18 +158,18 @@ pub fn initWithConfig(
                 defer reader.deinit();
 
                 if (reader.readFile()) |data| {
-                    std.log.info("Loading RDB into database 0", .{});
+                    log.info("Loading RDB into database 0", .{});
                     server.createdTime = data.ctime;
                 } else |err| {
-                    std.log.warn("Failed to read RDB: {s}", .{@errorName(err)});
+                    log.warn("Failed to read RDB: {s}", .{@errorName(err)});
                 }
             } else |err| {
-                std.log.warn("Failed to initialize RDB reader: {s}", .{@errorName(err)});
+                log.warn("Failed to initialize RDB reader: {s}", .{@errorName(err)});
             }
         }
     }
 
-    std.log.info("Server initialized with hybrid allocation - Fixed: {}MB, KV: {}MB, Arena: {}MB", .{
+    log.info("Server initialized with hybrid allocation - Fixed: {}MB, KV: {}MB, Arena: {}MB", .{
         config.fixedMemorySize() / (1024 * 1024),
         config.kv_memory_budget / (1024 * 1024),
         config.temp_arena_size / (1024 * 1024),
@@ -199,9 +206,9 @@ pub fn deinit(self: *Server) void {
     self.temp_arena.deinit();
 
     // AOF Deinit
-    self.aof_writer.deinit();
+    self.aof_writer.deinit(self.io);
 
-    std.log.info("Server deinitialized - all memory freed", .{});
+    log.info("Server deinitialized - all memory freed", .{});
 }
 
 // The main server loop. It waits for incoming connections and
@@ -212,7 +219,7 @@ pub fn listen(self: *Server) !void {
 
     while (true) {
         const conn = self.listener.accept(self.io) catch |err| {
-            std.log.err("Error accepting connection: {s}", .{@errorName(err)});
+            log.err("Error accepting connection: {s}", .{@errorName(err)});
             continue;
         };
 
@@ -223,14 +230,14 @@ pub fn listen(self: *Server) !void {
 
 fn handleConnectionAsync(self: *Server, conn: Stream) void {
     self.handleConnection(conn) catch |err| {
-        std.log.err("Connection error: {s}", .{@errorName(err)});
+        log.err("Connection error: {s}", .{@errorName(err)});
     };
 }
 
 fn handleConnection(self: *Server, conn: Stream) !void {
     // Allocate client from fixed pool
     const client_slot = self.allocateClient() orelse {
-        std.log.warn("Maximum client connections reached, rejecting connection", .{});
+        log.warn("Maximum client connections reached, rejecting connection", .{});
         conn.close(self.io);
         return;
     };
@@ -252,17 +259,17 @@ fn handleConnection(self: *Server, conn: Stream) !void {
         if (client_slot.is_in_pubsub_mode) {
             // Remove this client from all channels
             self.cleanupDisconnectedPubSubClient(client_slot.client_id);
-            std.log.debug("Client {} removed from all channels and deallocated", .{client_slot.client_id});
+            log.debug("Client {} removed from all channels and deallocated", .{client_slot.client_id});
         }
 
         // Always clean up and deallocate when connection ends
         client_slot.deinit();
         self.deallocateClient(client_slot);
-        std.log.debug("Client {} deallocated from pool", .{client_slot.client_id});
+        log.debug("Client {} deallocated from pool", .{client_slot.client_id});
     }
 
     try client_slot.handle();
-    std.log.debug("Client {} handled", .{client_slot.client_id});
+    log.debug("Client {} handled", .{client_slot.client_id});
 }
 
 // Client pool management methods (thread-safe)
@@ -367,16 +374,16 @@ pub fn cleanupDisconnectedPubSubClient(self: *Server, client_id: u64) void {
     while (channel_iterator.next()) |entry| {
         const channel_name = entry.key_ptr.*;
         self.unsubscribeFromChannel(channel_name, client_id) catch |err| {
-            std.log.warn("Failed to unsubscribe client {} from channel {s}: {s}", .{ client_id, channel_name, @errorName(err) });
+            log.warn("Failed to unsubscribe client {} from channel {s}: {s}", .{ client_id, channel_name, @errorName(err) });
         };
     }
 }
 
 // Memory statistics
-pub fn getMemoryStats(self: *Server) config_module.MemoryStats {
+pub fn getMemoryStats(self: *Server) Config.MemoryStats {
     const fixed_size = self.config.fixedMemorySize();
     const total_budget = self.config.totalMemoryBudget();
-    return config_module.MemoryStats{
+    return Config.MemoryStats{
         .fixed_memory_used = fixed_size,
         .kv_memory_used = self.kv_allocator.getMemoryUsage(),
         .temp_arena_used = self.temp_arena.queryCapacity() - self.temp_arena.state.buffer_list.first.?.data.len,
