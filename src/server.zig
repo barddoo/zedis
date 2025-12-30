@@ -13,6 +13,7 @@ const PubSubContext = pubsub.PubSubContext;
 const Config = @import("config.zig");
 const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
+const Clock = @import("clock.zig");
 const Io = std.Io;
 const Stream = Io.net.Stream;
 
@@ -69,18 +70,15 @@ pub fn initWithConfig(
     // Initialize the KV allocator with eviction support
     var kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
 
+    // Initialize shared clock for all databases
+    var clock = Clock.init(io, config.clock_update_ms);
+
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
     for (&databases) |*db| {
-        db.* = try Store.init(kv_allocator.allocator(), io, .{
+        db.* = try Store.init(kv_allocator.allocator(), io, &clock, .{
             .initial_capacity = config.initial_capacity,
-            .clock_update_ms = config.clock_update_ms,
         });
-    }
-
-    // Start clock threads AFTER all stores are in their final locations
-    for (&databases) |*db| {
-        try db.clock.start();
     }
 
     // Link KV allocator to database 0 for LRU eviction
@@ -97,8 +95,8 @@ pub fn initWithConfig(
     const client_pool = try base_allocator.alloc(Client, config.max_clients);
     @memset(client_pool, undefined);
 
-    // Use database clock for timestamp
-    const ts = try databases[0].clock.now();
+    // Use shared clock for timestamp
+    const ts = try clock.now();
     const now = ts.toMilliseconds();
 
     var server = Server{
@@ -177,6 +175,9 @@ pub fn initWithConfig(
         config.kv_memory_budget / (1024 * 1024),
         config.temp_arena_size / (1024 * 1024),
     });
+
+    // Start clock thread after all stores are in their final locations
+    try clock.start();
 
     return server;
 }
