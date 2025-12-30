@@ -517,13 +517,15 @@ test "TimeSeries: alter updates properties" {
 const Store = @import("../store.zig").Store;
 const Value = @import("../parser.zig").Value;
 const ts_commands = @import("../commands/time_series.zig");
+const Clock = @import("../clock.zig");
 
 test "TS.INCRBY increments from zero" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -574,7 +576,8 @@ test "TS.INCRBY increments from existing value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -626,7 +629,8 @@ test "TS.DECRBY decrements value" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -678,7 +682,8 @@ test "TS.ALTER changes retention" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -716,7 +721,8 @@ test "TS.ALTER changes duplicate policy" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -938,7 +944,8 @@ test "TS.RANGE command with COUNT parameter" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -1609,7 +1616,8 @@ test "TS.RANGE command with aggregation parameter" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

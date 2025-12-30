@@ -11,6 +11,7 @@ const Io = std.Io;
 const Dir = Io.Dir;
 const mem = std.mem;
 const eql = mem.eql;
+const Clock = @import("../clock.zig");
 
 const DEFAULT_FILE_NAME = "test.rdb";
 
@@ -458,7 +459,8 @@ const testing = std.testing;
 test "ZDB init and deinit" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
     const test_file = "test_db.rdb";
 
@@ -474,7 +476,8 @@ test "ZDB init and deinit" {
 test "ZDB writeFile creates valid RDB header" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
     const test_file = "test_header.rdb";
 
@@ -495,7 +498,8 @@ test "ZDB writeFile creates valid RDB header" {
 test "ZDB writeString writes correct format" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
     const test_file = "test_string.rdb";
 
@@ -518,7 +522,8 @@ test "ZDB writeString writes correct format" {
 test "ZDB writeMetadata writes correct format" {
     const allocator = testing.allocator;
 
-    var store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer store.deinit();
     const test_file = "test_string.rdb";
 

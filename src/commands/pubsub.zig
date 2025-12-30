@@ -126,6 +126,8 @@ const MockClient = @import("../test_utils.zig").MockClient;
 const MockServer = @import("../test_utils.zig").MockServer;
 const MockPubSubContext = @import("../test_utils.zig").MockPubSubContext;
 const Store = @import("../store.zig").Store;
+const Io = std.Io;
+const Clock = @import("../clock.zig");
 
 // Test wrapper for publish command to work with MockClient
 fn testPublish(client: *MockClient, args: []const Value) !void {
@@ -312,7 +314,8 @@ test "PubSubContext - find client by ID" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -349,7 +352,8 @@ test "subscribe command - single channel subscription" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -388,7 +392,8 @@ test "subscribe command - multiple channel subscriptions" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -433,7 +438,8 @@ test "subscribe command - channel limit reached" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -471,7 +477,8 @@ test "publish command - single subscriber" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -518,7 +525,8 @@ test "publish command - multiple subscribers" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -578,7 +586,8 @@ test "publish command - non-existent channel" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -610,7 +619,8 @@ test "publish command - empty channel" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);
@@ -645,7 +655,8 @@ test "subscriber limit per channel error" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var data_store = Store.init(allocator, 4096);
+    var clock = Clock.init(testing.io, 0);
+    var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
     defer data_store.deinit();
 
     var server = MockServer.init(allocator);

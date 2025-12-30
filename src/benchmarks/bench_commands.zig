@@ -10,6 +10,7 @@ const Writer = std.Io.Writer;
 const Client = @import("../client.zig").Client;
 const aof = @import("../aof/aof.zig");
 const Io = std.Io;
+const Clock = @import("../clock.zig");
 
 const CommandBenchContext = struct {
     store: Store,
@@ -23,7 +24,8 @@ const CommandBenchContext = struct {
     pub fn init(allocator: Allocator) !CommandBenchContext {
         var threaded: Io.Threaded = .init_single_threaded;
         const io = threaded.io();
-        const store = try Store.init(allocator, io, .{});
+        var clock = Clock.init(io, 0);
+        const store = try Store.init(allocator, io, &clock, .{});
         const registry = try initRegistry(allocator);
 
         // Use discarding writer for benchmarking (we don't need output)

@@ -3,6 +3,7 @@ const Store = @import("../store.zig").Store;
 const bench_runner = @import("bench_runner.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const Clock = @import("../clock.zig");
 
 const BenchContext = struct {
     store: Store,
@@ -13,7 +14,8 @@ const BenchContext = struct {
     pub fn init(allocator: Allocator, key_count: usize) !BenchContext {
         var threaded: Io.Threaded = .init_single_threaded;
         const io = threaded.io();
-        const store = try Store.init(allocator, io, .{});
+        var clock = Clock.init(io, 0);
+        const store = try Store.init(allocator, io, &clock, .{});
 
         // Pre-generate keys and values
         const keys = try allocator.alloc([]const u8, key_count);
