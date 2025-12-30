@@ -72,6 +72,7 @@ pub fn initWithConfig(
 
     // Initialize shared clock for all databases
     var clock = Clock.init(io, config.clock_update_ms);
+    try clock.start();
 
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
@@ -175,9 +176,6 @@ pub fn initWithConfig(
         config.kv_memory_budget / (1024 * 1024),
         config.temp_arena_size / (1024 * 1024),
     });
-
-    // Start clock thread after all stores are in their final locations
-    try clock.start();
 
     return server;
 }

@@ -20,7 +20,6 @@ pub fn init(io: Io, clock_update_ms: u32) Clock {
 }
 
 pub fn start(self: *Clock) !void {
-    assert(ts == undefined);
     if (self.cached) {
         const thread = try std.Thread.spawn(.{}, updateLoop, .{self});
         thread.detach();
@@ -31,8 +30,8 @@ fn updateLoop(self: *Clock) !void {
     const duration: Io.Duration = .fromMilliseconds(self.clock_update_ms);
 
     while (true) {
-        try Io.sleep(self.io, duration, .real);
         ts = try Io.Clock.real.now(self.io);
+        try Io.sleep(self.io, duration, .real);
     }
 }
 
