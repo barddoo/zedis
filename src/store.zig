@@ -63,6 +63,11 @@ pub const ZedisObject = struct {
     value: ZedisValue,
 };
 
+pub const StoreOptions = struct {
+    clock_update_ms: u32 = 100,
+    initial_capacity: u32 = 100,
+};
+
 pub const Store = struct {
     allocator: std.mem.Allocator,
     // Cache hash map

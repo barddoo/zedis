@@ -13,7 +13,7 @@ const BenchContext = struct {
     pub fn init(allocator: Allocator, key_count: usize) !BenchContext {
         var threaded: Io.Threaded = .init_single_threaded;
         const io = threaded.io();
-        const store = Store.init(allocator, io, 8192);
+        const store = Store.init(allocator, io, 8192, .{});
 
         // Pre-generate keys and values
         const keys = try allocator.alloc([]const u8, key_count);
