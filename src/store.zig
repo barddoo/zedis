@@ -93,13 +93,13 @@ pub const Store = struct {
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator, io: Io, initial_capacity: u32, config: Config) !Store {
+    pub fn init(allocator: std.mem.Allocator, io: Io, options: StoreOptions) !Store {
         var map: OptimizedHashMap = .empty;
-        try map.ensureTotalCapacity(allocator, initial_capacity);
+        try map.ensureTotalCapacity(allocator, options.initial_capacity);
 
         // Initialize clock but DON'T start thread yet
         // Thread will be started after Store is in its final location
-        const clock: Clock = try .init(io, config);
+        const clock: Clock = .init(io, options.clock_update_ms);
 
         return .{
             .allocator = allocator,

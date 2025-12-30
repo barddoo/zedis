@@ -2,8 +2,8 @@ const std = @import("std");
 const Store = @import("../store.zig").Store;
 const CommandRegistry = @import("../commands/registry.zig").CommandRegistry;
 const initRegistry = @import("../commands/init.zig").initRegistry;
-const parser = @import("../parser.zig");
-const Value = parser.Value;
+const Parser = @import("../parser.zig");
+const Value = Parser.Value;
 const bench_runner = @import("bench_runner.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -23,7 +23,7 @@ const CommandBenchContext = struct {
     pub fn init(allocator: Allocator) !CommandBenchContext {
         var threaded: Io.Threaded = .init_single_threaded;
         const io = threaded.io();
-        const store = Store.init(allocator, io, 8192);
+        const store = try Store.init(allocator, io, .{});
         const registry = try initRegistry(allocator);
 
         // Use discarding writer for benchmarking (we don't need output)
@@ -178,7 +178,7 @@ fn benchCommandLrange(ctx: *CommandBenchContext) !void {
 fn benchRespParsing(allocator: Allocator) !void {
     const input = "*3\r\n$3\r\nSET\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n";
     var reader = std.Io.Reader.fixed(input);
-    var p = parser.Parser.init(allocator);
+    var p = Parser.init(allocator);
     var cmd = try p.parse(&reader);
     cmd.deinit();
 }

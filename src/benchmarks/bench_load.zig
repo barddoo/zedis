@@ -151,19 +151,18 @@ pub const LoadTestConfig = struct {
 
 pub fn runLoadTest(
     allocator: Allocator,
+    io: std.Io,
     config: LoadTestConfig,
     workload_name: []const u8,
     workload_fn: *const fn (client: *ClientConnection, workload_ctx: *WorkloadContext, buffer: []u8) anyerror!void,
 ) !void {
-    var stdout_writer = std.Io.File.stdout().writer(&.{});
+    var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
     try stdout.print("\n--- Load Test: {s} ---\n", .{workload_name});
     try stdout.print("Clients: {d}, Operations: {d}\n", .{ config.num_clients, config.operations });
 
     // Wait a bit to ensure server is ready
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
     try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms) }, io);
 
     // Create client pool
@@ -185,8 +184,8 @@ pub fn runLoadTest(
     try stdout.print("Total requests: {d}\n\n", .{pool.totalRequests()});
 }
 
-pub fn runAllLoadTests(allocator: Allocator) !void {
-    var stdout_writer = std.Io.File.stdout().writer(&.{});
+pub fn runAllLoadTests(allocator: Allocator, io: std.Io) !void {
+    var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");
@@ -202,17 +201,16 @@ pub fn runAllLoadTests(allocator: Allocator) !void {
 
     // Check if stdin is a terminal (interactive mode)
     const stdin_file = std.Io.File.stdin();
-    const is_terminal = stdin_file.isTty();
+    const is_terminal = try stdin_file.isTty(io);
 
     if (is_terminal) {
         try stdout.writeAll("Press Enter to start tests (or Ctrl+C to cancel)...");
         var stdin_buf: [1]u8 = undefined;
-        _ = try stdin_file.read(&stdin_buf);
+        var reader = stdin_file.reader(io, &stdin_buf);
+        _ = try reader.interface.takeByte();
     } else {
         try stdout.writeAll("Starting tests in 2 seconds...\n");
         // Sleep for 2 seconds
-        var threaded: std.Io.Threaded = .init_single_threaded;
-        const io = threaded.io();
         try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(2 * std.time.ns_per_s) }, io);
     }
 
@@ -226,11 +224,11 @@ pub fn runAllLoadTests(allocator: Allocator) !void {
     for (configs) |config| {
         try stdout.print("\n### Configuration: {d} clients, {d} operations ###\n", .{ config.num_clients, config.operations });
 
-        try runLoadTest(allocator, config, "Write-Heavy (90W/10R)", workloadWriteHeavy);
-        try runLoadTest(allocator, config, "Read-Heavy (90R/10W)", workloadReadHeavy);
-        try runLoadTest(allocator, config, "Mixed (70R/30W)", workloadMixed);
-        try runLoadTest(allocator, config, "List Operations", workloadLists);
-        try runLoadTest(allocator, config, "Counter Increments", workloadCounters);
+        try runLoadTest(allocator, io, config, "Write-Heavy (90W/10R)", workloadWriteHeavy);
+        try runLoadTest(allocator, io, config, "Read-Heavy (90R/10W)", workloadReadHeavy);
+        try runLoadTest(allocator, io, config, "Mixed (70R/30W)", workloadMixed);
+        try runLoadTest(allocator, io, config, "List Operations", workloadLists);
+        try runLoadTest(allocator, io, config, "Counter Increments", workloadCounters);
     }
 
     try stdout.writeAll("\n");

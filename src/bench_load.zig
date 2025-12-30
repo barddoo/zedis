@@ -6,7 +6,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const io: std.Io.Threaded = .init_single_threaded;
+    var threaded: std.Io.Threaded = .init(allocator, .{});
+    const io = threaded.io();
+
     var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
@@ -19,5 +21,5 @@ pub fn main() !void {
     try stdout.writeAll("█" ** 100);
     try stdout.writeAll("\n\n");
 
-    try bench_load.runAllLoadTests(allocator);
+    try bench_load.runAllLoadTests(allocator, io);
 }

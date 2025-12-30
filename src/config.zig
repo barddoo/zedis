@@ -26,7 +26,7 @@ pub const MemoryStats = struct {
 
 // Network
 /// Bind to specific network interfaces. Default: "127.0.0.1 -::1"
-bind: []const u8 = "127.0.0.1 -::1",
+bind: []const u8 = "127.0.0.1",
 /// Enable protected mode for security when no password is set. Default: yes
 protected_mode: bool = true,
 /// TCP port to listen on. Default: 6379

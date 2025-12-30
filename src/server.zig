@@ -72,7 +72,10 @@ pub fn initWithConfig(
     // Initialize 16 databases with the KV allocator (shared memory pool)
     var databases: [16]Store = undefined;
     for (&databases) |*db| {
-        db.* = try Store.init(kv_allocator.allocator(), io, config.initial_capacity, config);
+        db.* = try Store.init(kv_allocator.allocator(), io, .{
+            .initial_capacity = config.initial_capacity,
+            .clock_update_ms = config.clock_update_ms,
+        });
     }
 
     // Start clock threads AFTER all stores are in their final locations

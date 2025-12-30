@@ -1,6 +1,5 @@
 const std = @import("std");
 const Io = std.Io;
-const Config = @import("./config.zig");
 const Timestamp = Io.Timestamp;
 
 const Clock = @This();
@@ -10,11 +9,11 @@ clock_update_ms: u32,
 cached: bool,
 io: Io,
 
-pub fn init(io: Io, config: Config) !Clock {
+pub fn init(io: Io, clock_update_ms: u32) Clock {
     return .{
         .ts = undefined,
-        .clock_update_ms = config.clock_update_ms,
-        .cached = config.clock_update_ms > 0,
+        .clock_update_ms = clock_update_ms,
+        .cached = clock_update_ms > 0,
         .io = io,
     };
 }
