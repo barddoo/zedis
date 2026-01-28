@@ -529,6 +529,10 @@ pub const Store = struct {
                     ts.deinit();
                     self.allocator.destroy(ts);
                 },
+                .bloom_filter => |bf| {
+                    bf.deinit();
+                    self.allocator.destroy(bf);
+                },
             }
         }
 

@@ -48,6 +48,7 @@ pub const Writer = struct {
             .int, .string, .short_string => 0x00,
             .list => 0x01,
             .time_series => 0x0A,
+            .bloom_filter => 0x0B,
         };
     }
 

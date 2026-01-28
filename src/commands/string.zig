@@ -28,7 +28,7 @@ pub fn get(writer: *Writer, store: *Store, args: []const Value) !void {
             .int => |i| {
                 try resp.writeIntBulkString(writer, i);
             },
-            .list, .time_series => return error.WrongType,
+            .list, .time_series, .bloom_filter => return error.WrongType,
         }
     } else {
         try resp.writeNull(writer);
