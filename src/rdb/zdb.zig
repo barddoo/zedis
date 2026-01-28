@@ -460,14 +460,14 @@ test "ZDB init and deinit" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
     const test_file = "test_db.rdb";
 
     const config = Config{};
-    var zdb = try Writer.init(allocator, &store, test_file, config);
+    var zdb = try Writer.init(allocator, &store, test_file, config, testing.io);
     defer zdb.deinit();
-    defer Dir.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
     try testing.expect(zdb.allocator.ptr == allocator.ptr);
     try testing.expect(zdb.store == &store);
@@ -477,18 +477,18 @@ test "ZDB writeFile creates valid RDB header" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
     const test_file = "test_header.rdb";
 
     const config = Config{};
-    var zdb = try Writer.init(allocator, &store, test_file, config);
+    var zdb = try Writer.init(allocator, &store, test_file, config, testing.io);
     defer zdb.deinit();
-    defer Dir.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
     try zdb.writeFile();
 
-    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(testing.io, test_file, allocator, .unlimited);
     defer allocator.free(file_content);
 
     try testing.expect(mem.startsWith(u8, file_content, "REDIS0012"));
@@ -499,20 +499,20 @@ test "ZDB writeString writes correct format" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
     const test_file = "test_string.rdb";
 
     const config = Config{};
-    var zdb = try Writer.init(allocator, &store, test_file, config);
+    var zdb = try Writer.init(allocator, &store, test_file, config, testing.io);
     defer zdb.deinit();
-    defer Dir.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
     try zdb.genericWrite(.{ .string = "test" });
     try zdb.flush();
-    try zdb.file.sync();
+    try zdb.file.sync(testing.io);
 
-    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(testing.io, test_file, allocator, .unlimited);
     defer allocator.free(file_content);
 
     try testing.expectEqual(@as(u8, 4), file_content[0]);
@@ -523,22 +523,22 @@ test "ZDB writeMetadata writes correct format" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
     const test_file = "test_string.rdb";
 
     const config = Config{};
-    var zdb = try Writer.init(allocator, &store, test_file, config);
+    var zdb = try Writer.init(allocator, &store, test_file, config, testing.io);
     defer zdb.deinit();
-    defer Dir.cwd().deleteFile(test_file) catch {};
+    defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
     const key = "test";
     const value = "random";
     try zdb.writeMetadata(key, .{ .string = value });
     try zdb.flush();
-    try zdb.file.sync();
+    try zdb.file.sync(testing.io);
 
-    const file_content = try Dir.cwd().readFileAlloc(allocator, test_file, 1024);
+    const file_content = try Dir.cwd().readFileAlloc(testing.io, test_file, allocator, .unlimited);
     defer allocator.free(file_content);
 
     try testing.expectEqual(0xFA, file_content[0]);

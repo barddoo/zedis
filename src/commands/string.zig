@@ -55,7 +55,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
         var new_value: i64 = undefined;
 
         switch (v.value) {
-            .string => |_| {
+            .string => {
                 const intValue = std.fmt.parseInt(i64, v.value.string, 10) catch {
                     return error.ValueNotInteger;
                 };
@@ -63,7 +63,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                     return error.ValueNotInteger;
                 };
             },
-            .short_string => |_| {
+            .short_string => {
                 const intValue = std.fmt.parseInt(i64, v.value.short_string.asSlice(), 10) catch {
                     return error.ValueNotInteger;
                 };
@@ -71,7 +71,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                     return error.ValueNotInteger;
                 };
             },
-            .int => |_| {
+            .int => {
                 new_value = std.math.add(i64, v.value.int, value) catch {
                     return error.ValueNotInteger;
                 };

@@ -90,10 +90,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseFast, // Always use optimized builds for benchmarks
         }),
     });
-    b.installArtifact(bench_micro_exe);
 
     const run_bench_micro = b.addRunArtifact(bench_micro_exe);
-    run_bench_micro.step.dependOn(b.getInstallStep());
 
     const bench_micro_step = b.step("benchmark:micro", "Run micro-benchmarks (component-level)");
     bench_micro_step.dependOn(&run_bench_micro.step);
@@ -107,10 +105,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseFast,
         }),
     });
-    b.installArtifact(bench_load_exe);
 
     const run_bench_load = b.addRunArtifact(bench_load_exe);
-    run_bench_load.step.dependOn(b.getInstallStep());
 
     const bench_load_step = b.step("benchmark:load", "Run load tests (requires running server)");
     bench_load_step.dependOn(&run_bench_load.step);

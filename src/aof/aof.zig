@@ -92,14 +92,14 @@ pub const Reader = struct {
     }
 };
 
+const testing = std.testing;
 test "aof reading test" {
-    const testing = std.testing;
     const reg_init = @import("../commands/init.zig");
 
     // Read a command and test that the value is stored as expected
     const test_file_data = "*3\r\n$3\r\nset\r\n$1\r\nt\r\n$4\r\ntest\r\n";
     const cwd = Dir.cwd();
-    const test_file = try cwd.createFile("aof_reading_test.aof", .{ .read = true });
+    const test_file = try cwd.createFile(testing.io, "aof_reading_test.aof", .{ .read = true });
     defer cwd.deleteFile("aof_reading_test.aof") catch {};
     try test_file.writeAll(test_file_data);
 
@@ -120,14 +120,13 @@ test "aof reading test" {
     try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
 }
 test "aof writing test" {
-    const testing = std.testing;
     const reg_init = @import("../commands/init.zig");
 
     // Execute a command and test that it writes it correctly
     const test_file_name = "aof_writing_test.aof";
     const cwd = Dir.cwd();
-    const test_file = try cwd.createFile(test_file_name, .{ .read = true });
-    defer cwd.deleteFile("aof_writing_test.aof") catch {};
+    const test_file = try cwd.createFile(testing.io, test_file_name, .{ .read = true });
+    defer cwd.deleteFile(testing.io, "aof_writing_test.aof") catch {};
 
     const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
 

@@ -1,5 +1,4 @@
 const std = @import("std");
-const Io = std.Io;
 const Client = @import("./client.zig").Client;
 const eql = std.mem.eql;
 const parseInt = std.fmt.parseInt;
@@ -40,13 +39,13 @@ tcp_keepalive: u32 = 300,
 
 // General
 /// Run as a daemon process. Default: no
-// daemonize: bool = false,
+daemonize: bool = false,
 /// PID file location when daemonized. Default: "/var/run/redis_6379.pid"
-// pidfile: []const u8 = "/var/run/redis_6379.pid",
+pidfile: []const u8 = "/var/run/redis_6379.pid",
 /// Log verbosity level (debug, verbose, notice, warning). Default: "notice"
-// loglevel: []const u8 = "notice",
+loglevel: []const u8 = "notice",
 /// Log file path (empty string for stdout). Default: ""
-// logfile: []const u8 = "",
+logfile: []const u8 = "",
 /// Number of databases. Default: 16
 databases: u32 = 16,
 /// Clock update interval in milliseconds.
@@ -69,23 +68,23 @@ rdb_del_sync_files: bool = false,
 /// Working directory for RDB/AOF files. Default: "./"
 dir: []const u8 = "./",
 
-// // Replication
-// /// Serve stale data when replica loses connection to master. Default: yes
-// replica_serve_stale_data: bool = true,
-// /// Make replicas read-only. Default: yes
-// replica_read_only: bool = true,
-// /// Use diskless replication (transfer RDB via socket). Default: yes
-// repl_diskless_sync: bool = true,
-// /// Delay before diskless sync starts (seconds). Default: 5
-// repl_diskless_sync_delay: u32 = 5,
-// /// Max replicas to sync in parallel (0 = unlimited). Default: 0
-// repl_diskless_sync_max_replicas: u32 = 0,
-// /// How replicas load RDB (disabled, on-empty-db, swapdb). Default: "disabled"
-// repl_diskless_load: []const u8 = "disabled",
-// /// Disable TCP_NODELAY on replica socket. Default: no
-// repl_disable_tcp_nodelay: bool = false,
-// /// Priority for replica promotion (lower = higher priority). Default: 100
-// replica_priority: u32 = 100,
+// Replication
+/// Serve stale data when replica loses connection to master. Default: yes
+replica_serve_stale_data: bool = true,
+/// Make replicas read-only. Default: yes
+replica_read_only: bool = true,
+/// Use diskless replication (transfer RDB via socket). Default: yes
+repl_diskless_sync: bool = true,
+/// Delay before diskless sync starts (seconds). Default: 5
+repl_diskless_sync_delay: u32 = 5,
+/// Max replicas to sync in parallel (0 = unlimited). Default: 0
+repl_diskless_sync_max_replicas: u32 = 0,
+/// How replicas load RDB (disabled, on-empty-db, swapdb). Default: "disabled"
+repl_diskless_load: []const u8 = "disabled",
+/// Disable TCP_NODELAY on replica socket. Default: no
+repl_disable_tcp_nodelay: bool = false,
+/// Priority for replica promotion (lower = higher priority). Default: 100
+replica_priority: u32 = 100,
 
 // Security
 /// Maximum length of ACL log. Default: 128
@@ -137,23 +136,27 @@ aof_load_broken_max_size: u32 = 4096,
 /// Use RDB preamble in AOF for faster restarts. Default: yes
 aof_use_rdb_preamble: bool = true,
 
+// Legacy fields
+timeout_seconds: u64 = 0,
+host: []const u8 = "127.0.0.1",
+
 // Memory and performance configuration (production-ready defaults)
 max_clients: u32 = 10000, // Maximum concurrent client connections
 max_channels: u32 = 10000, // Maximum pub/sub channels (production: thousands of channels)
 max_subscribers_per_channel: u32 = 1000, // Max subscribers per channel (production: hundreds per channel)
 kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store (production headroom)
 temp_arena_size: usize = 512 * 1024 * 1024, // 512MB for temporary allocations
-initial_capacity: u32 = 1_000_000, // Initial hash map capacity for Store (reduces early rehashing)
+initial_capacity: u32 = 8192, // Initial hash map capacity for Store (reduces early rehashing)
 eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
-require_pass: ?[]const u8 = null, // Password authentication (null = disabled)
+requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
 rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
 
 // Computed constants (calculated from other fields)
-fn clientPoolSize(self: Config) usize {
+pub fn clientPoolSize(self: Config) usize {
     return self.max_clients * @sizeOf(Client);
 }
 
-fn pubsubMatrixSize(self: Config) usize {
+pub fn pubsubMatrixSize(self: Config) usize {
     return self.max_channels * self.max_subscribers_per_channel * @sizeOf(u64);
 }
 
@@ -166,24 +169,24 @@ pub fn totalMemoryBudget(self: Config) usize {
 }
 
 pub fn requiresAuth(self: Config) bool {
-    return self.require_pass != null;
+    return self.requirepass != null;
 }
 
-pub fn readConfig(allocator: std.mem.Allocator, io: Io) !Config {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+pub fn readConfig(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
+    var args_iter = args.iterate();
 
-    // If config file path is provided as argument, read it
-    if (args.len > 1) {
-        return try readFile(allocator, io, args[1]);
+    _ = args_iter.skip();
+
+    if (args_iter.next()) |file_name| {
+        return try readFile(allocator, io, file_name);
     }
 
     // Return default config
     return .{};
 }
 
-fn readFile(allocator: std.mem.Allocator, io: Io, file_name: []const u8) !Config {
-    var file = try Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
+fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
+    var file = try std.Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
     defer file.close(io);
 
     var buffer: [1024 * 8]u8 = undefined;
@@ -230,10 +233,18 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
         config.timeout = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "tcp-keepalive")) {
         config.tcp_keepalive = try parseInt(u32, trimmed_value, 10);
+    }
+    // General
+    else if (eql(u8, key, "daemonize")) {
+        config.daemonize = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "pidfile")) {
+        config.pidfile = try allocator.dupe(u8, trimmed_value);
+    } else if (eql(u8, key, "loglevel")) {
+        config.loglevel = try allocator.dupe(u8, trimmed_value);
+    } else if (eql(u8, key, "logfile")) {
+        config.logfile = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "databases")) {
         config.databases = try parseInt(u32, trimmed_value, 10);
-    } else if (eql(u8, key, "clock_update_ms")) {
-        config.clock_update_ms = try parseInt(u32, trimmed_value, 10);
     }
     // Snapshotting
     else if (eql(u8, key, "stop-writes-on-bgsave-error")) {
@@ -246,6 +257,18 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
         config.dbfilename = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "dir")) {
         config.dir = try allocator.dupe(u8, trimmed_value);
+    }
+    // Replication
+    else if (eql(u8, key, "replica-serve-stale-data")) {
+        config.replica_serve_stale_data = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "replica-read-only")) {
+        config.replica_read_only = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "repl-diskless-sync")) {
+        config.repl_diskless_sync = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "repl-diskless-sync-delay")) {
+        config.repl_diskless_sync_delay = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "repl-diskless-load")) {
+        config.repl_diskless_load = try allocator.dupe(u8, trimmed_value);
     }
     // Append only mode
     else if (eql(u8, key, "appendonly")) {
@@ -277,7 +300,7 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
             config.eviction_policy = .volatile_lru;
         }
     } else if (eql(u8, key, "requirepass")) {
-        config.require_pass = try allocator.dupe(u8, trimmed_value);
+        config.requirepass = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "rdb-write-buffer-size")) {
         config.rdb_write_buffer_size = try parseMemorySize(trimmed_value);
     }

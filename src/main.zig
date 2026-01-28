@@ -5,15 +5,11 @@ const builtin = @import("builtin");
 
 const log = std.log.scoped(.main);
 
-pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
-    var threaded: std.Io.Threaded = .init(allocator, .{});
-    const io = threaded.io();
-
-    const cfg = Config.readConfig(allocator, io) catch |err| {
+    const cfg = Config.readConfig(allocator, io, init.minimal.args) catch |err| {
         log.err("Failed to read config: {s}", .{@errorName(err)});
         return err;
     };
@@ -35,7 +31,7 @@ pub fn main() !void {
     log.info("  Memory budget: {d} MB", .{cfg.totalMemoryBudget() / (1024 * 1024)});
     log.info("  Max clients: {d}", .{cfg.max_clients});
     log.info("  Eviction policy: {s}", .{@tagName(cfg.eviction_policy)});
-    if (cfg.require_pass) |_| {
+    if (cfg.requiresAuth()) {
         log.info("  Auth: enabled", .{});
     } else {
         log.info("  Auth: disabled", .{});

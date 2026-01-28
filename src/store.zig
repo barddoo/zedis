@@ -9,6 +9,7 @@ const Io = std.Io;
 const Clock = @import("clock.zig");
 const Config = @import("config.zig");
 const string_match = @import("./util/string_match.zig").string_match;
+const ScalableBloomFilter = @import("./bloom/bloom.zig").BloomFilter;
 
 const assert = std.debug.assert;
 
@@ -23,6 +24,7 @@ pub const ValueType = enum(u8) {
     list,
     short_string,
     time_series,
+    bloom_filter,
 
     pub fn toRdbOpcode(self: ValueType) u8 {
         return @intFromEnum(self);
@@ -57,6 +59,7 @@ pub const ZedisValue = union(ValueType) {
     list: *ZedisList,
     short_string: ShortString,
     time_series: *TimeSeries,
+    bloom_filter: *ScalableBloomFilter,
 };
 
 pub const ZedisObject = struct {
@@ -131,6 +134,10 @@ pub const Store = struct {
                     ts_ptr.deinit();
                     self.allocator.destroy(ts_ptr);
                 },
+                .bloom_filter => |bf_ptr| {
+                    bf_ptr.deinit();
+                    self.allocator.destroy(bf_ptr);
+                },
             }
         }
         self.map.deinit(self.allocator);
@@ -195,6 +202,10 @@ pub const Store = struct {
                 },
                 .short_string => {},
                 .time_series => return error.AlreadyExists,
+                .bloom_filter => |bf_ptr| {
+                    bf_ptr.deinit();
+                    self.allocator.destroy(bf_ptr);
+                },
             }
         } else {
             // New key - need to duplicate it for the HashMap to own
@@ -213,6 +224,7 @@ pub const Store = struct {
             .list => {}, // List is moved directly
             .short_string => {}, // No allocation needed - stored inline
             .time_series => {},
+            .bloom_filter => {}, // Bloom filter is moved directly
         }
 
         // Update the entry
@@ -242,6 +254,10 @@ pub const Store = struct {
                     .time_series => |ts_ptr| {
                         ts_ptr.deinit();
                         self.allocator.destroy(ts_ptr);
+                    },
+                    .bloom_filter => |bf_ptr| {
+                        bf_ptr.deinit();
+                        self.allocator.destroy(bf_ptr);
                     },
                 }
 
@@ -291,7 +307,8 @@ pub const Store = struct {
 
         // Check expiration before returning type
         if (self.expiration_map.get(key)) |expiration_time| {
-            if (std.time.milliTimestamp() > expiration_time) {
+            const now = self.clock.now() catch unreachable;
+            if (now.toMilliseconds() > expiration_time) {
                 _ = self.delete(key);
                 return null;
             }
@@ -391,6 +408,48 @@ pub const Store = struct {
         return self.map.getPtr(key).?.value.list;
     }
 
+    pub fn createBloomFilter(self: *Store, key: []const u8, bf: ScalableBloomFilter) !void {
+        assert(key.len > 0);
+        // Check if key already exists
+        if (self.exists(key)) {
+            return error.AlreadyExists;
+        }
+
+        // Allocate memory for the bloom filter
+        const bf_ptr = try self.allocator.create(ScalableBloomFilter);
+        bf_ptr.* = bf;
+
+        // Create ZedisObject with bloom filter
+        const object = ZedisObject{
+            .value = .{ .bloom_filter = bf_ptr },
+        };
+
+        try self.putObject(key, object);
+    }
+
+    pub fn getBloomFilter(self: *Store, key: []const u8) !?*ScalableBloomFilter {
+        assert(key.len > 0);
+
+        // Check existence first
+        const obj_ptr = self.map.getPtr(key) orelse return null;
+
+        // Check expiration before type checking
+        if (self.expiration_map.get(key)) |expiration_time| {
+            const timestamp = self.clock.now() catch unreachable;
+            const now = timestamp.toMilliseconds();
+            if (now > expiration_time) {
+                _ = self.delete(key);
+                return null;
+            }
+        }
+
+        // Type check and return
+        switch (obj_ptr.value) {
+            .bloom_filter => |bf_ptr| return bf_ptr,
+            else => return error.WrongType,
+        }
+    }
+
     pub fn getSetList(self: *Store, key: []const u8) !*ZedisList {
         assert(key.len > 0);
         const list = try self.getList(key);
@@ -414,7 +473,8 @@ pub const Store = struct {
     pub inline fn isExpired(self: Store, key: []const u8) bool {
         assert(key.len > 0);
         if (self.expiration_map.get(key)) |expiration_time| {
-            return std.time.milliTimestamp() > expiration_time;
+            const now = self.clock.now() catch unreachable;
+            return now.toMilliseconds() > expiration_time;
         }
         return false;
     }

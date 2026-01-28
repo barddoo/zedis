@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const time = std.time;
 
 /// Test result tracking
 pub const TestResult = struct {
@@ -39,7 +40,6 @@ pub const TestRunner = struct {
     config: TestConfig,
     results: std.array_list.Managed(TestResult),
     stats: TestStats,
-    start_time: i128,
 
     const Self = @This();
 
@@ -48,8 +48,7 @@ pub const TestRunner = struct {
             .allocator = allocator,
             .config = config,
             .results = std.array_list.Managed(TestResult).init(allocator),
-            .stats = TestStats{},
-            .start_time = std.time.nanoTimestamp(),
+            .stats = .{},
         };
     }
 
@@ -74,7 +73,7 @@ pub const TestRunner = struct {
     pub fn runTest(self: *Self, comptime test_name: []const u8, comptime test_func: fn () anyerror!void) !void {
         if (!self.matchesFilter(test_name)) return;
 
-        const test_start: i128 = std.time.nanoTimestamp();
+        const test_start = try time.Timer.start();
 
         if (!self.config.quiet) {
             if (self.config.verbose) {
@@ -103,7 +102,7 @@ pub const TestRunner = struct {
             self.stats.passed += 1;
         }
 
-        result.duration_ns = @intCast(std.time.nanoTimestamp() - test_start);
+        result.duration_ns = test_start.read();
         self.stats.total += 1;
         self.stats.duration_ns += result.duration_ns;
 
