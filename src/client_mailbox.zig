@@ -9,7 +9,7 @@ pub const MessageNode = struct {
 };
 
 pub const ClientMailbox = struct {
-    mutex: Io.Mutex = .init,
+    atomic_mutex: std.atomic.Mutex = .unlocked,
     closed: std.atomic.Value(bool) = .init(false),
     head: ?*MessageNode = null,
     tail: ?*MessageNode = null,
@@ -33,7 +33,6 @@ pub const ClientMailbox = struct {
     pub fn enqueue(
         self: *ClientMailbox,
         allocator: Allocator,
-        io: Io,
         bytes: []const u8,
         is_active: bool,
     ) !void {
@@ -48,8 +47,8 @@ pub const ClientMailbox = struct {
             .next = null,
         };
 
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
+        self.lockAtomic();
+        defer self.unlockAtomic();
 
         if (!is_active or self.closed.load(.acquire)) return error.OutboxClosed;
         if (self.pending_count >= self.capacity) return error.OutboxFull;
@@ -63,9 +62,9 @@ pub const ClientMailbox = struct {
         self.pending_count += 1;
     }
 
-    pub fn takeAll(self: *ClientMailbox, io: Io) ?*MessageNode {
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
+    pub fn takeAll(self: *ClientMailbox) ?*MessageNode {
+        self.lockAtomic();
+        defer self.unlockAtomic();
 
         const head = self.head;
         self.head = null;
@@ -74,9 +73,19 @@ pub const ClientMailbox = struct {
         return head;
     }
 
-    pub fn deinit(self: *ClientMailbox, allocator: Allocator, io: Io) void {
+    pub fn lockAtomic(self: *ClientMailbox) void {
+        while (!self.atomic_mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    pub fn unlockAtomic(self: *ClientMailbox) void {
+        self.atomic_mutex.unlock();
+    }
+
+    pub fn deinit(self: *ClientMailbox, allocator: Allocator) void {
         self.close();
-        freeMessageList(allocator, self.takeAll(io));
+        freeMessageList(allocator, self.takeAll());
     }
 };
 
@@ -94,30 +103,30 @@ const testing = std.testing;
 
 test "ClientMailbox enqueues and drains messages" {
     var mailbox = ClientMailbox.init(2);
-    defer mailbox.deinit(testing.allocator, testing.io);
+    defer mailbox.deinit(testing.allocator);
 
-    try mailbox.enqueue(testing.allocator, testing.io, "one", true);
-    try mailbox.enqueue(testing.allocator, testing.io, "two", true);
+    try mailbox.enqueue(testing.allocator, "one", true);
+    try mailbox.enqueue(testing.allocator, "two", true);
 
-    const head = mailbox.takeAll(testing.io);
+    const head = mailbox.takeAll();
     defer freeMessageList(testing.allocator, head);
 
     try testing.expect(head != null);
     try testing.expectEqualStrings("one", head.?.bytes);
     try testing.expect(head.?.next != null);
     try testing.expectEqualStrings("two", head.?.next.?.bytes);
-    try testing.expect(mailbox.takeAll(testing.io) == null);
+    try testing.expect(mailbox.takeAll() == null);
 }
 
 test "ClientMailbox rejects closed or full queues" {
     var mailbox = ClientMailbox.init(1);
-    defer mailbox.deinit(testing.allocator, testing.io);
+    defer mailbox.deinit(testing.allocator);
 
-    try mailbox.enqueue(testing.allocator, testing.io, "one", true);
-    try testing.expectError(error.OutboxFull, mailbox.enqueue(testing.allocator, testing.io, "two", true));
+    try mailbox.enqueue(testing.allocator, "one", true);
+    try testing.expectError(error.OutboxFull, mailbox.enqueue(testing.allocator, "two", true));
 
-    const head = mailbox.takeAll(testing.io);
+    const head = mailbox.takeAll();
     defer freeMessageList(testing.allocator, head);
     mailbox.close();
-    try testing.expectError(error.OutboxClosed, mailbox.enqueue(testing.allocator, testing.io, "three", true));
+    try testing.expectError(error.OutboxClosed, mailbox.enqueue(testing.allocator, "three", true));
 }

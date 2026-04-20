@@ -10,6 +10,7 @@ const ZedisValue = store_mod.ZedisValue;
 const ZedisList = store_mod.ZedisList;
 const PrimitiveValue = store_mod.PrimitiveValue;
 const Command = @import("parser.zig").Command;
+const Value = @import("parser.zig").Value;
 const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
 const Server = @import("./server.zig");
 const PubSubContext = @import("./commands/pubsub.zig").PubSubContext;
@@ -94,14 +95,11 @@ pub const Client = struct {
             try self.flushMailbox();
             if (self.disconnect_requested.load(.acquire)) return;
 
-            if (!try self.waitForReadable(if (self.is_in_pubsub_mode) 50 else -1)) {
-                continue;
-            }
-
             // Use arena allocator for parsing (temporary)
             const arena_allocator = arena.allocator();
 
             // Parse the incoming command from the client's stream
+            // Io.Reader blocks natively — no need for poll()
             var parser = Parser.init(arena_allocator);
 
             var command = parser.parse(reader) catch |err| {
@@ -119,7 +117,7 @@ pub const Client = struct {
                     }
                     return;
                 }
-                log.err("Parse error: {s}", .{@errorName(err)});
+                log.err("Parse error: {s} client_id={d}", .{ @errorName(err), self.client_id });
 
                 // Send error response directly (parse errors happen before enqueueing)
                 var writer_buffer: [1024]u8 = undefined;
@@ -131,14 +129,61 @@ pub const Client = struct {
                 _ = arena.reset(.retain_capacity);
                 continue;
             };
-            defer command.deinit();
 
-            // Execute command directly (one thread per connection)
-            var writer_buffer: [1024 * 16]u8 = undefined;
-            var sw = self.connection.writer(self.io, &writer_buffer);
-            const writer = &sw.interface;
+            // Enqueue command for store thread (single-threaded store access)
+            // Dupe args into heap so they survive command.deinit()
+            const cmd_args = try self.allocator.dupe(Value, command.getArgs());
+            errdefer self.allocator.free(cmd_args);
 
-            try self.command_registry.executeCommandClient(self, writer, command.getArgs());
+            // Calculate total data size needed
+            var total_data: usize = 0;
+            for (cmd_args) |arg| {
+                total_data += arg.data.len;
+            }
+            const arg_data = try self.allocator.alloc(u8, total_data);
+            errdefer self.allocator.free(arg_data);
+
+            // Copy data and fix up pointers
+            var offset: usize = 0;
+            for (cmd_args, 0..) |*arg, i| {
+                const len = arg.data.len;
+                @memcpy(arg_data[offset..][0..len], arg.data);
+                arg.data = arg_data[offset..][0..len];
+                offset += len;
+                _ = i;
+            }
+
+            const cmd_node = try self.allocator.create(Server.CommandNode);
+            errdefer self.allocator.destroy(cmd_node);
+            cmd_node.* = .{
+                .args = cmd_args,
+                .arg_data = arg_data,
+                .client = self,
+                .done = .init(false),
+            };
+            log.debug("client {d}: enqueue cmd", .{self.client_id});
+            self.server.command_queue.push(cmd_node);
+
+            // Wait for store thread to process, flush mailbox while spinning
+            var spin_count: usize = 0;
+            while (!cmd_node.done.load(.acquire)) {
+                try self.flushMailbox();
+                if (self.disconnect_requested.load(.acquire)) {
+                    log.debug("client {d}: disconnect while waiting", .{self.client_id});
+                    return;
+                }
+                spin_count += 1;
+                if (spin_count > 100) {
+                    std.Thread.yield() catch {};
+                    spin_count = 0;
+                } else {
+                    std.atomic.spinLoopHint();
+                }
+            }
+            log.debug("client {d}: cmd done, flushing mailbox", .{self.client_id});
+
+            // Free command data AFTER store thread is done
+            command.deinit();
 
             try self.flushMailbox();
 
@@ -185,7 +230,7 @@ pub const Client = struct {
     }
 
     fn flushMailbox(self: *Client) !void {
-        const head = self.mailbox.takeAll(self.io);
+        const head = self.mailbox.takeAll();
         defer freeMessageList(self.allocator, head);
 
         if (head == null) return;
