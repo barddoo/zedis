@@ -13,7 +13,7 @@ test "SET command with string value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -40,7 +40,7 @@ test "SET command with integer value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -67,7 +67,7 @@ test "GET command with existing string value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -91,7 +91,7 @@ test "GET command with existing integer value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -115,7 +115,7 @@ test "GET command with non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -137,7 +137,7 @@ test "INCR command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -163,7 +163,7 @@ test "INCR command on existing integer" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -191,7 +191,7 @@ test "INCR command on string that represents integer" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -219,7 +219,7 @@ test "INCR command on non-integer string" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -242,7 +242,7 @@ test "DECR command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -268,7 +268,7 @@ test "DECR command on existing integer" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -296,7 +296,7 @@ test "DEL command with single existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -323,7 +323,7 @@ test "DEL command with multiple keys" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -356,7 +356,7 @@ test "DEL command with non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -378,7 +378,7 @@ test "APPEND command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -405,7 +405,7 @@ test "APPEND command on existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -434,7 +434,7 @@ test "STRLEN command on existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -458,7 +458,7 @@ test "STRLEN command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -480,7 +480,7 @@ test "GETSET command on existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -509,7 +509,7 @@ test "GETSET command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -536,7 +536,7 @@ test "MGET command with multiple keys" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -563,7 +563,7 @@ test "MSET command with multiple key-value pairs" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -596,7 +596,7 @@ test "SETEX command sets key with expiration" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -624,7 +624,7 @@ test "SETNX command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -651,7 +651,7 @@ test "SETNX command on existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -680,7 +680,7 @@ test "INCRBY command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -707,7 +707,7 @@ test "INCRBY command on existing integer" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -736,7 +736,7 @@ test "DECRBY command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -763,7 +763,7 @@ test "DECRBY command on existing integer" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -792,7 +792,7 @@ test "INCRBYFLOAT command on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -815,7 +815,7 @@ test "INCRBYFLOAT command on existing float" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -841,7 +841,7 @@ test "INCRBYFLOAT command with negative increment" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

@@ -525,7 +525,7 @@ test "TS.INCRBY increments from zero" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -577,7 +577,7 @@ test "TS.INCRBY increments from existing value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -630,7 +630,7 @@ test "TS.DECRBY decrements value" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -683,7 +683,7 @@ test "TS.ALTER changes retention" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -722,7 +722,7 @@ test "TS.ALTER changes duplicate policy" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -945,7 +945,7 @@ test "TS.RANGE command with COUNT parameter" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -1617,7 +1617,7 @@ test "TS.RANGE command with aggregation parameter" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;

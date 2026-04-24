@@ -9,8 +9,25 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: master
+
+      - name: Run tests
+        run: zig build test:all
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -18,15 +35,23 @@ jobs:
           - platform: linux-x86_64
             target: x86_64-linux
             binary: zedis
+            ext: ""
+          - platform: linux-aarch64
+            target: aarch64-linux
+            binary: zedis
+            ext: ""
           - platform: macos-x86_64
             target: x86_64-macos
             binary: zedis
+            ext: ""
           - platform: macos-arm64
             target: aarch64-macos
             binary: zedis
-          # - platform: windows-x86_64
-          #   target: x86_64-windows
-          #   binary: zedis.exe
+            ext: ""
+          - platform: windows-x86_64
+            target: x86_64-windows
+            binary: zedis.exe
+            ext: ".exe"
 
     steps:
       - name: Checkout code
@@ -44,13 +69,13 @@ jobs:
       - name: Build
         run: |
           zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
-          cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.platform == 'windows-x86_64' && '.exe' || '' }}
+          cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}
-          path: zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.platform == 'windows-x86_64' && '.exe' || '' }}
+          path: zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
   release:
     name: Create Release
@@ -87,44 +112,63 @@ jobs:
         with:
           files: |
             zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
+            zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
             zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
             zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
-            # zedis-${{ steps.version.outputs.VERSION }}-windows-x86_64.exe
+            zedis-${{ steps.version.outputs.VERSION }}-windows-x86_64.exe
             SHA256SUMS
           body: |
             ${{ steps.changelog.outputs.changes }}
 
             ---
 
-            ## Installation
+            ## Install
 
-            ### Download Binaries
+            **Linux (x86_64)**
+            ```bash
+            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
+            chmod +x zedis && sudo mv zedis /usr/local/bin/
+            ```
 
-            Pre-built binaries are available for Linux, macOS, and Windows.
+            **Linux (ARM64)**
+            ```bash
+            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
+            chmod +x zedis && sudo mv zedis /usr/local/bin/
+            ```
 
-            1. Download the appropriate binary for your platform
-            2. Verify the checksum against SHA256SUMS
-            3. Make the binary executable (Linux/macOS): `chmod +x zedis-*`
-            4. Run the server: `./zedis-${{ steps.version.outputs.VERSION }}-<platform>`
+            **macOS (Apple Silicon)**
+            ```bash
+            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
+            chmod +x zedis && sudo mv zedis /usr/local/bin/
+            ```
 
-            ### Verify Checksums
+            **macOS (Intel)**
+            ```bash
+            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
+            chmod +x zedis && sudo mv zedis /usr/local/bin/
+            ```
+
+            **Windows** — download `zedis-${{ steps.version.outputs.VERSION }}-windows-x86_64.exe` from the assets above.
+
+            ### Verify checksums
 
             ```bash
             sha256sum -c SHA256SUMS
             ```
 
-            ### Quick Start
+            ## Quick start
 
             ```bash
-            # Start the server (default: 127.0.0.1:6379)
-            ./zedis-<platform>
+            # Start server (listens on 127.0.0.1:6379 by default)
+            zedis
 
-            # Connect using redis-cli
-            redis-cli -h 127.0.0.1 -p 6379
+            # Connect
+            redis-cli ping
+            # PONG
 
-            # Try some commands
-            SET mykey "Hello, Zedis!"
-            GET mykey
+            SET hello world
+            GET hello
+            # "world"
             ```
           draft: false
           prerelease: false

@@ -14,7 +14,7 @@ test "LPUSH single element to new list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -42,7 +42,7 @@ test "LPUSH multiple elements to new list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -72,7 +72,7 @@ test "LPUSH to existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -110,7 +110,7 @@ test "RPUSH single element to new list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -137,7 +137,7 @@ test "RPUSH multiple elements to new list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -167,7 +167,7 @@ test "LPOP from list with single element" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -202,7 +202,7 @@ test "LPOP from non-existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -224,7 +224,7 @@ test "LPOP with count from list with multiple elements" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -264,7 +264,7 @@ test "LPOP with count of 0" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -297,7 +297,7 @@ test "RPOP from list with single element" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -328,7 +328,7 @@ test "RPOP with count from list with multiple elements" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -369,7 +369,7 @@ test "LLEN on existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -402,7 +402,7 @@ test "LLEN on non-existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -424,7 +424,7 @@ test "LLEN on empty list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -461,7 +461,7 @@ test "Mixed LPUSH and RPUSH operations" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -510,7 +510,7 @@ test "LPOP and RPOP from the same list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -561,7 +561,7 @@ test "LINDEX get first element" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -595,7 +595,7 @@ test "LINDEX get last element with negative index" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -629,7 +629,7 @@ test "LINDEX with out of range index" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -661,7 +661,7 @@ test "LINDEX on non-existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -685,7 +685,7 @@ test "LSET update element at index" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -731,7 +731,7 @@ test "LSET with negative index" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -777,7 +777,7 @@ test "LSET on non-existing key" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -800,7 +800,7 @@ test "LSET with out of range index" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -834,7 +834,7 @@ test "LRANGE get all elements" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -869,7 +869,7 @@ test "LRANGE get subset of elements" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -906,7 +906,7 @@ test "LRANGE with negative indices" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -943,7 +943,7 @@ test "LRANGE on non-existing list" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -967,7 +967,7 @@ test "LRANGE with out of range indices" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
@@ -1001,7 +1001,7 @@ test "LRANGE with reversed range" {
     const allocator = arena.allocator();
 
     var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     var buffer: [4096]u8 = undefined;
