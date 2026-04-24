@@ -15,6 +15,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.1.1] - 2026-04-24
+
+### Added
+
+- Add CI workflow running tests on push to main and pull requests.
+- Add multi-variant Docker images: alpine, debian-slim, and distroless.
+- Add Docker Bake configuration for parallel multi-platform builds (linux/amd64, linux/arm64).
+- Add Docker Hub publishing workflow on tag push.
+- Add release binaries for linux-aarch64 and windows-x86_64.
+
+### Fixed
+
+- Fix config file loading hanging on async file reader EOF by switching to `readPositionalAll`.
+- Fix Dockerfile: drop unnecessary build dependencies, fix symlink trailing slash, use nologin shell for service user, fix healthcheck.
+
+### Changed
+
+- Gate release binary builds on passing tests.
+- Update all GitHub Actions to latest versions.
+
 ## [0.1.0] - 2026-04-23
 
 ### Added
