@@ -70,6 +70,36 @@ OK
 string
 ```
 
+## Docker
+
+Pre-built images are available on [Docker Hub](https://hub.docker.com/r/barddoo/zedis):
+
+```bash
+docker run -p 6379:6379 barddoo/zedis
+```
+
+### Variants
+
+| Tag | Base | Size | Use case |
+|-----|------|------|----------|
+| `latest`, `x.x.x-alpine` | Alpine 3.20 | Smallest with shell | Default |
+| `x.x.x-debian`, `x.x.x-slim` | Debian Bookworm slim | glibc compat | Broader ecosystem |
+| `x.x.x-distroless` | Distroless static | No shell | Security-sensitive |
+
+### Persistent data
+
+Mount a volume to persist data across restarts:
+
+```bash
+docker run -p 6379:6379 -v zedis-data:/var/lib/zedis/data barddoo/zedis
+```
+
+### Custom config
+
+```bash
+docker run -p 6379:6379 -v ./zedis.conf:/etc/zedis/zedis.conf barddoo/zedis
+```
+
 ## Development
 
 ### Project Structure
