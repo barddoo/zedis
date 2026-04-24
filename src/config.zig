@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const Dir = std.Io.Dir;
 const Client = @import("./client.zig").Client;
 const ClientHandle = @import("./types.zig").ClientHandle;
 const eql = std.mem.eql;
@@ -189,21 +190,16 @@ pub fn readConfig(allocator: std.mem.Allocator, io: std.Io, args: std.process.Ar
 }
 
 fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
-    var file = try std.Io.Dir.cwd().openFile(io, file_name, .{ .mode = .read_only });
+    var file = try Dir.cwd().openFile(io, file_name, .{});
     defer file.close(io);
 
     var buffer: [1024 * 8]u8 = undefined;
-    var file_reader = file.reader(io, &buffer);
-    var reader = &file_reader.interface;
+    const n = try file.readPositionalAll(io, &buffer, 0);
+    const content = buffer[0..n];
 
     var config: Config = .{};
-
-    while (true) {
-        const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
 
         // Skip empty lines and comments

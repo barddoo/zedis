@@ -6,7 +6,6 @@
 FROM alpine:3.20 AS builder
 
 ARG ZIG_VERSION=0.16.0
-ARG ZIG_MIRROR_URL=https://ziglang.org/download/community-mirrors
 
 RUN apk add --no-cache curl xz
 
@@ -15,9 +14,9 @@ RUN case "$(uname -m)" in \
         aarch64) ZIG_ARCH=aarch64 ;; \
         *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
     esac && \
-    curl -fsSL "${ZIG_MIRROR_URL}/${ZIG_VERSION}/zig-linux-${ZIG_ARCH}-${ZIG_VERSION}.tar.xz" | \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" | \
         tar -xJ -C /opt && \
-    ln -s /opt/zig-linux-${ZIG_ARCH}-${ZIG_VERSION} /opt/zig && \
+    ln -s /opt/zig-${ZIG_ARCH}-linux-${ZIG_VERSION} /opt/zig && \
     ln -s /opt/zig/zig /usr/local/bin/zig
 
 WORKDIR /build
