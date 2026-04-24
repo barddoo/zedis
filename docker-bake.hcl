@@ -1,5 +1,5 @@
 variable "REGISTRY" {
-  default = "ghcr.io/charlesfonseca/zedis"
+  default = "barddoo/zedis"
 }
 
 variable "VERSION" {
