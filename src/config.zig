@@ -310,7 +310,7 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
 }
 
 // Helper function to parse memory sizes like "1gb", "512mb", "4096"
-fn parseMemorySize(value: []const u8) !usize {
+pub fn parseMemorySize(value: []const u8) !usize {
     const lower = try std.ascii.allocLowerString(std.heap.page_allocator, value);
     defer std.heap.page_allocator.free(lower);
 

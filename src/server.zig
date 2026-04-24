@@ -35,28 +35,36 @@ pub const CommandNode = struct {
 };
 
 pub const CommandQueue = struct {
-    head: std.atomic.Value(?*CommandNode) = .init(null),
-    tail: std.atomic.Value(?*CommandNode) = .init(null),
-    len: std.atomic.Value(usize) = .init(0),
+    head: ?*CommandNode = null,
+    tail: ?*CommandNode = null,
+    mutex: std.atomic.Mutex = .unlocked,
+
+    fn lockMutex(m: *std.atomic.Mutex) void {
+        while (!m.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+    }
 
     pub fn push(self: *CommandQueue, node: *CommandNode) void {
+        lockMutex(&self.mutex);
+        defer self.mutex.unlock();
+
         node.next = null;
-        const prev_tail = self.tail.swap(node, .acq_rel);
-        if (prev_tail) |t| {
+        if (self.tail) |t| {
             t.next = node;
         } else {
-            self.head.store(node, .release);
+            self.head = node;
         }
-        _ = self.len.fetchAdd(1, .release);
+        self.tail = node;
     }
 
     pub fn popAll(self: *CommandQueue) ?*CommandNode {
-        const h = self.head.swap(null, .acq_rel) orelse return null;
-        self.len.store(0, .release);
-        // tail must also be cleared if we took the last element
-        if (h.next == null) {
-            _ = self.tail.cmpxchgStrong(h, null, .acq_rel, .acquire);
-        }
+        lockMutex(&self.mutex);
+        defer self.mutex.unlock();
+
+        const h = self.head;
+        self.head = null;
+        self.tail = null;
         return h;
     }
 };
@@ -348,12 +356,6 @@ fn storeThreadLoop(server: *Server) void {
 }
 
 fn processCommand(self: *Server, node: *CommandNode) void {
-    defer {
-        self.base_allocator.free(node.args);
-        self.base_allocator.free(node.arg_data);
-        self.base_allocator.destroy(node);
-    }
-
     var alloc_writer = std.Io.Writer.Allocating.init(self.base_allocator);
     defer alloc_writer.deinit();
 

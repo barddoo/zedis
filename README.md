@@ -82,6 +82,8 @@ The codebase follows Zig conventions with clear separation of concerns:
 - Modular design for easy extension
 - Comprehensive logging for debugging
 
+See `docs/server-architecture.md` for the current server thread model and request flow.
+
 ### Memory Management
 
 All memory allocations are handled during the initialization phase. No dynamic memory allocation occurs during command execution, ensuring high performance and predictability. Hugely inspired by this [article](https://tigerbeetle.com/blog/2022-10-12-a-database-without-dynamic-memory/).

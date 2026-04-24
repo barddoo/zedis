@@ -149,6 +149,15 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = false,
     });
 
+    try registry.register(.{
+        .name = "CONFIG",
+        .handler = .{ .client_handler = connection_commands.config },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Inspect and update server configuration",
+        .write_to_aof = false,
+    });
+
     // List commands: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
 
     try registry.register(.{

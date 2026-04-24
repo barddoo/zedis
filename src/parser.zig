@@ -143,16 +143,31 @@ pub fn init(allocator: Allocator) Parser {
     return .{ .allocator = allocator };
 }
 
-// Main parsing function. It expects a command to be a RESP array of bulk strings:
-// *<num>\r\n$<len>\r\n<data>\r\n ...
+// Main parsing function. Supports both RESP array commands and inline commands:
+// RESP: *<num>\r\n$<len>\r\n<data>\r\n ...
+// Inline: CMD arg1 arg2 ... \r\n
 // Uses Redis-style pre-allocation with 1024 cap to prevent DoS attacks
 pub fn parse(self: *Parser, reader: *Reader) !Command {
     const line = try Parser.readLine(reader);
 
-    if (line.len == 0 or line[0] != '*') {
+    if (line.len == 0) {
         return error.InvalidProtocol;
     }
 
+    // RESP array command
+    if (line[0] == '*') {
+        return self.parseRespArray(reader, line);
+    }
+
+    // Inline command: any line that doesn't start with a RESP type indicator
+    if (line[0] != '$' and line[0] != '+' and line[0] != '-' and line[0] != ':') {
+        return self.parseInlineCommand(line);
+    }
+
+    return error.InvalidProtocol;
+}
+
+fn parseRespArray(self: *Parser, reader: *Reader, line: []const u8) !Command {
     const count = fmt.parseInt(usize, line[1..], 10) catch return error.InvalidProtocol;
 
     // Redis-style: pre-allocate with safety cap at 1024 to prevent malicious requests
@@ -171,6 +186,35 @@ pub fn parse(self: *Parser, reader: *Reader) !Command {
 
         const data = try self.readBulkData(reader, bulk_line);
         try command.addArg(.{ .data = data });
+    }
+
+    return command;
+}
+
+fn parseInlineCommand(self: *Parser, line: []const u8) !Command {
+    var command = Command.init(self.allocator);
+    errdefer command.deinit();
+
+    // Split line by spaces (skip empty segments from multiple spaces)
+    var start: usize = 0;
+    while (start < line.len) {
+        // Skip leading spaces
+        while (start < line.len and line[start] == ' ') : (start += 1) {}
+        if (start >= line.len) break;
+
+        // Find end of argument
+        var end = start;
+        while (end < line.len and line[end] != ' ') : (end += 1) {}
+
+        const arg = line[start..end];
+        const data = try self.allocator.dupe(u8, arg);
+        try command.addArg(.{ .data = data });
+
+        start = end;
+    }
+
+    if (command.argCount() == 0) {
+        return error.InvalidProtocol;
     }
 
     return command;

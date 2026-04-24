@@ -9,6 +9,7 @@ comptime {
     _ = @import("client.zig");
     _ = @import("server.zig");
     _ = @import("testing/store.zig");
+    _ = @import("testing/connection.zig");
     _ = @import("testing/string.zig");
     _ = @import("testing/list.zig");
     _ = @import("testing/time_series.zig");

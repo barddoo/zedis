@@ -167,11 +167,7 @@ pub const Client = struct {
             // Wait for store thread to process, flush mailbox while spinning
             var spin_count: usize = 0;
             while (!cmd_node.done.load(.acquire)) {
-                try self.flushMailbox();
-                if (self.disconnect_requested.load(.acquire)) {
-                    log.debug("client {d}: disconnect while waiting", .{self.client_id});
-                    return;
-                }
+                self.flushMailbox() catch {};
                 spin_count += 1;
                 if (spin_count > 100) {
                     std.Thread.yield() catch {};
@@ -182,10 +178,19 @@ pub const Client = struct {
             }
             log.debug("client {d}: cmd done, flushing mailbox", .{self.client_id});
 
+            self.allocator.free(cmd_node.args);
+            self.allocator.free(cmd_node.arg_data);
+            self.allocator.destroy(cmd_node);
+
             // Free command data AFTER store thread is done
             command.deinit();
 
-            try self.flushMailbox();
+            self.flushMailbox() catch return;
+
+            if (self.disconnect_requested.load(.acquire)) {
+                log.debug("client {d}: disconnect after cmd", .{self.client_id});
+                return;
+            }
 
             // Reset arena to free parsing allocations
             _ = arena.reset(.retain_capacity);
