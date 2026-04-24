@@ -15,7 +15,7 @@ A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), 
 - **Key Expiration**: Set time-to-live (TTL) for keys with background expiration handling.
 - **Disk persistence (RDB)**: Point-in-time snapshots of your dataset.
 - **Append-only file (AOF)**: Durable write-ahead logging for data recovery.
-- **Memory Management**: No memory allocation during command execution.
+- **Memory Budgeting**: Eviction-aware KV allocator, fixed client slot pool, and separate temporary allocation paths.
 - **Pub/Sub**: Decoupled communication between services.
 - **Time Series**: Time series data structure. **Now with Gorilla compression!**
 
@@ -86,7 +86,7 @@ See `docs/server-architecture.md` for the current server thread model and reques
 
 ### Memory Management
 
-All memory allocations are handled during the initialization phase. No dynamic memory allocation occurs during command execution, ensuring high performance and predictability. Hugely inspired by this [article](https://tigerbeetle.com/blog/2022-10-12-a-database-without-dynamic-memory/).
+See `docs/memory-architecture.md` for the current allocator layout, memory budgets, and runtime allocation behavior.
 
 ### Building for Development
 
