@@ -58,7 +58,7 @@ test "SET command with integer value" {
 
     const stored_value = store.get("key1");
     try testing.expect(stored_value != null);
-    try testing.expectEqual(@as(i64, 42), stored_value.?.value.int);
+    try testing.expectEqualStrings("42", stored_value.?.value.short_string.asSlice());
 }
 
 test "GET command with existing string value" {

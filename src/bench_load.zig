@@ -1,13 +1,13 @@
 const std = @import("std");
+const zio = @import("zio");
 const bench_load = @import("benchmarks/bench_load.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
-    var threaded: std.Io.Threaded = .init(allocator, .{ .environ = .empty });
-    const io = threaded.io();
+    const rt = try zio.Runtime.init(allocator, .{});
+    defer rt.deinit();
+    const io = rt.io();
 
     var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;

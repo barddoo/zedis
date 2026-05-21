@@ -2,8 +2,8 @@ const std = @import("std");
 const bench_store = @import("benchmarks/bench_store.zig");
 const bench_commands = @import("benchmarks/bench_commands.zig");
 
-pub fn main() !void {
-    const allocator = std.heap.smp_allocator;
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
     std.debug.print("\n", .{});
     std.debug.print("=" ** 100 ++ "\n", .{});

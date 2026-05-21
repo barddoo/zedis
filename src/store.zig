@@ -325,7 +325,6 @@ pub const Store = struct {
     }
 
     fn setString(self: *Store, key: []const u8, value: []const u8) !void {
-        assert(value.len > 0);
         const zedis_value: ZedisValue = if (value.len <= 23)
             .{ .short_string = ShortString.fromSlice(value) }
         else

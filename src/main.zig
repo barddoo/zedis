@@ -1,4 +1,5 @@
 const std = @import("std");
+const zio = @import("zio");
 const Server = @import("server.zig");
 const Config = @import("config.zig");
 
@@ -7,13 +8,11 @@ const log = std.log.scoped(.main);
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    var threaded: std.Io.Threaded = .init(allocator, .{
-        .async_limit = .unlimited,
-        .concurrent_limit = .unlimited,
-        .environ = .empty,
+    const rt = try zio.Runtime.init(allocator, .{
+        .executors = .auto,
     });
-    defer threaded.deinit();
-    const io = threaded.io();
+    defer rt.deinit();
+    const io = rt.io();
 
     const cfg = Config.readConfig(allocator, io, init.minimal.args) catch |err| {
         log.err("Failed to read config: {s}", .{@errorName(err)});

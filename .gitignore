@@ -5,3 +5,4 @@ zig-out/
 *.aof
 .vscode
 .zig-global-cache/
+zig-pkg/

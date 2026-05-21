@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 const Config = @import("config.zig");
 const Store = @import("store.zig").Store;
 const Clock = @import("clock.zig");
@@ -99,8 +100,6 @@ pub fn getMemoryBudget(self: *KeyValueAllocator) usize {
 }
 
 test "KeyValueAllocator tracks alloc free and resize" {
-    const testing = std.testing;
-
     var kv = try KeyValueAllocator.init(testing.allocator, 1024, .noeviction);
     defer kv.deinit();
 
@@ -119,8 +118,6 @@ test "KeyValueAllocator tracks alloc free and resize" {
 }
 
 test "KeyValueAllocator returns out of memory without eviction" {
-    const testing = std.testing;
-
     var kv = try KeyValueAllocator.init(testing.allocator, 2048, .noeviction);
     defer kv.deinit();
 
@@ -153,8 +150,6 @@ test "KeyValueAllocator returns out of memory without eviction" {
 }
 
 test "KeyValueAllocator evicts under allkeys_lru pressure" {
-    const testing = std.testing;
-
     var kv = try KeyValueAllocator.init(testing.allocator, 4096, .allkeys_lru);
     defer kv.deinit();
 
@@ -190,8 +185,6 @@ test "KeyValueAllocator evicts under allkeys_lru pressure" {
 }
 
 test "KeyValueAllocator survives repeated budgeted overwrite pressure" {
-    const testing = std.testing;
-
     const key_count = 256;
     const key_len = "evict-key:0000".len;
     const value_len = 1024;
@@ -242,8 +235,7 @@ test "KeyValueAllocator works with smp allocator parent" {
     var kv = try KeyValueAllocator.init(base_allocator, 288 * 1024, .allkeys_lru);
     defer kv.deinit();
 
-    var threaded: std.Io.Threaded = .init_single_threaded;
-    const io = threaded.io();
+    const io = testing.io;
     var clock = Clock.init(io, 0);
     var store = try Store.init(kv.allocator(), io, &clock, .{
         .initial_capacity = 256,
