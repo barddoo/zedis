@@ -23,7 +23,7 @@ WORKDIR /build
 COPY build.zig build.zig.zon ./
 COPY src src/
 
-RUN zig build -Doptimize=ReleaseFast -Dtarget="$(uname -m)-linux-musl"
+RUN zig build -Doptimize=ReleaseSafe -Dtarget="$(uname -m)-linux-musl"
 
 ##############################################################################
 # Stage: create data dir with correct ownership for distroless
