@@ -19,6 +19,7 @@ const freeMessageList = @import("./client_mailbox.zig").freeMessageList;
 const Config = @import("./config.zig");
 const resp = @import("./commands/resp.zig");
 const ClientHandle = @import("./types.zig").ClientHandle;
+const StackWriter = @import("stack_writer.zig").StackWriter;
 
 const log = std.log.scoped(.client);
 
@@ -38,6 +39,7 @@ pub const Client = struct {
     disconnect_requested: *std.atomic.Value(bool),
     server: *Server,
     io: std.Io,
+    parse_buffer: [65536]u8 = undefined,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -84,9 +86,10 @@ pub const Client = struct {
         var sr = self.connection.reader(self.io, &reader_buffer);
         const reader = &sr.interface;
 
-        // Create per-command arena for parsing (will be freed after enqueueing)
-        // Use page_allocator directly as it's thread-safe (multiple clients parse concurrently)
-        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        // Per-command arena for parsing.
+        // Uses a fixed buffer in the Client struct to avoid page_allocator syscalls.
+        var fba = std.heap.FixedBufferAllocator.init(self.parse_buffer[0..]);
+        var arena = std.heap.ArenaAllocator.init(fba.allocator());
         defer arena.deinit();
 
         while (true) {
@@ -134,12 +137,25 @@ pub const Client = struct {
             while (!self.server.store_mutex.tryLock()) {
                 std.atomic.spinLoopHint();
             }
-            self.server.processCommandDirect(self, command.getArgs());
+            var sw = StackWriter.init(self.allocator);
+            var response_writer = sw.writer();
+            self.server.processCommandDirect(self, command.getArgs(), &response_writer);
             self.server.store_mutex.unlock();
 
             command.deinit();
 
-            self.flushMailbox() catch return;
+            // Write response directly to socket (no mailbox indirection)
+            const response = sw.slice(&response_writer);
+            if (response.len > 0) {
+                var writer_buffer: [1024 * 4]u8 = undefined;
+                var socket_writer = self.connection.writer(self.io, &writer_buffer);
+                try socket_writer.interface.writeAll(response);
+                try socket_writer.interface.flush();
+            }
+            sw.deinit();
+
+            // Check mailbox for pubsub messages that arrived during command execution
+            try self.flushMailbox();
 
             if (self.disconnect_requested.load(.acquire)) {
                 log.debug("client {d}: disconnect after cmd", .{self.client_id});
@@ -190,7 +206,7 @@ pub const Client = struct {
 
     fn flushMailbox(self: *Client) !void {
         const head = self.mailbox.takeAll();
-        defer freeMessageList(self.allocator, head);
+        defer self.mailbox.freeNodes(self.allocator, head);
 
         if (head == null) return;
 

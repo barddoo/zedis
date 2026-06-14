@@ -107,6 +107,7 @@ pub fn writeDoubleBulkString(writer: *Writer, value: f64) !void {
 pub fn writePrimitiveValue(writer: *Writer, value: PrimitiveValue) !void {
     switch (value) {
         .string => |str| try writeBulkString(writer, str),
+        .short_string => |ss| try writeBulkString(writer, ss.asSlice()),
         .int => |i| try writeInt(writer, i),
     }
 }

@@ -44,9 +44,8 @@ pub fn lpush(writer: *Writer, store: *Store, args: []const Value) !void {
     const list = try store.getSetList(key);
 
     for (args[2..]) |arg| {
-        // Duplicate string since arg.asSlice() points to temporary parser buffer
-        const value_str = try store.allocator.dupe(u8, arg.asSlice());
-        try list.prepend(.{ .string = value_str });
+        const pv = try PrimitiveValue.fromSlice(arg.asSlice(), store.allocator);
+        try list.prepend(pv);
     }
 
     try resp.writeInt(writer, list.len());
@@ -58,9 +57,8 @@ pub fn rpush(writer: *Writer, store: *Store, args: []const Value) !void {
     const list = try store.getSetList(key);
 
     for (args[2..]) |arg| {
-        // Duplicate string since arg.asSlice() points to temporary parser buffer
-        const value_str = try store.allocator.dupe(u8, arg.asSlice());
-        try list.append(.{ .string = value_str });
+        const pv = try PrimitiveValue.fromSlice(arg.asSlice(), store.allocator);
+        try list.append(pv);
     }
 
     try resp.writeInt(writer, list.len());
@@ -183,9 +181,9 @@ pub fn lset(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.KeyNotFound;
     };
 
-    // Duplicate string since value points to temporary parser buffer
-    const value_str = try store.allocator.dupe(u8, value);
-    try list.setByIndex(actual_index, .{ .string = value_str });
+    // Set value inline if small enough, otherwise duplicate via KV allocator
+    const pv = try PrimitiveValue.fromSlice(value, store.allocator);
+    try list.setByIndex(actual_index, pv);
 
     try resp.writeOK(writer);
 }

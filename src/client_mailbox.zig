@@ -15,11 +15,45 @@ pub const ClientMailbox = struct {
     tail: ?*MessageNode = null,
     pending_count: usize = 0,
     capacity: usize,
+    node_pool: [4]?*MessageNode = .{null} ** 4,
 
     pub fn init(capacity: usize) ClientMailbox {
         return .{
             .capacity = capacity,
         };
+    }
+
+    pub fn acquireNode(self: *ClientMailbox, allocator: Allocator, bytes: []u8) !*MessageNode {
+        for (&self.node_pool) |*slot| {
+            if (slot.*) |node| {
+                slot.* = null;
+                node.* = .{ .bytes = bytes, .next = null };
+                return node;
+            }
+        }
+        const node = try allocator.create(MessageNode);
+        node.* = .{ .bytes = bytes, .next = null };
+        return node;
+    }
+
+    pub fn releaseNode(self: *ClientMailbox, allocator: Allocator, node: *MessageNode) void {
+        allocator.free(node.bytes);
+        for (&self.node_pool) |*slot| {
+            if (slot.* == null) {
+                slot.* = node;
+                return;
+            }
+        }
+        allocator.destroy(node);
+    }
+
+    pub fn freeNodes(self: *ClientMailbox, allocator: Allocator, head: ?*MessageNode) void {
+        var current = head;
+        while (current) |node| {
+            const next = node.next;
+            self.releaseNode(allocator, node);
+            current = next;
+        }
     }
 
     pub fn open(self: *ClientMailbox) void {
@@ -86,6 +120,12 @@ pub const ClientMailbox = struct {
     pub fn deinit(self: *ClientMailbox, allocator: Allocator) void {
         self.close();
         freeMessageList(allocator, self.takeAll());
+        for (&self.node_pool) |*slot| {
+            if (slot.*) |node| {
+                allocator.destroy(node);
+                slot.* = null;
+            }
+        }
     }
 };
 

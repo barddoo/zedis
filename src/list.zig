@@ -22,10 +22,9 @@ pub const ZedisList = struct {
         while (current) |node| {
             current = node.next;
             const list_node: *ZedisListNode = @fieldParentPtr("node", node);
-            // Free string data if present
             switch (list_node.data) {
                 .string => |str| self.allocator.free(str),
-                .int => {},
+                .int, .short_string => {},
             }
             self.allocator.destroy(list_node);
         }
@@ -137,10 +136,9 @@ pub const ZedisList = struct {
 
     pub fn setByIndex(self: *ZedisList, index: usize, value: PrimitiveValue) !void {
         const list_node = self.getNodeAt(index) orelse return error.KeyNotFound;
-        // Free old string value if present
         switch (list_node.data) {
             .string => |str| self.allocator.free(str),
-            .int => {},
+            .int, .short_string => {},
         }
         list_node.data = value;
     }

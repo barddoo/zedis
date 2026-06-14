@@ -16,6 +16,7 @@ const aof = @import("./aof/aof.zig");
 const Clock = @import("clock.zig");
 const ClientHandle = @import("types.zig").ClientHandle;
 const invalid_client_slot_index = @import("types.zig").invalid_client_slot_index;
+const StackWriter = @import("stack_writer.zig").StackWriter;
 const Io = std.Io;
 const Stream = Io.net.Stream;
 
@@ -354,44 +355,24 @@ fn storeThreadLoop(server: *Server) void {
 }
 
 fn processCommand(self: *Server, node: *CommandNode) void {
-    self.processCommandDirect(node.client, node.args);
-}
+    var sw = StackWriter.init(self.base_allocator);
+    defer sw.deinit();
+    var response_writer = sw.writer();
+    self.processCommandDirect(node.client, node.args, &response_writer);
 
-pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value) void {
-    var alloc_writer = std.Io.Writer.Allocating.init(self.base_allocator);
-    defer alloc_writer.deinit();
-
-    self.registry.executeCommand(
-        &alloc_writer.writer,
-        client,
-        client.getCurrentStore(),
-        &self.aof_writer,
-        args,
-    ) catch |err| {
-        log.err("Command execution failed: {s}", .{@errorName(err)});
-    };
-
-    const response = alloc_writer.toOwnedSlice() catch return;
+    const response = sw.slice(&response_writer);
     if (response.len == 0) return;
-    // `response` is now owned by us; we will transfer it to the mailbox node.
 
-    const msg_node = self.base_allocator.create(MessageNode) catch {
-        self.base_allocator.free(response);
-        return;
-    };
-    msg_node.* = .{
-        .bytes = response,
-        .next = null,
-    };
-
+    const client = node.client;
     const client_slot = client.slot_handle;
-    if (client_slot.slot_index >= self.client_slots.len) {
-        log.warn("store thread: stale slot_index={d}", .{client_slot.slot_index});
-        self.base_allocator.free(msg_node.bytes);
-        self.base_allocator.destroy(msg_node);
-        return;
-    }
+    if (client_slot.slot_index >= self.client_slots.len) return;
     const slot = &self.client_slots[client_slot.slot_index];
+
+    const owned = self.base_allocator.dupe(u8, response) catch return;
+    const msg_node = slot.mailbox.acquireNode(self.base_allocator, owned) catch {
+        self.base_allocator.free(owned);
+        return;
+    };
 
     slot.mailbox.lockAtomic();
     defer slot.mailbox.unlockAtomic();
@@ -400,14 +381,11 @@ pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value)
         slot.generation.load(.acquire) == client.slot_handle.generation and
         !slot.mailbox.closed.load(.acquire);
     if (!is_active) {
-        log.warn("store thread: slot inactive for client_id={d}", .{client.client_id});
-        self.base_allocator.free(msg_node.bytes);
-        self.base_allocator.destroy(msg_node);
+        slot.mailbox.releaseNode(self.base_allocator, msg_node);
         return;
     }
     if (slot.mailbox.pending_count >= slot.mailbox.capacity) {
-        self.base_allocator.free(msg_node.bytes);
-        self.base_allocator.destroy(msg_node);
+        slot.mailbox.releaseNode(self.base_allocator, msg_node);
         return;
     }
 
@@ -418,6 +396,18 @@ pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value)
     }
     slot.mailbox.tail = msg_node;
     slot.mailbox.pending_count += 1;
+}
+
+pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
+    self.registry.executeCommand(
+        response_writer,
+        client,
+        client.getCurrentStore(),
+        &self.aof_writer,
+        args,
+    ) catch |err| {
+        log.err("Command execution failed: {s}", .{@errorName(err)});
+    };
 }
 
 // The main server loop. It waits for incoming connections and
@@ -555,11 +545,12 @@ fn enqueueToHandle(self: *Server, handle: ClientHandle, payload: []const u8) !vo
     if (handle.slot_index >= self.client_slots.len) return error.StaleHandle;
 
     const slot = &self.client_slots[handle.slot_index];
-    const node = try self.createMessageNode(payload);
-    errdefer {
-        self.base_allocator.free(node.bytes);
-        self.base_allocator.destroy(node);
-    }
+    const owned = try self.base_allocator.dupe(u8, payload);
+    const node = slot.mailbox.acquireNode(self.base_allocator, owned) catch |err| {
+        self.base_allocator.free(owned);
+        return err;
+    };
+    errdefer slot.mailbox.releaseNode(self.base_allocator, node);
 
     slot.mailbox.lockAtomic();
     defer slot.mailbox.unlockAtomic();

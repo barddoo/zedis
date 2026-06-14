@@ -221,6 +221,7 @@ pub const Writer = struct {
             switch (value) {
                 .int => |i| try self.writeIntValue(i),
                 .string => |s| try self.writeString(s),
+                .short_string => |ss| try self.writeString(ss.asSlice()),
             }
 
             current = node.next;
