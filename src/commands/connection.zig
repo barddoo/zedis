@@ -14,15 +14,30 @@ const ConfigParameter = struct {
 };
 
 const config_parameters = [_]ConfigParameter{
+    .{ .name = "acllog-max-len" },
+    .{ .name = "aof-load-broken" },
+    .{ .name = "aof-load-broken-max-size" },
+    .{ .name = "aof-load-truncated" },
+    .{ .name = "aof-use-rdb-preamble" },
+    .{ .name = "aof-write-buffer-size", .mutable = true },
+    .{ .name = "appenddirname" },
     .{ .name = "appendfilename" },
     .{ .name = "appendfsync" },
     .{ .name = "appendonly" },
+    .{ .name = "auto-aof-rewrite-min-size" },
+    .{ .name = "auto-aof-rewrite-percentage" },
     .{ .name = "bind" },
     .{ .name = "clock-update-ms" },
     .{ .name = "daemonize" },
     .{ .name = "dbfilename" },
     .{ .name = "dir" },
+    .{ .name = "disable-thp" },
     .{ .name = "initial-capacity" },
+    .{ .name = "lazyfree-lazy-eviction" },
+    .{ .name = "lazyfree-lazy-expire" },
+    .{ .name = "lazyfree-lazy-server-del" },
+    .{ .name = "lazyfree-lazy-user-del" },
+    .{ .name = "lazyfree-lazy-user-flush" },
     .{ .name = "logfile" },
     .{ .name = "loglevel" },
     .{ .name = "max-channels", .mutable = true },
@@ -31,17 +46,24 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "maxmemory", .aliases = &.{"kv-memory-budget"} },
     .{ .name = "maxmemory-policy", .aliases = &.{"eviction-policy"}, .mutable = true },
     .{ .name = "maxmemory-samples", .mutable = true },
+    .{ .name = "no-appendfsync-on-rewrite" },
+    .{ .name = "oom-score-adj" },
     .{ .name = "pidfile" },
     .{ .name = "port" },
     .{ .name = "protected-mode", .mutable = true },
+    .{ .name = "rdb-del-sync-files" },
     .{ .name = "rdb-write-buffer-size", .mutable = true },
     .{ .name = "rdbchecksum", .mutable = true },
     .{ .name = "rdbcompression", .mutable = true },
-    .{ .name = "replica-read-only", .mutable = true },
-    .{ .name = "replica-serve-stale-data", .mutable = true },
+    .{ .name = "repl-disable-tcp-nodelay" },
     .{ .name = "repl-diskless-load" },
     .{ .name = "repl-diskless-sync", .mutable = true },
     .{ .name = "repl-diskless-sync-delay", .mutable = true },
+    .{ .name = "repl-diskless-sync-max-replicas" },
+    .{ .name = "replica-lazy-flush" },
+    .{ .name = "replica-priority" },
+    .{ .name = "replica-read-only", .mutable = true },
+    .{ .name = "replica-serve-stale-data", .mutable = true },
     .{ .name = "requirepass", .mutable = true },
     .{ .name = "save" },
     .{ .name = "stop-writes-on-bgsave-error", .mutable = true },
@@ -217,10 +239,14 @@ fn findConfigParameter(name: []const u8) ?ConfigParameter {
 fn writeConfigValue(client: *Client, writer: *Writer, name: []const u8) !void {
     const server_config = client.server.config;
 
-    if (std.mem.eql(u8, name, "appendfilename")) {
+    if (std.mem.eql(u8, name, "appenddirname")) {
+        try resp.writeBulkString(writer, server_config.appenddirname);
+    } else if (std.mem.eql(u8, name, "appendfilename")) {
         try resp.writeBulkString(writer, server_config.appendfilename);
     } else if (std.mem.eql(u8, name, "appendfsync")) {
         try resp.writeBulkString(writer, server_config.appendfsync);
+    } else if (std.mem.eql(u8, name, "aof-write-buffer-size")) {
+        try writeConfigInt(writer, server_config.aof_write_buffer_size);
     } else if (std.mem.eql(u8, name, "appendonly")) {
         try writeConfigBool(writer, server_config.appendonly);
     } else if (std.mem.eql(u8, name, "bind")) {
@@ -287,6 +313,46 @@ fn writeConfigValue(client: *Client, writer: *Writer, name: []const u8) !void {
         try writeConfigInt(writer, server_config.temp_arena_size);
     } else if (std.mem.eql(u8, name, "timeout")) {
         try writeConfigInt(writer, server_config.timeout);
+    } else if (std.mem.eql(u8, name, "acllog-max-len")) {
+        try writeConfigInt(writer, server_config.acllog_max_len);
+    } else if (std.mem.eql(u8, name, "aof-load-broken")) {
+        try writeConfigBool(writer, server_config.aof_load_broken);
+    } else if (std.mem.eql(u8, name, "aof-load-broken-max-size")) {
+        try writeConfigInt(writer, server_config.aof_load_broken_max_size);
+    } else if (std.mem.eql(u8, name, "aof-load-truncated")) {
+        try writeConfigBool(writer, server_config.aof_load_truncated);
+    } else if (std.mem.eql(u8, name, "aof-use-rdb-preamble")) {
+        try writeConfigBool(writer, server_config.aof_use_rdb_preamble);
+    } else if (std.mem.eql(u8, name, "auto-aof-rewrite-min-size")) {
+        try resp.writeBulkString(writer, server_config.auto_aof_rewrite_min_size);
+    } else if (std.mem.eql(u8, name, "auto-aof-rewrite-percentage")) {
+        try writeConfigInt(writer, server_config.auto_aof_rewrite_percentage);
+    } else if (std.mem.eql(u8, name, "disable-thp")) {
+        try writeConfigBool(writer, server_config.disable_thp);
+    } else if (std.mem.eql(u8, name, "lazyfree-lazy-eviction")) {
+        try writeConfigBool(writer, server_config.lazyfree_lazy_eviction);
+    } else if (std.mem.eql(u8, name, "lazyfree-lazy-expire")) {
+        try writeConfigBool(writer, server_config.lazyfree_lazy_expire);
+    } else if (std.mem.eql(u8, name, "lazyfree-lazy-server-del")) {
+        try writeConfigBool(writer, server_config.lazyfree_lazy_server_del);
+    } else if (std.mem.eql(u8, name, "lazyfree-lazy-user-del")) {
+        try writeConfigBool(writer, server_config.lazyfree_lazy_user_del);
+    } else if (std.mem.eql(u8, name, "lazyfree-lazy-user-flush")) {
+        try writeConfigBool(writer, server_config.lazyfree_lazy_user_flush);
+    } else if (std.mem.eql(u8, name, "no-appendfsync-on-rewrite")) {
+        try writeConfigBool(writer, server_config.no_appendfsync_on_rewrite);
+    } else if (std.mem.eql(u8, name, "oom-score-adj")) {
+        try writeConfigBool(writer, server_config.oom_score_adj);
+    } else if (std.mem.eql(u8, name, "rdb-del-sync-files")) {
+        try writeConfigBool(writer, server_config.rdb_del_sync_files);
+    } else if (std.mem.eql(u8, name, "repl-disable-tcp-nodelay")) {
+        try writeConfigBool(writer, server_config.repl_disable_tcp_nodelay);
+    } else if (std.mem.eql(u8, name, "repl-diskless-sync-max-replicas")) {
+        try writeConfigInt(writer, server_config.repl_diskless_sync_max_replicas);
+    } else if (std.mem.eql(u8, name, "replica-lazy-flush")) {
+        try writeConfigBool(writer, server_config.replica_lazy_flush);
+    } else if (std.mem.eql(u8, name, "replica-priority")) {
+        try writeConfigInt(writer, server_config.replica_priority);
     } else {
         unreachable;
     }
@@ -296,6 +362,10 @@ fn applyConfigSet(client: *Client, name: []const u8, value: []const u8) ConfigSe
     const param = findConfigParameter(name) orelse return error.UnknownParameter;
     if (!param.mutable) return error.ImmutableParameter;
 
+    if (std.mem.eql(u8, param.name, "aof-write-buffer-size")) {
+        client.server.config.aof_write_buffer_size = Config.parseMemorySize(value) catch return error.InvalidValue;
+        return;
+    }
     if (std.mem.eql(u8, param.name, "max-channels")) {
         client.server.config.max_channels = parseConfigInt(u32, value) catch return error.InvalidValue;
         return;

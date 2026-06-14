@@ -2,7 +2,6 @@ const std = @import("std");
 const Client = @import("../client.zig").Client;
 const Value = @import("../parser.zig").Value;
 const Store = @import("../store.zig").Store;
-const aof = @import("../aof/aof.zig");
 const resp = @import("./resp.zig");
 
 pub const CommandError = error{
@@ -66,6 +65,16 @@ pub const CommandRegistry = struct {
         return self.commands.get(name);
     }
 
+    pub fn shouldWriteToAof(self: *CommandRegistry, name: []const u8) bool {
+        var buf: [32]u8 = undefined;
+        if (name.len > buf.len) return false;
+        const upper_name = std.ascii.upperString(&buf, name);
+        if (self.commands.get(upper_name)) |cmd_info| {
+            return cmd_info.write_to_aof;
+        }
+        return false;
+    }
+
     fn handleCommandError(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
         const msg = switch (err) {
             error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
@@ -96,7 +105,7 @@ pub const CommandRegistry = struct {
         writer: *std.Io.Writer,
         args: []const Value,
     ) !void {
-        try self.executeCommand(writer, client, client.getCurrentStore(), &client.server.aof_writer, args);
+        try self.executeCommand(writer, client, client.getCurrentStore(), args);
 
         try writer.flush();
     }
@@ -109,10 +118,9 @@ pub const CommandRegistry = struct {
         var dummy_client: Client = undefined;
         dummy_client.authenticated = true;
         var discarding = std.Io.Writer.Discarding.init(&.{});
-        var aof_writer: aof.Writer = try .init(store.io, false);
         // We should only be calling this command from the aof, so auth is assumed.
         // We should not be calling commands that require a real client.
-        try self.executeCommand(&discarding.writer, &dummy_client, store, &aof_writer, args);
+        try self.executeCommand(&discarding.writer, &dummy_client, store, args);
     }
 
     pub fn executeCommand(
@@ -120,7 +128,6 @@ pub const CommandRegistry = struct {
         writer: *std.Io.Writer,
         client: *Client,
         store: *Store,
-        aof_writer: *aof.Writer,
         args: []const Value,
     ) !void {
         if (args.len == 0) {
@@ -131,11 +138,7 @@ pub const CommandRegistry = struct {
 
         var buf: [32]u8 = undefined;
         if (command_name.len > buf.len) return error.CommandTooLong;
-
-        for (command_name, 0..) |c, i| {
-            buf[i] = std.ascii.toUpper(c);
-        }
-        const upper_name = buf[0..command_name.len];
+        const upper_name = std.ascii.upperString(&buf, command_name);
 
         // Skip auth check for commands that don't need it
         if (!std.mem.eql(u8, upper_name, "AUTH") and
@@ -177,12 +180,6 @@ pub const CommandRegistry = struct {
                         return;
                     };
                 },
-            }
-            if (aof_writer.enabled and cmd_info.write_to_aof) {
-                try resp.writeListLen(aof_writer.writer(), args.len);
-                for (args) |arg| {
-                    try resp.writeBulkString(aof_writer.writer(), arg.asSlice());
-                }
             }
         } else {
             resp.writeError(writer, "ERR unknown command") catch {};

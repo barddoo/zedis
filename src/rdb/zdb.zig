@@ -75,11 +75,16 @@ pub const Writer = struct {
     }
 
     pub fn init(allocator: mem.Allocator, store: *Store, fileName: []const u8, config: Config, io: Io) !Writer {
-        Dir.cwd().deleteFile(io, fileName) catch |err| switch (err) {
+        Dir.cwd().createDir(io, config.dir, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        const dir = try Dir.cwd().openDir(io, config.dir, .{});
+        dir.deleteFile(io, fileName) catch |err| switch (err) {
             error.FileNotFound => {},
             else => return err,
         };
-        const file = try Dir.cwd().createFile(io, fileName, .{ .truncate = true });
+        const file = try dir.createFile(io, fileName, .{ .truncate = true });
 
         // Allocate buffer using configured size (default 256KB for optimal SSD throughput)
         const buffer = try allocator.alloc(u8, config.rdb_write_buffer_size);

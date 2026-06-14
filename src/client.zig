@@ -142,6 +142,10 @@ pub const Client = struct {
             self.server.processCommandDirect(self, command.getArgs(), &response_writer);
             self.server.store_mutex.unlock();
 
+            // AOF write after mutex release: zio makes file I/O async,
+            // suspending this coroutine instead of blocking the OS thread.
+            self.server.writeAof(command.getArgSlice(0) orelse "", command.getArgs());
+
             command.deinit();
 
             // Write response directly to socket (no mailbox indirection)

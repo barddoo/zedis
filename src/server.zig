@@ -230,7 +230,11 @@ pub fn initWithConfig(
         .createdTime = now,
 
         // AOF
-        .aof_writer = try aof.Writer.init(io, false),
+        .aof_writer = try aof.Writer.init(
+            base_allocator, io, config.appendonly, config.appendfilename,
+            config.dir, config.aof_write_buffer_size,
+            std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
+        ),
     };
 
     // Rebind self-references after the final Server value is in place.
@@ -249,7 +253,7 @@ pub fn initWithConfig(
     // Load AOF file if it exists
     // 'true' to be replaced with user option (use aof/rdb on boot)
     if (true) {
-        if (aof.Reader.init(server.temp_arena.allocator(), &server.store, &server.registry, io)) |reader_value| {
+        if (aof.Reader.init(server.temp_arena.allocator(), &server.store, &server.registry, io, config.dir, config.appendfilename)) |reader_value| {
             var reader = reader_value;
             log.info("Loading AOF into store", .{});
             reader.read() catch |err| {
@@ -332,7 +336,7 @@ pub fn deinit(self: *Server) void {
     self.temp_arena.deinit();
 
     // AOF Deinit
-    self.aof_writer.deinit(self.io);
+    self.aof_writer.deinit();
 
     log.info("Server deinitialized - all memory freed", .{});
 }
@@ -403,11 +407,18 @@ pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value,
         response_writer,
         client,
         client.getCurrentStore(),
-        &self.aof_writer,
         args,
     ) catch |err| {
         log.err("Command execution failed: {s}", .{@errorName(err)});
     };
+}
+
+/// Write a command to the AOF file. Called after store_mutex is released,
+/// so the file write (which zio makes async) does not serialize other commands.
+pub fn writeAof(self: *Server, command_name: []const u8, args: []const Value) void {
+    if (!self.aof_writer.enabled) return;
+    if (!self.registry.shouldWriteToAof(command_name)) return;
+    self.aof_writer.writeCommand(args);
 }
 
 // The main server loop. It waits for incoming connections and
