@@ -15,6 +15,7 @@ const optimal_max_load_percentage = 80;
 const expired_eviction_scan_limit = 16;
 
 const EntryMap = std.StringHashMapUnmanaged(*StoreEntry);
+const testing = std.testing;
 
 pub const ValueType = enum(u8) {
     string = 0,
@@ -721,3 +722,764 @@ pub const Store = struct {
         }
     }
 };
+
+test "Store init and deinit" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try testing.expectEqual(@as(u32, 0), store.size());
+}
+
+test "Store set and get" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "hello");
+    try testing.expectEqual(@as(u32, 1), store.size());
+
+    const result = store.get("key1");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("hello", result.?.value.short_string.asSlice());
+}
+
+test "Store setInt and get" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.setInt("counter", 42);
+    try testing.expectEqual(@as(u32, 1), store.size());
+
+    const result = store.get("counter");
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i64, 42), result.?.value.int);
+}
+
+test "Store setObject with ZedisObject" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const obj = ZedisObject{ .value = .{ .string = try testing.testing.allocator.dupe(u8, "test") } };
+    defer testing.allocator.free(obj.value.string);
+    try store.putObject("key1", obj);
+
+    const result = store.get("key1");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("test", result.?.value.string);
+}
+
+test "Store delete existing key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+    try testing.expectEqual(@as(u32, 1), store.size());
+    try testing.expect(store.exists("key1"));
+
+    const deleted = store.delete("key1");
+    try testing.expect(deleted);
+    try testing.expectEqual(@as(u32, 0), store.size());
+    try testing.expect(!store.exists("key1"));
+}
+
+test "Store delete non-existing key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const deleted = store.delete("nonexistent");
+    try testing.expect(!deleted);
+}
+
+test "Store exists" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try testing.expect(!store.exists("key1"));
+
+    try store.set("key1", "value1");
+    try testing.expect(store.exists("key1"));
+
+    _ = store.delete("key1");
+    try testing.expect(!store.exists("key1"));
+}
+
+test "Store getType" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try testing.expect(store.getType("nonexistent") == null);
+
+    try store.set("str_key", "hello");
+    try testing.expectEqual(ValueType.short_string, store.getType("str_key").?);
+
+    try store.setInt("int_key", 42);
+    try testing.expectEqual(ValueType.int, store.getType("int_key").?);
+}
+
+test "Store overwrite existing key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "original");
+    try testing.expectEqual(@as(u32, 1), store.size());
+
+    const result1 = store.get("key1");
+    try testing.expect(result1 != null);
+    try testing.expectEqualStrings("original", result1.?.value.short_string.asSlice());
+
+    try store.set("key1", "updated");
+    try testing.expectEqual(@as(u32, 1), store.size());
+
+    const result2 = store.get("key1");
+    try testing.expect(result2 != null);
+    try testing.expectEqualStrings("updated", result2.?.value.short_string.asSlice());
+}
+
+test "Store overwrite string with integer" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "hello");
+    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+
+    try store.setInt("key1", 123);
+    try testing.expectEqual(ValueType.int, store.getType("key1").?);
+    try testing.expectEqual(@as(i64, 123), store.get("key1").?.value.int);
+}
+
+test "Store overwrite integer with string" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.setInt("key1", 456);
+    try testing.expectEqual(ValueType.int, store.getType("key1").?);
+
+    try store.set("key1", "world");
+    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+    try testing.expectEqualStrings("world", store.get("key1").?.value.short_string.asSlice());
+}
+
+test "Store expire functionality" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+    try testing.expect(!store.isExpired("key1"));
+
+    // Set expiration to far future
+    const now = Io.Clock.real.now(testing.io);
+    const future_time = now.toMilliseconds() + 1000000;
+    const success = try store.expire("key1", future_time);
+    try testing.expect(success);
+    try testing.expect(!store.isExpired("key1"));
+    try testing.expect(store.get("key1") != null);
+    try testing.expectEqual(future_time, store.getTtl("key1").?);
+
+    // Set expiration to past
+    const past_time: i64 = 12345;
+    _ = try store.expire("key1", past_time);
+    try testing.expect(store.isExpired("key1"));
+    try testing.expect(store.get("key1") == null); // Should be deleted on get
+}
+
+test "Store expire non-existing key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const success = try store.expire("nonexistent", 12345);
+    try testing.expect(!success);
+}
+
+test "Store delete removes from expiration map" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+    _ = try store.expire("key1", 12345);
+
+    const deleted = store.delete("key1");
+    try testing.expect(deleted);
+    try testing.expect(!store.isExpired("key1"));
+}
+
+test "Store multiple keys with different types" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("str1", "hello");
+    try store.set("str2", "world");
+    try store.setInt("int1", 123);
+    try store.setInt("int2", -456);
+
+    try testing.expectEqual(@as(u32, 4), store.size());
+
+    try testing.expectEqualStrings("hello", store.get("str1").?.value.short_string.asSlice());
+    try testing.expectEqualStrings("world", store.get("str2").?.value.short_string.asSlice());
+    try testing.expectEqual(@as(i64, 123), store.get("int1").?.value.int);
+    try testing.expectEqual(@as(i64, -456), store.get("int2").?.value.int);
+}
+
+test "Store empty string values" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("empty", "");
+
+    const result = store.get("empty");
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("", result.?.value.short_string.asSlice());
+}
+
+test "Store zero integer values" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.setInt("zero", 0);
+
+    const result = store.get("zero");
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i64, 0), result.?.value.int);
+}
+
+test "Store createList and getList" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try testing.expect(try store.getList("mylist") == null);
+
+    const list = try store.createList("mylist");
+    try testing.expectEqual(@as(usize, 0), list.len());
+
+    const retrieved_list = try store.getList("mylist");
+    try testing.expect(retrieved_list != null);
+    try testing.expectEqual(@as(usize, 0), retrieved_list.?.len());
+}
+
+test "Store list append and insert operations" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const list = try store.createList("test_append_insert");
+
+    try testing.expectEqual(@as(usize, 0), list.len());
+
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "first") });
+    try testing.expectEqual(@as(usize, 1), list.len());
+    try testing.expectEqualStrings("first", list.getByIndex(0).?.string);
+
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "second") });
+    try testing.expectEqual(@as(usize, 2), list.len());
+    try testing.expectEqualStrings("second", list.getByIndex(1).?.string);
+
+    try list.prepend(.{ .string = try testing.testing.allocator.dupe(u8, "zero") });
+    try testing.expectEqual(@as(usize, 3), list.len());
+    try testing.expectEqualStrings("zero", list.getByIndex(0).?.string);
+    try testing.expectEqualStrings("first", list.getByIndex(1).?.string);
+    try testing.expectEqualStrings("second", list.getByIndex(2).?.string);
+}
+
+test "Store list with mixed value types" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const list = try store.createList("test_mixed_values");
+
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "hello") });
+    try list.append(.{ .int = 42 });
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "world") });
+
+    try testing.expectEqual(@as(usize, 3), list.len());
+    try testing.expectEqualStrings("hello", list.getByIndex(0).?.string);
+    try testing.expectEqual(@as(i64, 42), list.getByIndex(1).?.int);
+    try testing.expectEqualStrings("world", list.getByIndex(2).?.string);
+}
+
+test "Store getList with wrong type" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("notalist", "hello");
+
+    const list = store.getList("notalist");
+    try testing.expect(list == error.WrongType);
+}
+
+test "Store list type checking" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    _ = try store.createList("mylist");
+    try testing.expectEqual(ValueType.list, store.getType("mylist").?);
+}
+
+test "Store overwrite string with list" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("key1", "hello");
+    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+
+    _ = try store.createList("key1");
+    try testing.expectEqual(ValueType.list, store.getType("key1").?);
+
+    const list = try store.getList("key1");
+    try testing.expect(list != null);
+    try testing.expectEqual(@as(usize, 0), list.?.len());
+}
+
+test "Store overwrite list with string" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const list = try store.createList("key1");
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item") });
+    try testing.expectEqual(ValueType.list, store.getType("key1").?);
+
+    try store.set("key1", "hello");
+    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+    try testing.expectEqualStrings("hello", store.get("key1").?.value.short_string.asSlice());
+
+    const retrieved_list = store.getList("key1");
+    try testing.expect(retrieved_list == error.WrongType);
+}
+
+test "Store delete list key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const list = try store.createList("mylist");
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
+
+    try testing.expect(store.exists("mylist"));
+    try testing.expectEqual(@as(u32, 1), store.size());
+
+    const deleted = store.delete("mylist");
+    try testing.expect(deleted);
+    try testing.expect(!store.exists("mylist"));
+    try testing.expectEqual(@as(u32, 0), store.size());
+    try testing.expect(try store.getList("mylist") == null);
+}
+
+test "Store empty list operations" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    const list = try store.createList("test_empty_ops");
+    try testing.expectEqual(@as(usize, 0), list.len());
+
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "") });
+    try testing.expectEqual(@as(usize, 1), list.len());
+    try testing.expectEqualStrings("", list.getByIndex(0).?.string);
+
+    try list.append(.{ .int = 0 });
+    try testing.expectEqual(@as(usize, 2), list.len());
+    try testing.expectEqual(@as(i64, 0), list.getByIndex(1).?.int);
+}
+
+test "Store flush_db removes all keys" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    // Add various types of keys
+    try store.set("str1", "hello");
+    try store.set("str2", "world");
+    try store.setInt("int1", 42);
+    try store.setInt("int2", -100);
+
+    const list = try store.createList("mylist");
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
+
+    // Verify all keys exist
+    try testing.expectEqual(@as(u32, 5), store.size());
+    try testing.expect(store.exists("str1"));
+    try testing.expect(store.exists("str2"));
+    try testing.expect(store.exists("int1"));
+    try testing.expect(store.exists("int2"));
+    try testing.expect(store.exists("mylist"));
+
+    // Flush the database
+    store.flush_db();
+
+    // Verify all keys are removed
+    try testing.expectEqual(@as(u32, 0), store.size());
+    try testing.expect(!store.exists("str1"));
+    try testing.expect(!store.exists("str2"));
+    try testing.expect(!store.exists("int1"));
+    try testing.expect(!store.exists("int2"));
+    try testing.expect(!store.exists("mylist"));
+
+    // Verify getting keys returns null
+    try testing.expect(store.get("str1") == null);
+    try testing.expect(store.get("int1") == null);
+    try testing.expect(try store.getList("mylist") == null);
+}
+
+test "Store flush_db on empty store" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try testing.expectEqual(@as(u32, 0), store.size());
+
+    // Flush empty store should not crash
+    store.flush_db();
+
+    try testing.expectEqual(@as(u32, 0), store.size());
+}
+
+test "Store flush_db allows reuse after flush" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    // Add keys
+    try store.set("key1", "value1");
+    try store.setInt("key2", 123);
+    try testing.expectEqual(@as(u32, 2), store.size());
+
+    // Flush
+    store.flush_db();
+    try testing.expectEqual(@as(u32, 0), store.size());
+
+    // Add new keys after flush
+    try store.set("key3", "value3");
+    try store.setInt("key4", 456);
+    try testing.expectEqual(@as(u32, 2), store.size());
+
+    // Verify new keys work correctly
+    try testing.expectEqualStrings("value3", store.get("key3").?.value.short_string.asSlice());
+    try testing.expectEqual(@as(i64, 456), store.get("key4").?.value.int);
+
+    // Verify old keys don't exist
+    try testing.expect(store.get("key1") == null);
+    try testing.expect(store.get("key2") == null);
+}
+
+test "Store maintenance() rehashes and reduces capacity" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Add many keys to grow the capacity
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+
+    const capacity_before = store.map.capacity();
+    const size_before = store.map.count();
+    try testing.expect(capacity_before > 0);
+    try testing.expectEqual(@as(usize, 1000), size_before);
+
+    // Delete half the keys to create tombstones
+    i = 0;
+    while (i < 500) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        const deleted = store.delete(key);
+        try testing.expect(deleted);
+    }
+
+    const size_after_delete = store.map.count();
+    try testing.expectEqual(@as(usize, 500), size_after_delete);
+
+    // Deletes may trigger automatic maintenance, but capacity should never grow here.
+    try testing.expect(store.map.capacity() <= capacity_before);
+
+    // Run maintenance to clean up tombstones
+    store.maintenance();
+
+    const capacity_after = store.map.capacity();
+    const size_after = store.map.count();
+
+    // Size should remain the same
+    try testing.expectEqual(@as(usize, 500), size_after);
+
+    // Capacity should be reduced or at least not larger
+    try testing.expect(capacity_after <= capacity_before);
+
+    // Verify remaining keys are still accessible
+    i = 500;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        const result = store.get(key);
+        try testing.expect(result != null);
+        try testing.expectEqualStrings("value", result.?.value.short_string.asSlice());
+    }
+}
+
+test "Store maintenance() resets deletion counter" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Add and delete keys to increment deletion counter
+    var i: usize = 0;
+    while (i < 100) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+        _ = store.delete(key);
+    }
+
+    try testing.expect(store.deletions_since_rehash > 0);
+
+    // Run maintenance
+    store.maintenance();
+
+    // Deletion counter should be reset
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store maybeMaintenance() respects rate limiting" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Add enough keys to trigger capacity growth
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+
+    // Delete many keys to exceed threshold
+    i = 0;
+    while (i < 700) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        _ = store.delete(key);
+    }
+
+    const capacity_before = store.map.capacity();
+
+    // Reset last_maintenance_check to ensure our explicit call isn't rate-limited
+    // (delete() calls maybeMaintenance() automatically, which may have updated it recently)
+    store.last_maintenance_check = 0;
+    const last_check_before = store.last_maintenance_check;
+
+    // Call maybeMaintenance multiple times in quick succession
+    store.maybeMaintenance();
+    const capacity_after_first = store.map.capacity();
+    const last_check_after_first = store.last_maintenance_check;
+
+    // First call should trigger maintenance
+    try testing.expect(capacity_after_first <= capacity_before);
+    try testing.expect(last_check_after_first > last_check_before);
+
+    // Immediately call again (within 50ms)
+    store.maybeMaintenance();
+    const capacity_after_second = store.map.capacity();
+    const last_check_after_second = store.last_maintenance_check;
+
+    // Second call should be rate-limited (no maintenance)
+    try testing.expectEqual(capacity_after_first, capacity_after_second);
+    try testing.expectEqual(last_check_after_first, last_check_after_second);
+}
+
+test "Store maybeMaintenance() triggers on 50% waste threshold" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Add many keys
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+
+    const capacity_before = store.map.capacity();
+
+    // Delete more than 50% of capacity to trigger waste threshold
+    // (capacity - count) > capacity / 2
+    const target_deletions = (capacity_before / 2) + 10;
+    i = 0;
+    while (i < target_deletions) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        _ = store.delete(key);
+    }
+
+    // Reset last_maintenance_check to avoid rate limiting
+    store.last_maintenance_check = 0;
+
+    // This should trigger maintenance due to waste threshold
+    store.maybeMaintenance();
+
+    // Deletion counter should be reset after maintenance
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store maybeMaintenance() triggers on 25% deletions threshold" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Add keys to establish capacity
+    var i: usize = 0;
+    while (i < 500) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+
+    const capacity = store.map.capacity();
+    const threshold = capacity / 4;
+
+    // Block the implicit maintenance calls inside delete() so this test can
+    // deterministically verify the explicit maybeMaintenance() invocation.
+    store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
+
+    // Delete exactly threshold + 1 keys to trigger maintenance
+    i = 0;
+    while (i < threshold + 1) : (i += 1) {
+        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        defer testing.allocator.free(key);
+        _ = store.delete(key);
+    }
+
+    try testing.expectEqual(threshold + 1, store.deletions_since_rehash);
+
+    // Reset last_maintenance_check to avoid rate limiting
+    store.last_maintenance_check = 0;
+
+    // This should trigger maintenance due to deletion threshold
+    store.maybeMaintenance();
+
+    // Deletion counter should be reset after maintenance
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+}
+
+test "Store deletion tracking increments counter" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    // Initially, deletion counter should be 0
+    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+
+    // Add and delete some keys
+    try store.set("key1", "value1");
+    try store.set("key2", "value2");
+    try store.set("key3", "value3");
+
+    // Keep delete() from auto-triggering maintenance so we can verify the
+    // raw deletion counter behavior directly.
+    store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
+
+    _ = store.delete("key1");
+    try testing.expect(store.deletions_since_rehash >= 1);
+
+    _ = store.delete("key2");
+    try testing.expect(store.deletions_since_rehash >= 2);
+
+    _ = store.delete("key3");
+    try testing.expect(store.deletions_since_rehash >= 3);
+
+    // Deleting non-existent key should not increment
+    const before_failed_delete = store.deletions_since_rehash;
+    _ = store.delete("nonexistent");
+    try testing.expectEqual(before_failed_delete, store.deletions_since_rehash);
+}
+
+test "Store evictOne allkeys_lru evicts least recently used key" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = .allkeys_lru,
+        .maxmemory_samples = 5,
+    });
+    defer store.deinit();
+
+    try store.set("key1", "value1");
+    try store.set("key2", "value2");
+    try store.set("key3", "value3");
+
+    _ = store.get("key1");
+
+    try testing.expect(store.evictOne(.allkeys_lru));
+    try testing.expect(store.get("key2") == null);
+    try testing.expect(store.get("key1") != null);
+    try testing.expect(store.get("key3") != null);
+}
+
+test "Store evictOne volatile_lru only evicts volatile keys" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = .volatile_lru,
+        .maxmemory_samples = 5,
+    });
+    defer store.deinit();
+
+    try store.set("persistent", "value");
+    try store.set("ttl1", "value1");
+    try store.set("ttl2", "value2");
+
+    const now = Io.Clock.real.now(testing.io).toMilliseconds();
+    _ = try store.expire("ttl1", now + 10_000);
+    _ = try store.expire("ttl2", now + 10_000);
+
+    _ = store.get("ttl1");
+
+    try testing.expect(store.evictOne(.volatile_lru));
+    try testing.expect(store.get("ttl2") == null);
+    try testing.expect(store.get("ttl1") != null);
+    try testing.expect(store.get("persistent") != null);
+}
+
+test "Store evictOne prefers expired ttl entries before LRU tail" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = .allkeys_lru,
+        .maxmemory_samples = 5,
+    });
+    defer store.deinit();
+
+    try store.set("fresh1", "value1");
+    try store.set("expired", "value2");
+    try store.set("fresh2", "value3");
+
+    _ = try store.expire("expired", 1);
+    _ = store.get("fresh2");
+
+    try testing.expect(store.evictOne(.allkeys_lru));
+    try testing.expect(store.get("expired") == null);
+    try testing.expect(store.get("fresh1") != null);
+    try testing.expect(store.get("fresh2") != null);
+}

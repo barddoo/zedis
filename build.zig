@@ -32,17 +32,19 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&check_exe.step);
 
     // --- Tests ---
+    const test_filters = b.option([][]const u8, "test-filter", "Filter tests (e.g. -Dtest-filter=string)") orelse &[0][]const u8{};
+
     const test_mod = b.createModule(.{
-        .root_source_file = b.path("src/unit_tests.zig"),
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .Debug,
     });
     test_mod.addImport("zio", zio_mod);
 
     const unit_tests = b.addTest(.{
         .name = "test-unit",
         .root_module = test_mod,
-        .filters = b.args orelse &.{},
+        .filters = test_filters,
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);

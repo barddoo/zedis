@@ -579,12 +579,6 @@ test "Value asUsize positive number" {
     try testing.expectEqual(@as(usize, 42), result);
 }
 
-test "Value asUsize zero" {
-    const value = Value{ .data = "0" };
-    const result = try value.asUsize();
-    try testing.expectEqual(@as(usize, 0), result);
-}
-
 test "Value asU16 small number" {
     const value = Value{ .data = "6379" };
     const result = try value.asU16();
@@ -601,12 +595,6 @@ test "Value asU16 overflow" {
     const value = Value{ .data = "65536" };
     const result = value.asU16();
     try testing.expectError(error.Overflow, result);
-}
-
-test "Value asSlice returns correct slice" {
-    const value = Value{ .data = "hello world" };
-    const result = value.asSlice();
-    try testing.expectEqualStrings("hello world", result);
 }
 
 test "Command init and addArg" {

@@ -231,8 +231,12 @@ pub fn initWithConfig(
 
         // AOF
         .aof_writer = try aof.Writer.init(
-            base_allocator, io, config.appendonly, config.appendfilename,
-            config.dir, config.aof_write_buffer_size,
+            base_allocator,
+            io,
+            config.appendonly,
+            config.appendfilename,
+            config.dir,
+            config.aof_write_buffer_size,
             std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
         ),
     };
