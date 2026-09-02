@@ -176,18 +176,35 @@ Redis modules extend Redis functionality with custom data types and commands. Ze
 | TS.DELETERULE | No        | Delete a downsampling rule                                                                                      |
 | TS.ALTER      | Yes       | Alter the configuration of a time series                                                                        |
 
-### Popular Redis Modules
+## RediSearch (FT)
 
-| Module          | Supported | Notes                                               |
-| --------------- | --------- | --------------------------------------------------- |
-| RedisJSON       | No        | JSON data type and operations                       |
-| RediSearch      | No        | Full-text search and indexing                       |
-| RedisGraph      | No        | Graph database functionality                        |
-| RedisTimeSeries | No        | Time series data structures                         |
-| RedisBloom      | No        | Probabilistic data structures (Bloom filters, etc.) |
-| RedisGears      | No        | Programmable data processing engine                 |
+Search indexes are self-contained (documents stored inside the index via the
+legacy `FT.ADD` API). Vectors use the `FLAT` (exact KNN) algorithm with
+`L2`, `IP`, and `COSINE` distance metrics. Indexes are rebuilt from AOF on boot.
 
-### Module System
+| Command      | Supported | Notes                                                                                   |
+| ------------ | --------- | --------------------------------------------------------------------------------------- |
+| FT.CREATE    | Yes       | Schema with TEXT, NUMERIC, TAG, and VECTOR (FLAT) fields                                 |
+| FT.DROPINDEX | Yes       | Delete an index                                                                          |
+| FT._LIST     | Yes       | List all search indexes                                                                  |
+| FT.INFO      | Yes       | Index schema and document count                                                          |
+| FT.ADD       | Yes       | Add a document (supports REPLACE)                                                        |
+| FT.DEL       | Yes       | Delete a document                                                                        |
+| FT.GET       | Yes       | Fetch a document's fields                                                                |
+| FT.SEARCH    | Yes       | Text/numeric/tag filters, BM25 scoring, SORTBY, LIMIT, RETURN, PARAMS, and `=>[KNN]`     |
+
+## Popular Redis Modules
+
+| Module          | Supported | Notes                                                              |
+| --------------- | --------- | ------------------------------------------------------------------ |
+| RedisJSON       | No        | JSON data type and operations                                      |
+| RediSearch      | Partial   | FT commands implemented natively (see RediSearch (FT) section)     |
+| RedisGraph      | No        | Graph database functionality                                       |
+| RedisTimeSeries | Partial   | Time series data structures (see Time Series section)              |
+| RedisBloom      | Partial   | Probabilistic data structures (see Bloom Filter commands)          |
+| RedisGears      | No        | Programmable data processing engine                                |
+
+## Module System
 
 | Feature           | Supported | Notes                            |
 | ----------------- | --------- | -------------------------------- |
@@ -198,11 +215,11 @@ Redis modules extend Redis functionality with custom data types and commands. Ze
 
 ## Summary
 
-**Total Commands**: 77
-- **Fully Implemented**: 28 commands
+**Total Commands**: 85
+- **Fully Implemented**: 36 commands
 - **Partially Implemented**: 0 commands
 - **Not Implemented**: 49 commands
 
-**Implementation Coverage**: ~36%
+**Implementation Coverage**: ~42%
 
 This compatibility matrix will be updated as new commands are implemented in Zedis.

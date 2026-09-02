@@ -140,7 +140,7 @@ pub const Reader = struct {
 
 const testing = std.testing;
 test "aof reading test" {
-    const reg_init = @import("../commands/init.zig");
+    const reg_init = @import("../commands/init_registry.zig");
 
     // Read a command and test that the value is stored as expected
     const test_file_data = "*3\r\n$3\r\nset\r\n$1\r\nt\r\n$4\r\ntest\r\n";
@@ -169,7 +169,7 @@ test "aof reading test" {
     try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
 }
 test "aof writing test" {
-    const reg_init = @import("../commands/init.zig");
+    const reg_init = @import("../commands/init_registry.zig");
 
     // Execute a command and test that it writes it correctly
     const test_file_name = "aof_writing_test.aof";

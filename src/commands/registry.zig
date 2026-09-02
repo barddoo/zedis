@@ -88,6 +88,15 @@ pub const CommandRegistry = struct {
             error.AuthInvalidPassword => "ERR invalid password",
             error.AlreadyExists => "ERR key already exists",
             error.TSDB_DuplicateTimestamp => "ERR duplicate timestamp",
+            error.DocumentExists => "ERR document already exists",
+            error.DocumentNotFound => "ERR no such document",
+            error.FieldNotFound => "ERR unknown field",
+            error.UnsupportedVectorAlgorithm => "ERR unsupported vector index algorithm",
+            error.SyntaxError => "ERR syntax error",
+            error.InvalidArgument => "ERR invalid argument",
+            error.QuerySyntax => "ERR invalid query syntax",
+            error.UnknownField => "ERR unknown field",
+            error.MissingParam => "ERR missing query parameter",
             else => blk: {
                 std.log.err("Handler for command '{s}' failed with error: {s}", .{
                     command_name,
