@@ -7,6 +7,7 @@ const Clock = @import("clock.zig");
 const Config = @import("config.zig");
 const string_match = @import("./util/string_match.zig").string_match;
 const ScalableBloomFilter = @import("./bloom/bloom.zig").BloomFilter;
+const SearchIndex = @import("./search/index.zig").SearchIndex;
 
 const assert = std.debug.assert;
 
@@ -24,6 +25,7 @@ pub const ValueType = enum(u8) {
     short_string,
     time_series,
     bloom_filter,
+    search_index,
 
     pub fn toRdbOpcode(self: ValueType) u8 {
         return @intFromEnum(self);
@@ -44,6 +46,7 @@ pub const ZedisValue = union(ValueType) {
     short_string: ShortString,
     time_series: *TimeSeries,
     bloom_filter: *ScalableBloomFilter,
+    search_index: *SearchIndex,
 };
 
 pub const ZedisObject = struct {
@@ -180,6 +183,7 @@ pub const Store = struct {
             .short_string => {},
             .time_series => {},
             .bloom_filter => {},
+            .search_index => {},
         }
         return cloned;
     }
@@ -202,6 +206,10 @@ pub const Store = struct {
             .bloom_filter => |bf_ptr| {
                 bf_ptr.deinit();
                 self.allocator.destroy(bf_ptr);
+            },
+            .search_index => |si_ptr| {
+                si_ptr.deinit();
+                self.allocator.destroy(si_ptr);
             },
         }
     }
@@ -455,6 +463,27 @@ pub const Store = struct {
 
         switch (entry.object.value) {
             .bloom_filter => |bf_ptr| return bf_ptr,
+            else => return error.WrongType,
+        }
+    }
+
+    pub fn createSearchIndex(self: *Store, key: []const u8, si: SearchIndex) !void {
+        assert(key.len > 0);
+        if (self.exists(key)) return error.AlreadyExists;
+
+        const si_ptr = try self.allocator.create(SearchIndex);
+        errdefer self.allocator.destroy(si_ptr);
+
+        si_ptr.* = si;
+        try self.putObject(key, .{ .value = .{ .search_index = si_ptr } });
+    }
+
+    pub fn getSearchIndex(self: *Store, key: []const u8) !?*SearchIndex {
+        assert(key.len > 0);
+        const entry = self.resolveEntry(key, true) orelse return null;
+
+        switch (entry.object.value) {
+            .search_index => |si_ptr| return si_ptr,
             else => return error.WrongType,
         }
     }

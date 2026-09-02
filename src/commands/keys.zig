@@ -66,6 +66,7 @@ pub fn typeCmd(writer: *Writer, store: *Store, args: []const Value) !void {
         .list => "list",
         .time_series => "tseries-type",
         .bloom_filter => "bloom_filter",
+        .search_index => "search_index",
     } else "none";
 
     try resp.writeBulkString(writer, type_str);
