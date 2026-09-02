@@ -5,7 +5,7 @@ pub const ShortString = struct {
     data: [23]u8,
     len: u8,
 
-    pub fn fromSlice(str: []const u8) ShortString {
+    pub fn from_slice(str: []const u8) ShortString {
         assert(str.len <= 23);
         var ss: ShortString = .{ .data = undefined, .len = @intCast(str.len) };
         @memcpy(ss.data[0..str.len], str);
@@ -13,7 +13,7 @@ pub const ShortString = struct {
         return ss;
     }
 
-    pub fn asSlice(self: *const ShortString) []const u8 {
+    pub fn as_slice(self: *const ShortString) []const u8 {
         return self.data[0..self.len];
     }
 };
@@ -23,9 +23,9 @@ pub const PrimitiveValue = union(enum) {
     short_string: ShortString,
     int: i64,
 
-    pub fn fromSlice(str: []const u8, allocator: std.mem.Allocator) !PrimitiveValue {
+    pub fn from_slice(str: []const u8, allocator: std.mem.Allocator) !PrimitiveValue {
         if (str.len <= 23) {
-            return .{ .short_string = ShortString.fromSlice(str) };
+            return .{ .short_string = ShortString.from_slice(str) };
         }
         const duped = try allocator.dupe(u8, str);
         return .{ .string = duped };

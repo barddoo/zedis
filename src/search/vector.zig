@@ -6,13 +6,13 @@ pub const VectorType = enum {
     float32,
     float64,
 
-    pub fn fromSlice(s: []const u8) ?VectorType {
+    pub fn from_slice(s: []const u8) ?VectorType {
         if (std.ascii.eqlIgnoreCase(s, "FLOAT32")) return .float32;
         if (std.ascii.eqlIgnoreCase(s, "FLOAT64")) return .float64;
         return null;
     }
 
-    pub fn elemSize(self: VectorType) usize {
+    pub fn elem_size(self: VectorType) usize {
         return switch (self) {
             .float32 => 4,
             .float64 => 8,
@@ -25,7 +25,7 @@ pub const DistanceMetric = enum {
     ip,
     cosine,
 
-    pub fn fromSlice(s: []const u8) ?DistanceMetric {
+    pub fn from_slice(s: []const u8) ?DistanceMetric {
         if (std.ascii.eqlIgnoreCase(s, "L2")) return .l2;
         if (std.ascii.eqlIgnoreCase(s, "IP")) return .ip;
         if (std.ascii.eqlIgnoreCase(s, "COSINE")) return .cosine;
@@ -65,7 +65,7 @@ pub const VectorIndex = struct {
     }
 
     pub fn add(self: *VectorIndex, doc_id: u64, blob: []const u8) !void {
-        if (blob.len != @as(usize, self.params.dim) * self.params.typ.elemSize()) {
+        if (blob.len != @as(usize, self.params.dim) * self.params.typ.elem_size()) {
             return error.VectorDimensionMismatch;
         }
         const owned = try self.allocator.dupe(u8, blob);
@@ -87,8 +87,8 @@ pub const VectorIndex = struct {
     pub fn similarity(self: *const VectorIndex, a: []const u8, b: []const u8) f64 {
         const dim: usize = self.params.dim;
         switch (self.params.typ) {
-            .float32 => return similarityFor(f32, self.params.metric, a, b, dim),
-            .float64 => return similarityFor(f64, self.params.metric, a, b, dim),
+            .float32 => return similarity_for(f32, self.params.metric, a, b, dim),
+            .float64 => return similarity_for(f64, self.params.metric, a, b, dim),
         }
     }
 
@@ -114,7 +114,7 @@ pub const VectorIndex = struct {
 
     /// KNN restricted to doc ids present in `candidates`. Returns top-k sorted
     /// best-first with their scores.
-    pub fn knnFiltered(
+    pub fn knn_filtered(
         self: *const VectorIndex,
         query: []const u8,
         k: usize,
@@ -145,7 +145,7 @@ pub const KnnResult = struct {
     score: f64,
 };
 
-inline fn readFloat(comptime T: type, blob: []const u8, i: usize) T {
+inline fn read_float(comptime T: type, blob: []const u8, i: usize) T {
     var tmp: [@sizeOf(T)]u8 align(@alignOf(T)) = undefined;
     @memcpy(tmp[0..], blob[i * @sizeOf(T) ..][0..@sizeOf(T)]);
     return std.mem.bytesToValue(T, &tmp);
@@ -153,13 +153,13 @@ inline fn readFloat(comptime T: type, blob: []const u8, i: usize) T {
 
 /// Native SIMD block size, in elements of `T`, for the compile-target CPU
 /// (e.g. 4 on aarch64/SSE2 for f32, 8 with AVX2, 16 with AVX-512).
-fn vecLen(comptime T: type) comptime_int {
+fn vec_len(comptime T: type) comptime_int {
     return std.simd.suggestVectorLength(T) orelse 4;
 }
 
-/// Loads vecLen(T) floats (unaligned byte blob) into a vector.
-inline fn loadVec(comptime T: type, blob: []const u8, offset: usize) @Vector(vecLen(T), T) {
-    const len = comptime vecLen(T);
+/// Loads vec_len(T) floats (unaligned byte blob) into a vector.
+inline fn load_vec(comptime T: type, blob: []const u8, offset: usize) @Vector(vec_len(T), T) {
+    const len = comptime vec_len(T);
     const bytes = blob[offset * @sizeOf(T) ..][0 .. len * @sizeOf(T)];
     var buf: [len * @sizeOf(T)]u8 align(@alignOf(T)) = undefined;
     @memcpy(buf[0..], bytes);
@@ -167,57 +167,57 @@ inline fn loadVec(comptime T: type, blob: []const u8, offset: usize) @Vector(vec
 }
 
 fn dot(comptime T: type, a: []const u8, b: []const u8, dim: usize) f64 {
-    const len = comptime vecLen(T);
+    const len = comptime vec_len(T);
     var total: f64 = 0;
     var i: usize = 0;
     while (i + len <= dim) : (i += len) {
-        const av = loadVec(T, a, i);
-        const bv = loadVec(T, b, i);
+        const av = load_vec(T, a, i);
+        const bv = load_vec(T, b, i);
         total += @as(f64, @floatCast(@reduce(.Add, av * bv)));
     }
     while (i < dim) : (i += 1) {
-        total += @as(f64, @floatCast(readFloat(T, a, i))) * @as(f64, @floatCast(readFloat(T, b, i)));
+        total += @as(f64, @floatCast(read_float(T, a, i))) * @as(f64, @floatCast(read_float(T, b, i)));
     }
     return total;
 }
 
 fn norm(comptime T: type, a: []const u8, dim: usize) f64 {
-    const len = comptime vecLen(T);
+    const len = comptime vec_len(T);
     var total: f64 = 0;
     var i: usize = 0;
     while (i + len <= dim) : (i += len) {
-        const av = loadVec(T, a, i);
+        const av = load_vec(T, a, i);
         total += @as(f64, @floatCast(@reduce(.Add, av * av)));
     }
     while (i < dim) : (i += 1) {
-        const av = readFloat(T, a, i);
+        const av = read_float(T, a, i);
         total += @as(f64, @floatCast(av)) * @as(f64, @floatCast(av));
     }
     return @sqrt(total);
 }
 
-fn l2Sq(comptime T: type, a: []const u8, b: []const u8, dim: usize) f64 {
-    const len = comptime vecLen(T);
+fn l2_sq(comptime T: type, a: []const u8, b: []const u8, dim: usize) f64 {
+    const len = comptime vec_len(T);
     var total: f64 = 0;
     var i: usize = 0;
     while (i + len <= dim) : (i += len) {
-        const av = loadVec(T, a, i);
-        const bv = loadVec(T, b, i);
+        const av = load_vec(T, a, i);
+        const bv = load_vec(T, b, i);
         const diff = av - bv;
         total += @as(f64, @floatCast(@reduce(.Add, diff * diff)));
     }
     while (i < dim) : (i += 1) {
-        const av = readFloat(T, a, i);
-        const bv = readFloat(T, b, i);
+        const av = read_float(T, a, i);
+        const bv = read_float(T, b, i);
         const d = @as(f64, @floatCast(av - bv));
         total += d * d;
     }
     return total;
 }
 
-fn similarityFor(comptime T: type, metric: DistanceMetric, a: []const u8, b: []const u8, dim: usize) f64 {
+fn similarity_for(comptime T: type, metric: DistanceMetric, a: []const u8, b: []const u8, dim: usize) f64 {
     switch (metric) {
-        .l2 => return -l2Sq(T, a, b, dim),
+        .l2 => return -l2_sq(T, a, b, dim),
         .ip => return dot(T, a, b, dim),
         .cosine => {
             const d = dot(T, a, b, dim);
@@ -231,7 +231,7 @@ fn similarityFor(comptime T: type, metric: DistanceMetric, a: []const u8, b: []c
 
 const testing = std.testing;
 
-fn vecF32(values: []const f32) []const u8 {
+fn vec_f32(values: []const f32) []const u8 {
     return std.mem.sliceAsBytes(values);
 }
 
@@ -243,10 +243,10 @@ test "vector l2 similarity negates distance" {
     });
     defer vi.deinit();
 
-    try vi.add(1, vecF32(&[_]f32{ 1, 1 }));
-    try vi.add(2, vecF32(&[_]f32{ 0, 0 }));
+    try vi.add(1, vec_f32(&[_]f32{ 1, 1 }));
+    try vi.add(2, vec_f32(&[_]f32{ 0, 0 }));
 
-    const query = vecF32(&[_]f32{ 1, 1 });
+    const query = vec_f32(&[_]f32{ 1, 1 });
     const s1 = vi.similarity(query, vi.entries.items[0].data);
     const s2 = vi.similarity(query, vi.entries.items[1].data);
     try testing.expect(s1 > s2); // identical vector scores highest
@@ -260,11 +260,11 @@ test "vector knn returns nearest first" {
     });
     defer vi.deinit();
 
-    try vi.add(1, vecF32(&[_]f32{ 0, 0 }));
-    try vi.add(2, vecF32(&[_]f32{ 10, 10 }));
-    try vi.add(3, vecF32(&[_]f32{ 1, 1 }));
+    try vi.add(1, vec_f32(&[_]f32{ 0, 0 }));
+    try vi.add(2, vec_f32(&[_]f32{ 10, 10 }));
+    try vi.add(3, vec_f32(&[_]f32{ 1, 1 }));
 
-    const query = vecF32(&[_]f32{ 1, 1 });
+    const query = vec_f32(&[_]f32{ 1, 1 });
     var results = try vi.knn(query, 2);
     defer results.deinit(testing.allocator);
 
@@ -281,7 +281,7 @@ test "vector rejects wrong blob length" {
     });
     defer vi.deinit();
 
-    try testing.expectError(error.VectorDimensionMismatch, vi.add(1, vecF32(&[_]f32{1})));
+    try testing.expectError(error.VectorDimensionMismatch, vi.add(1, vec_f32(&[_]f32{1})));
 }
 
 test "vector remove" {
@@ -292,8 +292,8 @@ test "vector remove" {
     });
     defer vi.deinit();
 
-    try vi.add(1, vecF32(&[_]f32{1}));
-    try vi.add(2, vecF32(&[_]f32{2}));
+    try vi.add(1, vec_f32(&[_]f32{1}));
+    try vi.add(2, vec_f32(&[_]f32{2}));
     vi.remove(1);
     try testing.expectEqual(@as(usize, 1), vi.count());
     try testing.expectEqual(@as(u64, 2), vi.entries.items[0].doc_id);

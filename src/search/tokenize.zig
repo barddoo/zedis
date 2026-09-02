@@ -48,8 +48,8 @@ pub const Tokenizer = struct {
             @memset(&chunk, 0);
             @memcpy(chunk[0..chunk_len], input[i..][0..chunk_len]);
 
-            const flags: @Vector(VEC_LEN, u8) = sepMask(chunk);
-            const mask: MaskInt = toMask(flags);
+            const flags: @Vector(VEC_LEN, u8) = sep_mask(chunk);
+            const mask: MaskInt = to_mask(flags);
 
             var b: usize = 0;
             while (b < VEC_LEN) : (b += 1) {
@@ -72,7 +72,7 @@ pub const Tokenizer = struct {
 
     /// Counts unique tokens and their term frequencies via linear scan.
     /// Returned slices borrow from `self.tokens`.
-    pub fn uniqueTokens(self: *const Tokenizer) std.ArrayListUnmanaged(TokenCount) {
+    pub fn unique_tokens(self: *const Tokenizer) std.ArrayListUnmanaged(TokenCount) {
         var uniques: std.ArrayListUnmanaged(TokenCount) = .empty;
         for (self.tokens.items) |tok| {
             var found = false;
@@ -100,7 +100,7 @@ pub const TokenCount = struct {
 /// Returns a `@Vector(VEC_LEN, u8)` of 0/1 flags: 1 at separator positions.
 /// (Uses `@select` + bitwise ops because Zig's `and`/`or` keywords do not
 /// operate element-wise on boolean vectors.)
-inline fn sepMask(chunk: [VEC_LEN]u8) @Vector(VEC_LEN, u8) {
+inline fn sep_mask(chunk: [VEC_LEN]u8) @Vector(VEC_LEN, u8) {
     const vec: @Vector(VEC_LEN, u8) = chunk;
     const one = @as(@Vector(VEC_LEN, u8), @splat(1));
     const zero = @as(@Vector(VEC_LEN, u8), @splat(0));
@@ -123,7 +123,7 @@ inline fn sepMask(chunk: [VEC_LEN]u8) @Vector(VEC_LEN, u8) {
 
 /// Reduces a 0/1 flag vector to a bitmask: bit k set means position k is a
 /// separator. Uses `std.simd.iota` to build the {1<<0, 1<<1, ...} weights.
-inline fn toMask(flags: @Vector(VEC_LEN, u8)) MaskInt {
+inline fn to_mask(flags: @Vector(VEC_LEN, u8)) MaskInt {
     const weights: @Vector(VEC_LEN, MaskInt) = @as(@Vector(VEC_LEN, MaskInt), @splat(1)) << std.simd.iota(MaskInt, VEC_LEN);
     const w: @Vector(VEC_LEN, MaskInt) = @intCast(flags);
     return @reduce(.Add, w * weights);
@@ -146,7 +146,7 @@ test "tokenize counts term frequencies" {
     var t = Tokenizer.init(testing.allocator);
     defer t.deinit();
     try t.tokenize("foo bar foo baz foo");
-    var uniques = t.uniqueTokens();
+    var uniques = t.unique_tokens();
     defer uniques.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 3), uniques.items.len);
     var foo_count: u32 = 0;

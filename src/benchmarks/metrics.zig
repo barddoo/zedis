@@ -111,7 +111,7 @@ pub const ThroughputCounter = struct {
         self.operations = 0;
     }
 
-    pub fn recordOp(self: *ThroughputCounter) void {
+    pub fn record_op(self: *ThroughputCounter) void {
         self.operations += 1;
     }
 
@@ -119,14 +119,14 @@ pub const ThroughputCounter = struct {
         self.end_timestamp = Io.Clock.awake.now(self.io);
     }
 
-    pub fn opsPerSecond(self: ThroughputCounter) f64 {
+    pub fn ops_per_second(self: ThroughputCounter) f64 {
         const duration_ns: u64 = @intCast(self.start_timestamp.durationTo(self.end_timestamp).toNanoseconds());
         if (duration_ns == 0) return 0.0;
         const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
         return @as(f64, @floatFromInt(self.operations)) / duration_s;
     }
 
-    pub fn durationMs(self: ThroughputCounter) f64 {
+    pub fn duration_ms(self: ThroughputCounter) f64 {
         const duration_ns: u64 = @intCast(self.start_timestamp.durationTo(self.end_timestamp).toNanoseconds());
         return @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
     }
@@ -148,7 +148,7 @@ pub const MemorySnapshot = struct {
         };
     }
 
-    pub fn netBytes(self: MemorySnapshot) i64 {
+    pub fn net_bytes(self: MemorySnapshot) i64 {
         return @as(i64, @intCast(self.allocated_bytes)) - @as(i64, @intCast(self.freed_bytes));
     }
 };
@@ -159,14 +159,14 @@ pub const MemoryDiff = struct {
     allocations: i64,
     deallocations: i64,
 
-    pub fn netBytes(self: MemoryDiff) i64 {
+    pub fn net_bytes(self: MemoryDiff) i64 {
         return self.allocated_bytes - self.freed_bytes;
     }
 
     pub fn format(self: MemoryDiff, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        const net = self.netBytes();
+        const net = self.net_bytes();
         const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
         const sign: u8 = if (net >= 0) '+' else '-';
         try writer.print(
@@ -292,13 +292,13 @@ test "ThroughputCounter" {
     // Simulate some operations
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
-        counter.recordOp();
+        counter.record_op();
     }
 
     std.time.sleep(10 * std.time.ns_per_ms); // Sleep 10ms
     counter.stop();
 
-    const ops_per_sec = counter.opsPerSecond();
+    const ops_per_sec = counter.ops_per_second();
     try std.testing.expect(ops_per_sec > 0);
     try std.testing.expect(ops_per_sec < 1_000_000); // Sanity check
 }

@@ -49,7 +49,7 @@ pub const ZedisList = struct {
         self.cached_len += 1;
     }
 
-    pub fn popFirst(self: *ZedisList) ?PrimitiveValue {
+    pub fn pop_first(self: *ZedisList) ?PrimitiveValue {
         const node = self.list.popFirst() orelse return null;
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);
         const value = list_node.data;
@@ -70,7 +70,7 @@ pub const ZedisList = struct {
     /// Normalize a signed index to an unsigned index.
     /// Returns null if the index is out of bounds.
     /// Negative indices count from the end: -1 is the last element, -2 is second to last, etc.
-    pub fn normalizeIndex(index: i64, list_len: usize) ?usize {
+    pub fn normalize_index(index: i64, list_len: usize) ?usize {
         if (list_len == 0) return null;
 
         if (index < 0) {
@@ -86,7 +86,7 @@ pub const ZedisList = struct {
 
     /// Get the node at the specified index using bidirectional traversal.
     /// Optimizes by starting from the closest end (first or last).
-    fn getNodeAt(self: *const ZedisList, actual_index: usize) ?*ZedisListNode {
+    fn get_node_at(self: *const ZedisList, actual_index: usize) ?*ZedisListNode {
         const list_len = self.cached_len;
 
         // O(1) optimization for first index
@@ -129,13 +129,13 @@ pub const ZedisList = struct {
         return null;
     }
 
-    pub fn getByIndex(self: *const ZedisList, index: usize) ?PrimitiveValue {
-        const list_node = self.getNodeAt(index) orelse return null;
+    pub fn get_by_index(self: *const ZedisList, index: usize) ?PrimitiveValue {
+        const list_node = self.get_node_at(index) orelse return null;
         return list_node.data;
     }
 
-    pub fn setByIndex(self: *ZedisList, index: usize, value: PrimitiveValue) !void {
-        const list_node = self.getNodeAt(index) orelse return error.KeyNotFound;
+    pub fn set_by_index(self: *ZedisList, index: usize, value: PrimitiveValue) !void {
+        const list_node = self.get_node_at(index) orelse return error.KeyNotFound;
         switch (list_node.data) {
             .string => |str| self.allocator.free(str),
             .int, .short_string => {},

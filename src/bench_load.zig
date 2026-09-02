@@ -21,5 +21,5 @@ pub fn main(init: std.process.Init) !void {
     try stdout.writeAll("█" ** 100);
     try stdout.writeAll("\n\n");
 
-    try bench_load.runAllLoadTests(allocator, io);
+    try bench_load.run_all_load_tests(allocator, io);
 }

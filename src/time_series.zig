@@ -32,7 +32,7 @@ pub const AggregationType = enum {
     VAR_P,
     VAR_S,
 
-    pub fn fromString(s: []const u8) !AggregationType {
+    pub fn from_string(s: []const u8) !AggregationType {
         if (eqlIgnoreCase(s, "AVG")) return .AVG;
         if (eqlIgnoreCase(s, "SUM")) return .SUM;
         if (eqlIgnoreCase(s, "MIN")) return .MIN;
@@ -62,7 +62,7 @@ pub const Duplicate_Policy = enum {
     MAX,
     SUM,
 
-    pub fn fromString(s: []const u8) ?Duplicate_Policy {
+    pub fn from_string(s: []const u8) ?Duplicate_Policy {
         if (eqlIgnoreCase(s, "BLOCK")) return .BLOCK;
         if (eqlIgnoreCase(s, "FIRST")) return .FIRST;
         if (eqlIgnoreCase(s, "LAST")) return .LAST;
@@ -77,7 +77,7 @@ pub const EncodingType = enum(u8) {
     Uncompressed,
     DeltaXor,
 
-    pub fn fromString(s: []const u8) ?EncodingType {
+    pub fn from_string(s: []const u8) ?EncodingType {
         if (eqlIgnoreCase(s, "UNCOMPRESSED")) return .Uncompressed;
         if (eqlIgnoreCase(s, "COMPRESSED")) return .DeltaXor;
         return null;
@@ -167,7 +167,7 @@ pub const TimeSeries = struct {
         }
     }
 
-    pub fn evictExpiredChunks(self: *TimeSeries, current_timestamp: i64) void {
+    pub fn evict_expired_chunks(self: *TimeSeries, current_timestamp: i64) void {
         // If retention is 0, no eviction
         if (self.retention_ms == 0) return;
 
@@ -202,7 +202,7 @@ pub const TimeSeries = struct {
         }
     }
 
-    fn sealCurrentChunk(self: *TimeSeries) !void {
+    fn seal_current_chunk(self: *TimeSeries) !void {
         if (self.tail) |tail_chunk| {
             // Seal by compressing active_samples based on encoding type
             const samples = self.active_samples.items;
@@ -241,7 +241,7 @@ pub const TimeSeries = struct {
 
     /// Check if sample should be handled based on duplicate policy
     /// Returns true if sample should be skipped
-    fn handleDuplicatePolicy(self: *TimeSeries, timestamp: i64, value: f64) !bool {
+    fn handle_duplicate_policy(self: *TimeSeries, timestamp: i64, value: f64) !bool {
         if (self.tail) |tail| {
             if (timestamp == tail.last_ts) {
                 switch (self.duplicate_policy) {
@@ -277,7 +277,7 @@ pub const TimeSeries = struct {
 
     /// Check if sample should be ignored based on IGNORE parameters
     /// Returns true if sample should be ignored
-    fn shouldIgnoreSample(self: *TimeSeries, timestamp: i64, value: f64) bool {
+    fn should_ignore_sample(self: *TimeSeries, timestamp: i64, value: f64) bool {
         // IGNORE only applies to LAST policy and in-order samples
         if (self.duplicate_policy != .LAST) return false;
 
@@ -297,9 +297,9 @@ pub const TimeSeries = struct {
     }
 
     /// Create a new chunk and initialize storage
-    fn createNewChunk(self: *TimeSeries, timestamp: i64) !void {
+    fn create_new_chunk(self: *TimeSeries, timestamp: i64) !void {
         // Finalize the previous chunk before creating a new one
-        try self.sealCurrentChunk();
+        try self.seal_current_chunk();
 
         // Create new chunk header
         const new_chunk = try self.allocator.create(Chunk);
@@ -326,27 +326,27 @@ pub const TimeSeries = struct {
     }
 
     /// Append sample to active chunk (always stored uncompressed)
-    fn appendToChunk(self: *TimeSeries, timestamp: i64, value: f64) !void {
+    fn append_to_chunk(self: *TimeSeries, timestamp: i64, value: f64) !void {
         try self.active_samples.append(self.allocator, .{
             .timestamp = timestamp,
             .value = value,
         });
     }
 
-    pub fn addSample(self: *TimeSeries, timestamp: i64, value: f64) !void {
+    pub fn add_sample(self: *TimeSeries, timestamp: i64, value: f64) !void {
         // Check duplicate policy - returns true if sample should be skipped
-        if (try self.handleDuplicatePolicy(timestamp, value)) return;
+        if (try self.handle_duplicate_policy(timestamp, value)) return;
 
         // Check IGNORE filtering - returns true if sample should be ignored
-        if (self.shouldIgnoreSample(timestamp, value)) return;
+        if (self.should_ignore_sample(timestamp, value)) return;
 
         // Create new chunk if needed (no tail or current chunk is full)
         if (self.tail == null or self.tail.?.sample_count >= self.max_chunk_samples) {
-            try self.createNewChunk(timestamp);
+            try self.create_new_chunk(timestamp);
         }
 
         // Append sample to current chunk storage
-        try self.appendToChunk(timestamp, value);
+        try self.append_to_chunk(timestamp, value);
 
         // Update chunk and series metadata
         const tail = self.tail.?;
@@ -366,11 +366,11 @@ pub const TimeSeries = struct {
         }
 
         // Apply retention policy - evict chunks outside retention window
-        self.evictExpiredChunks(timestamp);
+        self.evict_expired_chunks(timestamp);
     }
 
     /// Get the last value in the time series, or 0.0 if empty
-    pub fn getLastValue(self: *const TimeSeries) f64 {
+    pub fn get_last_value(self: *const TimeSeries) f64 {
         if (self.last_sample) |sample| {
             return sample.value;
         }
@@ -400,7 +400,7 @@ pub const TimeSeries = struct {
             if (c.first_ts > end_ts) break;
 
             // Decompress/deserialize chunk based on encoding
-            var chunk_samples = try self.decompressChunk(c);
+            var chunk_samples = try self.decompress_chunk(c);
             defer chunk_samples.deinit(self.allocator);
 
             // Add chunk samples to the result
@@ -424,13 +424,13 @@ pub const TimeSeries = struct {
 
         // Apply aggregation if specified
         if (aggregation) |agg| {
-            return try self.applyAggregation(samples, agg, count);
+            return try self.apply_aggregation(samples, agg, count);
         }
 
         return samples;
     }
 
-    fn applyAggregation(self: TimeSeries, mut_samples: std.ArrayList(Sample), aggregation: Aggregation, count: ?usize) !std.ArrayList(Sample) {
+    fn apply_aggregation(self: TimeSeries, mut_samples: std.ArrayList(Sample), aggregation: Aggregation, count: ?usize) !std.ArrayList(Sample) {
         var samples = mut_samples;
         var aggregated: std.ArrayList(Sample) = .empty;
         errdefer aggregated.deinit(self.allocator);
@@ -450,7 +450,7 @@ pub const TimeSeries = struct {
                 if (bucket_ts != prev_bucket) {
                     // Compute aggregation for previous bucket
                     if (bucket_samples.items.len > 0) {
-                        const agg_value = try computeAggregation(bucket_samples.items, aggregation.agg_type);
+                        const agg_value = try compute_aggregation(bucket_samples.items, aggregation.agg_type);
                         try aggregated.append(self.allocator, .{
                             .timestamp = prev_bucket,
                             .value = agg_value,
@@ -475,7 +475,7 @@ pub const TimeSeries = struct {
 
         // Process the last bucket
         if (current_bucket != null and bucket_samples.items.len > 0) {
-            const agg_value = try computeAggregation(bucket_samples.items, aggregation.agg_type);
+            const agg_value = try compute_aggregation(bucket_samples.items, aggregation.agg_type);
             try aggregated.append(self.allocator, .{
                 .timestamp = current_bucket.?,
                 .value = agg_value,
@@ -489,7 +489,7 @@ pub const TimeSeries = struct {
     }
 
     /// Compute aggregation value for a set of values
-    fn computeAggregation(values: []const f64, agg_type: AggregationType) !f64 {
+    fn compute_aggregation(values: []const f64, agg_type: AggregationType) !f64 {
         if (values.len == 0) return 0.0;
 
         switch (agg_type) {
@@ -598,7 +598,7 @@ pub const TimeSeries = struct {
         }
     }
 
-    fn decompressChunk(self: *const TimeSeries, chunk: *const Chunk) !std.ArrayList(Sample) {
+    fn decompress_chunk(self: *const TimeSeries, chunk: *const Chunk) !std.ArrayList(Sample) {
         var samples: std.ArrayList(Sample) = .empty;
         errdefer samples.deinit(self.allocator);
 
@@ -671,9 +671,9 @@ test "TimeSeries: basic uncompressed storage" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.5);
-    try ts.addSample(1001, 20.5);
-    try ts.addSample(1002, 30.5);
+    try ts.add_sample(1000, 10.5);
+    try ts.add_sample(1001, 20.5);
+    try ts.add_sample(1002, 30.5);
 
     try testing.expectEqual(@as(u64, 3), ts.total_samples);
     try testing.expect(ts.tail != null);
@@ -692,9 +692,9 @@ test "TimeSeries: basic compressed storage" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 100.0);
-    try ts.addSample(1010, 105.0);
-    try ts.addSample(1020, 110.0);
+    try ts.add_sample(1000, 100.0);
+    try ts.add_sample(1010, 105.0);
+    try ts.add_sample(1020, 110.0);
 
     try testing.expectEqual(@as(u64, 3), ts.total_samples);
 }
@@ -711,10 +711,10 @@ test "TimeSeries: duplicate policy BLOCK" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
+    try ts.add_sample(1000, 10.0);
 
     // Duplicate timestamp should return error
-    const result = ts.addSample(1000, 20.0);
+    const result = ts.add_sample(1000, 20.0);
     try testing.expectError(error.TSDB_DuplicateTimestamp, result);
 }
 
@@ -730,8 +730,8 @@ test "TimeSeries: duplicate policy FIRST" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1000, 20.0); // Should be ignored
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1000, 20.0); // Should be ignored
 
     try testing.expectEqual(@as(u64, 1), ts.total_samples);
     try testing.expectEqual(@as(f64, 10.0), ts.last_sample.?.value);
@@ -749,8 +749,8 @@ test "TimeSeries: duplicate policy LAST" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1000, 20.0); // Should update
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1000, 20.0); // Should update
 
     try testing.expectEqual(@as(u64, 2), ts.total_samples);
     try testing.expectEqual(@as(f64, 20.0), ts.last_sample.?.value);
@@ -768,13 +768,13 @@ test "TimeSeries: duplicate policy MIN" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1000, 20.0); // Should be ignored (10 < 20)
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1000, 20.0); // Should be ignored (10 < 20)
 
     try testing.expectEqual(@as(f64, 10.0), ts.last_sample.?.value);
 
-    try ts.addSample(1001, 30.0);
-    try ts.addSample(1001, 5.0); // Should be kept (5 < 30)
+    try ts.add_sample(1001, 30.0);
+    try ts.add_sample(1001, 5.0); // Should be kept (5 < 30)
 
     try testing.expectEqual(@as(f64, 5.0), ts.last_sample.?.value);
 }
@@ -791,13 +791,13 @@ test "TimeSeries: duplicate policy MAX" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1000, 20.0); // Should be kept (20 > 10)
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1000, 20.0); // Should be kept (20 > 10)
 
     try testing.expectEqual(@as(f64, 20.0), ts.last_sample.?.value);
 
-    try ts.addSample(1001, 30.0);
-    try ts.addSample(1001, 15.0); // Should be ignored (15 < 30)
+    try ts.add_sample(1001, 30.0);
+    try ts.add_sample(1001, 15.0); // Should be ignored (15 < 30)
 
     try testing.expectEqual(@as(f64, 30.0), ts.last_sample.?.value);
 }
@@ -814,18 +814,18 @@ test "TimeSeries: IGNORE parameter filters samples" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 100.0);
+    try ts.add_sample(1000, 100.0);
 
     // Time diff = 500ms, val diff = 2.0 - both within threshold, should be ignored
-    try ts.addSample(1500, 102.0);
+    try ts.add_sample(1500, 102.0);
     try testing.expectEqual(@as(u64, 1), ts.total_samples);
 
     // Time diff = 2000ms - exceeds threshold, should be added
-    try ts.addSample(3000, 102.0);
+    try ts.add_sample(3000, 102.0);
     try testing.expectEqual(@as(u64, 2), ts.total_samples);
 
     // Time diff = 500ms, val diff = 10.0 - val exceeds threshold, should be added
-    try ts.addSample(3500, 112.0);
+    try ts.add_sample(3500, 112.0);
     try testing.expectEqual(@as(u64, 3), ts.total_samples);
 }
 
@@ -841,10 +841,10 @@ test "TimeSeries: IGNORE does not apply to non-LAST policies" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 100.0);
+    try ts.add_sample(1000, 100.0);
 
     // Even though within IGNORE thresholds, should be added (BLOCK policy)
-    try ts.addSample(1500, 102.0);
+    try ts.add_sample(1500, 102.0);
     try testing.expectEqual(@as(u64, 2), ts.total_samples);
 }
 
@@ -861,23 +861,23 @@ test "TimeSeries: retention policy evicts old chunks" {
     defer ts.deinit();
 
     // Add samples that will create multiple chunks
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(2000, 20.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(2000, 20.0);
     try testing.expectEqual(@as(u64, 2), ts.total_samples);
 
     // New chunk
-    try ts.addSample(3000, 30.0);
-    try ts.addSample(4000, 40.0);
+    try ts.add_sample(3000, 30.0);
+    try ts.add_sample(4000, 40.0);
     try testing.expectEqual(@as(u64, 4), ts.total_samples);
 
     // New chunk
-    try ts.addSample(5000, 50.0);
-    try ts.addSample(6000, 60.0);
+    try ts.add_sample(5000, 50.0);
+    try ts.add_sample(6000, 60.0);
     try testing.expectEqual(@as(u64, 6), ts.total_samples);
 
     // Add sample at 10000ms - retention window is [5000, 10000]
     // First chunk (1000-2000) should be evicted
-    try ts.addSample(10000, 100.0);
+    try ts.add_sample(10000, 100.0);
 
     // Should still have samples from chunks 2 and 3
     try testing.expect(ts.head != null);
@@ -896,10 +896,10 @@ test "TimeSeries: retention policy with zero retention" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(2000, 20.0);
-    try ts.addSample(3000, 30.0);
-    try ts.addSample(100000, 100.0); // Much later timestamp
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(2000, 20.0);
+    try ts.add_sample(3000, 30.0);
+    try ts.add_sample(100000, 100.0); // Much later timestamp
 
     // All samples should be retained
     try testing.expectEqual(@as(u64, 4), ts.total_samples);
@@ -919,16 +919,16 @@ test "TimeSeries: chunk sealing creates new chunk when full" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1001, 11.0);
-    try ts.addSample(1002, 12.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1001, 11.0);
+    try ts.add_sample(1002, 12.0);
 
     // First chunk should be full
     try testing.expect(ts.tail != null);
     try testing.expectEqual(@as(u16, 3), ts.tail.?.sample_count);
 
     // Adding another sample should create a new chunk
-    try ts.addSample(1003, 13.0);
+    try ts.add_sample(1003, 13.0);
 
     try testing.expect(ts.tail != null);
     try testing.expectEqual(@as(u16, 1), ts.tail.?.sample_count);
@@ -948,27 +948,27 @@ test "TimeSeries: multiple chunks with retention" {
     defer ts.deinit();
 
     // Create 5 chunks over time
-    try ts.addSample(1000, 1.0);
-    try ts.addSample(2000, 2.0);
+    try ts.add_sample(1000, 1.0);
+    try ts.add_sample(2000, 2.0);
 
-    try ts.addSample(3000, 3.0);
-    try ts.addSample(4000, 4.0);
+    try ts.add_sample(3000, 3.0);
+    try ts.add_sample(4000, 4.0);
 
-    try ts.addSample(5000, 5.0);
-    try ts.addSample(6000, 6.0);
+    try ts.add_sample(5000, 5.0);
+    try ts.add_sample(6000, 6.0);
 
-    try ts.addSample(7000, 7.0);
-    try ts.addSample(8000, 8.0);
+    try ts.add_sample(7000, 7.0);
+    try ts.add_sample(8000, 8.0);
 
-    try ts.addSample(9000, 9.0);
-    try ts.addSample(10000, 10.0);
+    try ts.add_sample(9000, 9.0);
+    try ts.add_sample(10000, 10.0);
 
     // All should still exist (within 10s window from 10000)
     try testing.expectEqual(@as(u64, 10), ts.total_samples);
 
     // Add sample at 15000 - retention window [5000, 15000]
     // First two chunks should be evicted
-    try ts.addSample(15000, 15.0);
+    try ts.add_sample(15000, 15.0);
 
     try testing.expect(ts.head != null);
     try testing.expect(ts.head.?.first_ts >= 5000);
@@ -986,11 +986,11 @@ test "TimeSeries: out of order samples with LAST policy" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(2000, 20.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(2000, 20.0);
 
     // Out of order sample (IGNORE only applies to in-order)
-    try ts.addSample(1500, 15.0);
+    try ts.add_sample(1500, 15.0);
 
     try testing.expectEqual(@as(u64, 3), ts.total_samples);
 }
@@ -1008,7 +1008,7 @@ test "TimeSeries: edge case - empty time series retention" {
     defer ts.deinit();
 
     // Empty time series - eviction should be a no-op
-    ts.evictExpiredChunks(10000);
+    ts.evict_expired_chunks(10000);
 
     try testing.expect(ts.head == null);
     try testing.expect(ts.tail == null);
@@ -1026,11 +1026,11 @@ test "TimeSeries: all chunks evicted clears head and tail" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(1500, 15.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(1500, 15.0);
 
     // Add sample way in the future - all old chunks should be evicted
-    try ts.addSample(10000, 100.0);
+    try ts.add_sample(10000, 100.0);
 
     // Old chunk should be gone, only new chunk remains
     try testing.expect(ts.head != null);
@@ -1038,7 +1038,7 @@ test "TimeSeries: all chunks evicted clears head and tail" {
     try testing.expectEqual(@as(i64, 10000), ts.head.?.first_ts);
 }
 
-test "TimeSeries: getLastValue returns last value" {
+test "TimeSeries: get_last_value returns last value" {
     var ts = try TimeSeries.init(
         testing.allocator,
         0,
@@ -1051,14 +1051,14 @@ test "TimeSeries: getLastValue returns last value" {
     defer ts.deinit();
 
     // Empty time series should return 0.0
-    try testing.expectEqual(@as(f64, 0.0), ts.getLastValue());
+    try testing.expectEqual(@as(f64, 0.0), ts.get_last_value());
 
     // Add samples
-    try ts.addSample(1000, 10.0);
-    try testing.expectEqual(@as(f64, 10.0), ts.getLastValue());
+    try ts.add_sample(1000, 10.0);
+    try testing.expectEqual(@as(f64, 10.0), ts.get_last_value());
 
-    try ts.addSample(2000, 20.5);
-    try testing.expectEqual(@as(f64, 20.5), ts.getLastValue());
+    try ts.add_sample(2000, 20.5);
+    try testing.expectEqual(@as(f64, 20.5), ts.get_last_value());
 }
 
 test "TimeSeries: alter updates properties" {
@@ -1279,7 +1279,7 @@ test "TS.ALTER changes retention" {
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
     // Verify the retention was changed
-    const ts = try store.getTimeSeries("myts");
+    const ts = try store.get_time_series("myts");
     try testing.expectEqual(@as(u64, 5000), ts.?.retention_ms);
 }
 
@@ -1314,7 +1314,7 @@ test "TS.ALTER changes duplicate policy" {
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
     // Verify the policy was changed
-    const ts = try store.getTimeSeries("myts");
+    const ts = try store.get_time_series("myts");
     try testing.expectEqual(Duplicate_Policy.LAST, ts.?.duplicate_policy);
 }
 
@@ -1331,9 +1331,9 @@ test "TS.RANGE returns samples from active unsealed chunk - Uncompressed" {
     defer ts.deinit();
 
     // Add samples without sealing the chunk
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(2000, 20.0);
-    try ts.addSample(3000, 30.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(2000, 20.0);
+    try ts.add_sample(3000, 30.0);
 
     // Verify chunk is active (not sealed)
     try testing.expect(ts.tail != null);
@@ -1365,9 +1365,9 @@ test "TS.RANGE can read from active unsealed chunk (hybrid approach)" {
     defer ts.deinit();
 
     // Add samples without sealing
-    try ts.addSample(1000, 100.0);
-    try ts.addSample(2000, 105.0);
-    try ts.addSample(3000, 110.0);
+    try ts.add_sample(1000, 100.0);
+    try ts.add_sample(2000, 105.0);
+    try ts.add_sample(3000, 110.0);
 
     // Verify chunk is active (unsealed)
     try testing.expect(ts.tail != null);
@@ -1404,7 +1404,7 @@ test "TS.RANGE with COUNT parameter limits results" {
     // Add 10 samples
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
-        try ts.addSample(1000 + i * 100, @as(f64, @floatFromInt(i)));
+        try ts.add_sample(1000 + i * 100, @as(f64, @floatFromInt(i)));
     }
 
     // Query with COUNT 5
@@ -1430,9 +1430,9 @@ test "TS.RANGE with COUNT larger than available samples returns all" {
     );
     defer ts.deinit();
 
-    try ts.addSample(1000, 10.0);
-    try ts.addSample(2000, 20.0);
-    try ts.addSample(3000, 30.0);
+    try ts.add_sample(1000, 10.0);
+    try ts.add_sample(2000, 20.0);
+    try ts.add_sample(3000, 30.0);
 
     // Request 100 samples but only 3 exist
     var samples = try ts.range("-", "+", 100, null);
@@ -1456,7 +1456,7 @@ test "TS.RANGE with COUNT across multiple chunks" {
     // Add 10 samples, creating multiple chunks
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
-        try ts.addSample(1000 + i * 100, @as(f64, @floatFromInt(i)));
+        try ts.add_sample(1000 + i * 100, @as(f64, @floatFromInt(i)));
     }
 
     // Query with COUNT 7 - should span across 3 chunks
@@ -1543,7 +1543,7 @@ test "TS.RANGE with 5000 random samples using compressed encoding" {
     while (i < num_samples) : (i += 1) {
         const timestamp = 1000000 + i * 1000; // Start at 1000000, increment by 1 second
         const value = 20.0 + random.float(f64) * 10.0; // Random temperature between 20-30°C
-        try ts.addSample(timestamp, value);
+        try ts.add_sample(timestamp, value);
     }
 
     // Verify all samples were added
@@ -1610,7 +1610,7 @@ test "TS.RANGE with 5000 random samples using uncompressed encoding" {
     while (i < num_samples) : (i += 1) {
         const timestamp = 2000000 + i * 500; // Different base timestamp and interval
         const value = 15.0 + random.float(f64) * 20.0; // Random values between 15-35
-        try ts.addSample(timestamp, value);
+        try ts.add_sample(timestamp, value);
     }
 
     try testing.expectEqual(@as(u64, num_samples), ts.total_samples);
@@ -1647,11 +1647,11 @@ test "TS.RANGE with AVG aggregation" {
     // Bucket 0-999: samples at 0, 500 with values 10, 20 (avg = 15)
     // Bucket 1000-1999: samples at 1000, 1500 with values 30, 50 (avg = 40)
     // Bucket 2000-2999: samples at 2000 with value 100 (avg = 100)
-    try ts.addSample(0, 10.0);
-    try ts.addSample(500, 20.0);
-    try ts.addSample(1000, 30.0);
-    try ts.addSample(1500, 50.0);
-    try ts.addSample(2000, 100.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(500, 20.0);
+    try ts.add_sample(1000, 30.0);
+    try ts.add_sample(1500, 50.0);
+    try ts.add_sample(2000, 100.0);
 
     const agg = Aggregation{
         .agg_type = .AVG,
@@ -1689,10 +1689,10 @@ test "TS.RANGE with SUM aggregation" {
     defer ts.deinit();
 
     // Add samples: bucket 0 (0-99): 5+10=15, bucket 100 (100-199): 20+30=50
-    try ts.addSample(10, 5.0);
-    try ts.addSample(50, 10.0);
-    try ts.addSample(110, 20.0);
-    try ts.addSample(150, 30.0);
+    try ts.add_sample(10, 5.0);
+    try ts.add_sample(50, 10.0);
+    try ts.add_sample(110, 20.0);
+    try ts.add_sample(150, 30.0);
 
     const agg = Aggregation{
         .agg_type = .SUM,
@@ -1723,11 +1723,11 @@ test "TS.RANGE with MIN aggregation" {
 
     // Bucket 0: values 100, 50, 75 -> min = 50
     // Bucket 1000: values 200, 150 -> min = 150
-    try ts.addSample(100, 100.0);
-    try ts.addSample(200, 50.0);
-    try ts.addSample(500, 75.0);
-    try ts.addSample(1000, 200.0);
-    try ts.addSample(1500, 150.0);
+    try ts.add_sample(100, 100.0);
+    try ts.add_sample(200, 50.0);
+    try ts.add_sample(500, 75.0);
+    try ts.add_sample(1000, 200.0);
+    try ts.add_sample(1500, 150.0);
 
     const agg = Aggregation{
         .agg_type = .MIN,
@@ -1756,11 +1756,11 @@ test "TS.RANGE with MAX aggregation" {
 
     // Bucket 0: values 100, 50, 75 -> max = 100
     // Bucket 1000: values 200, 150 -> max = 200
-    try ts.addSample(100, 100.0);
-    try ts.addSample(200, 50.0);
-    try ts.addSample(500, 75.0);
-    try ts.addSample(1000, 200.0);
-    try ts.addSample(1500, 150.0);
+    try ts.add_sample(100, 100.0);
+    try ts.add_sample(200, 50.0);
+    try ts.add_sample(500, 75.0);
+    try ts.add_sample(1000, 200.0);
+    try ts.add_sample(1500, 150.0);
 
     const agg = Aggregation{
         .agg_type = .MAX,
@@ -1790,12 +1790,12 @@ test "TS.RANGE with COUNT aggregation" {
     // Bucket 0: 3 samples
     // Bucket 1000: 2 samples
     // Bucket 2000: 1 sample
-    try ts.addSample(100, 1.0);
-    try ts.addSample(200, 2.0);
-    try ts.addSample(500, 3.0);
-    try ts.addSample(1000, 4.0);
-    try ts.addSample(1500, 5.0);
-    try ts.addSample(2000, 6.0);
+    try ts.add_sample(100, 1.0);
+    try ts.add_sample(200, 2.0);
+    try ts.add_sample(500, 3.0);
+    try ts.add_sample(1000, 4.0);
+    try ts.add_sample(1500, 5.0);
+    try ts.add_sample(2000, 6.0);
 
     const agg = Aggregation{
         .agg_type = .COUNT,
@@ -1825,10 +1825,10 @@ test "TS.RANGE with FIRST aggregation" {
 
     // Bucket 0: first = 10
     // Bucket 1000: first = 30
-    try ts.addSample(100, 10.0);
-    try ts.addSample(200, 20.0);
-    try ts.addSample(1000, 30.0);
-    try ts.addSample(1500, 40.0);
+    try ts.add_sample(100, 10.0);
+    try ts.add_sample(200, 20.0);
+    try ts.add_sample(1000, 30.0);
+    try ts.add_sample(1500, 40.0);
 
     const agg = Aggregation{
         .agg_type = .FIRST,
@@ -1857,10 +1857,10 @@ test "TS.RANGE with LAST aggregation" {
 
     // Bucket 0: last = 20
     // Bucket 1000: last = 40
-    try ts.addSample(100, 10.0);
-    try ts.addSample(200, 20.0);
-    try ts.addSample(1000, 30.0);
-    try ts.addSample(1500, 40.0);
+    try ts.add_sample(100, 10.0);
+    try ts.add_sample(200, 20.0);
+    try ts.add_sample(1000, 30.0);
+    try ts.add_sample(1500, 40.0);
 
     const agg = Aggregation{
         .agg_type = .LAST,
@@ -1889,11 +1889,11 @@ test "TS.RANGE with RANGE aggregation" {
 
     // Bucket 0: values 10, 50, 30 -> range = 50 - 10 = 40
     // Bucket 1000: values 100, 200 -> range = 200 - 100 = 100
-    try ts.addSample(100, 10.0);
-    try ts.addSample(200, 50.0);
-    try ts.addSample(500, 30.0);
-    try ts.addSample(1000, 100.0);
-    try ts.addSample(1500, 200.0);
+    try ts.add_sample(100, 10.0);
+    try ts.add_sample(200, 50.0);
+    try ts.add_sample(500, 30.0);
+    try ts.add_sample(1000, 100.0);
+    try ts.add_sample(1500, 200.0);
 
     const agg = Aggregation{
         .agg_type = .RANGE,
@@ -1921,9 +1921,9 @@ test "TS.RANGE with STD.P (population standard deviation) aggregation" {
     defer ts.deinit();
 
     // Bucket 0: values 10, 20, 30 -> mean = 20, variance = ((10-20)^2 + (20-20)^2 + (30-20)^2)/3 = 66.666.../3 ≈ 66.67/3, std = sqrt(66.67/3)
-    try ts.addSample(0, 10.0);
-    try ts.addSample(100, 20.0);
-    try ts.addSample(200, 30.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(100, 20.0);
+    try ts.add_sample(200, 30.0);
 
     const agg = Aggregation{
         .agg_type = .STD_P,
@@ -1953,9 +1953,9 @@ test "TS.RANGE with STD.S (sample standard deviation) aggregation" {
     defer ts.deinit();
 
     // Bucket 0: values 10, 20, 30 -> sample std uses n-1 in denominator
-    try ts.addSample(0, 10.0);
-    try ts.addSample(100, 20.0);
-    try ts.addSample(200, 30.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(100, 20.0);
+    try ts.add_sample(200, 30.0);
 
     const agg = Aggregation{
         .agg_type = .STD_S,
@@ -1984,9 +1984,9 @@ test "TS.RANGE with VAR.P (population variance) aggregation" {
     defer ts.deinit();
 
     // Bucket 0: values 10, 20, 30
-    try ts.addSample(0, 10.0);
-    try ts.addSample(100, 20.0);
-    try ts.addSample(200, 30.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(100, 20.0);
+    try ts.add_sample(200, 30.0);
 
     const agg = Aggregation{
         .agg_type = .VAR_P,
@@ -2016,9 +2016,9 @@ test "TS.RANGE with VAR.S (sample variance) aggregation" {
     defer ts.deinit();
 
     // Bucket 0: values 10, 20, 30
-    try ts.addSample(0, 10.0);
-    try ts.addSample(100, 20.0);
-    try ts.addSample(200, 30.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(100, 20.0);
+    try ts.add_sample(200, 30.0);
 
     const agg = Aggregation{
         .agg_type = .VAR_S,
@@ -2049,7 +2049,7 @@ test "TS.RANGE aggregation with COUNT limit" {
     // Create 10 buckets with 1 sample each
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
-        try ts.addSample(i * 1000, @as(f64, @floatFromInt(i)));
+        try ts.add_sample(i * 1000, @as(f64, @floatFromInt(i)));
     }
 
     const agg = Aggregation{
@@ -2081,14 +2081,14 @@ test "TS.RANGE aggregation across multiple chunks" {
     // Add samples across multiple chunks
     // Bucket 0: 4 samples
     // Bucket 1000: 4 samples
-    try ts.addSample(0, 10.0);
-    try ts.addSample(100, 20.0);
-    try ts.addSample(200, 30.0);
-    try ts.addSample(300, 40.0);
-    try ts.addSample(1000, 50.0);
-    try ts.addSample(1100, 60.0);
-    try ts.addSample(1200, 70.0);
-    try ts.addSample(1300, 80.0);
+    try ts.add_sample(0, 10.0);
+    try ts.add_sample(100, 20.0);
+    try ts.add_sample(200, 30.0);
+    try ts.add_sample(300, 40.0);
+    try ts.add_sample(1000, 50.0);
+    try ts.add_sample(1100, 60.0);
+    try ts.add_sample(1200, 70.0);
+    try ts.add_sample(1300, 80.0);
 
     const agg = Aggregation{
         .agg_type = .SUM,

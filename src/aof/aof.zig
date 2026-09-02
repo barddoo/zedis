@@ -66,11 +66,11 @@ pub const Writer = struct {
     /// Encode command args as RESP and write to the AOF file.
     /// Called outside the store_mutex critical section — zio makes file I/O async,
     /// suspending the coroutine instead of blocking the OS thread.
-    pub fn writeCommand(self: *Writer, args: []const Value) void {
+    pub fn write_command(self: *Writer, args: []const Value) void {
         if (!self.enabled) return;
-        resp.writeListLen(self.writer(), args.len) catch return;
+        resp.write_list_len(self.writer(), args.len) catch return;
         for (args) |arg| {
-            resp.writeBulkString(self.writer(), arg.asSlice()) catch return;
+            resp.write_bulk_string(self.writer(), arg.as_slice()) catch return;
         }
 
         switch (self.fsync_policy) {
@@ -127,7 +127,7 @@ pub const Reader = struct {
         } else |_| {}
 
         for (commands.items) |command| {
-            try self.registry.executeCommandAof(self.store, command.getArgs());
+            try self.registry.execute_command_aof(self.store, command.get_args());
         }
 
         for (commands.items) |*command| {
@@ -150,7 +150,7 @@ test "aof reading test" {
     var test_file_writer = test_file.writer(testing.io, &.{});
     try test_file_writer.interface.writeAll(test_file_data);
 
-    var registry = try reg_init.initRegistry(std.testing.allocator);
+    var registry = try reg_init.init_registry(std.testing.allocator);
     defer registry.deinit();
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -166,7 +166,7 @@ test "aof reading test" {
 
     try aof_reader.read();
 
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
+    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.as_slice(), "test"));
 }
 test "aof writing test" {
     const reg_init = @import("../commands/init_registry.zig");
@@ -179,7 +179,7 @@ test "aof writing test" {
 
     const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
 
-    var registry = try reg_init.initRegistry(std.testing.allocator);
+    var registry = try reg_init.init_registry(std.testing.allocator);
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     var parser = Parser.init(testing.allocator);
@@ -196,10 +196,10 @@ test "aof writing test" {
     dummy_client.authenticated = true;
 
     // Execute command (mutates store, no AOF write)
-    try registry.executeCommand(&discarding.writer, &dummy_client, &store, cmd.getArgs());
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.asSlice(), "test"));
+    try registry.execute_command(&discarding.writer, &dummy_client, &store, cmd.get_args());
+    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.as_slice(), "test"));
 
-    // Write AOF separately (simulating what server.writeAof does)
+    // Write AOF separately (simulating what server.write_aof does)
     var aof_writer: Writer = undefined;
     aof_writer.enabled = true;
     aof_writer.file_writer = test_file.writer(testing.io, &.{});
@@ -207,7 +207,7 @@ test "aof writing test" {
     aof_writer.filename = &.{};
     aof_writer.allocator = testing.allocator;
     aof_writer.write_buffer = null;
-    aof_writer.writeCommand(cmd.getArgs());
+    aof_writer.write_command(cmd.get_args());
 
     _ = aof_writer.file_writer.?.interface.flush() catch {};
 

@@ -103,7 +103,7 @@ inline fn calc_bpe(error_rate: f64) f64 {
 }
 
 // Hash calculation functions
-inline fn calculateHashes(self: *const BloomFilter, data: []const u8) struct { h1: u64, h2: u64 } {
+inline fn calculate_hashes(self: *const BloomFilter, data: []const u8) struct { h1: u64, h2: u64 } {
     const use_64bit = self.force64 or self.n2 > 31;
     const h1: u64 = if (use_64bit)
         Hash64.hashWithSeed(data, @as(u64, seed))
@@ -119,13 +119,13 @@ inline fn calculateHashes(self: *const BloomFilter, data: []const u8) struct { h
 }
 
 // Process a position (no prefetching for better performance)
-inline fn processPosition(self: *const BloomFilter, byte_idx: usize) void {
+inline fn process_position(self: *const BloomFilter, byte_idx: usize) void {
     _ = self;
     _ = byte_idx;
 }
 
 // Process positions using optimized method
-inline fn processPositions(
+inline fn process_positions(
     self: *const BloomFilter,
     h1: u64,
     h2: u64,
@@ -144,7 +144,7 @@ inline fn processPositions(
         const mask = @as(u8, 1) << bit_offset;
 
         // Process the position (no prefetch for better performance)
-        processPosition(self, byte_idx);
+        process_position(self, byte_idx);
 
         if (is_add) {
             if (self.bit_array[byte_idx] & mask == 0) {
@@ -167,10 +167,10 @@ pub fn add(self: *BloomFilter, data: []const u8) bool {
     var newly_added = false;
 
     // Calculate hashes
-    const hashes = calculateHashes(self, data);
+    const hashes = calculate_hashes(self, data);
 
     // Process positions
-    _ = processPositions(self, hashes.h1, hashes.h2, true, &newly_added);
+    _ = process_positions(self, hashes.h1, hashes.h2, true, &newly_added);
 
     if (newly_added) {
         self.entries += 1;
@@ -183,14 +183,14 @@ pub fn add(self: *BloomFilter, data: []const u8) bool {
 // Returns false if item DEFINITELY NOT in set
 pub fn check(self: *const BloomFilter, data: []const u8) bool {
     // Calculate hashes
-    const hashes = calculateHashes(self, data);
+    const hashes = calculate_hashes(self, data);
 
     // Process positions
-    return processPositions(self, hashes.h1, hashes.h2, false, undefined);
+    return process_positions(self, hashes.h1, hashes.h2, false, undefined);
 }
 
 // Add multiple items at once, returns number of newly added items
-pub fn addMany(self: *BloomFilter, items: []const []const u8) u64 {
+pub fn add_many(self: *BloomFilter, items: []const []const u8) u64 {
     var newly_added_count: u64 = 0;
 
     // Process items in batches for better cache locality
@@ -213,7 +213,7 @@ pub fn addMany(self: *BloomFilter, items: []const []const u8) u64 {
 }
 
 // Check multiple items at once, returns array of results
-pub fn checkMany(self: *const BloomFilter, items: []const []const u8, allocator: Allocator) ![]bool {
+pub fn check_many(self: *const BloomFilter, items: []const []const u8, allocator: Allocator) ![]bool {
     const results = try allocator.alloc(bool, items.len);
 
     // Process items in batches for better cache locality
@@ -501,7 +501,7 @@ test "bloom filter large capacity" {
     try std.testing.expect(filter.check("large-test"));
 }
 
-test "bloom filter addMany and checkMany" {
+test "bloom filter add_many and check_many" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -515,7 +515,7 @@ test "bloom filter addMany and checkMany" {
     const items = [_][]const u8{ "apple", "banana", "cherry", "date", "elderberry" };
 
     // Add multiple items at once
-    const added_count = filter.addMany(&items);
+    const added_count = filter.add_many(&items);
     try std.testing.expect(added_count == 5);
     try std.testing.expect(filter.entries == 5);
 
@@ -526,7 +526,7 @@ test "bloom filter addMany and checkMany" {
 
     // Check multiple items at once
     const test_items = [_][]const u8{ "apple", "banana", "fig", "grape", "cherry" };
-    const results = try filter.checkMany(&test_items, arena.allocator());
+    const results = try filter.check_many(&test_items, arena.allocator());
     defer arena.allocator().free(results);
 
     // Expected: [true, true, false, false, true]
@@ -536,9 +536,9 @@ test "bloom filter addMany and checkMany" {
     try std.testing.expect(results[3] == false); // grape (not added)
     try std.testing.expect(results[4] == true); // cherry
 
-    // Test addMany with duplicates
+    // Test add_many with duplicates
     const duplicate_items = [_][]const u8{ "apple", "banana", "honeydew" };
-    const added_count2 = filter.addMany(&duplicate_items);
+    const added_count2 = filter.add_many(&duplicate_items);
     try std.testing.expect(added_count2 == 1); // Only honeydew is new
     try std.testing.expect(filter.entries == 6); // Should have 6 unique items now
 }

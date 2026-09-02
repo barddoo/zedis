@@ -58,7 +58,7 @@ pub const SearchIndex = struct {
         var doc_it = self.docs.iterator();
         while (doc_it.next()) |entry| {
             const doc = entry.value_ptr;
-            self.freeFieldValues(doc);
+            self.free_field_values(doc);
             self.allocator.free(doc.fields);
             self.allocator.free(entry.key_ptr.*);
         }
@@ -87,17 +87,17 @@ pub const SearchIndex = struct {
         self.allocator.free(self.fields);
     }
 
-    pub fn fieldIndex(self: *const SearchIndex, name: []const u8) ?u16 {
+    pub fn field_index(self: *const SearchIndex, name: []const u8) ?u16 {
         return self.field_map.get(name);
     }
 
-    pub fn docCount(self: *const SearchIndex) u64 {
+    pub fn doc_count(self: *const SearchIndex) u64 {
         return self.docs.count();
     }
 
     /// Adds a document. `values` must be aligned to `self.fields` (null for
     /// absent fields). Returns error.DocumentExists if the doc id is taken.
-    pub fn addDocument(self: *SearchIndex, doc_id: []const u8, values: []const ?FieldValue) !void {
+    pub fn add_document(self: *SearchIndex, doc_id: []const u8, values: []const ?FieldValue) !void {
         if (self.docs.contains(doc_id)) return error.DocumentExists;
         if (values.len != self.fields.len) return error.FieldCountMismatch;
 
@@ -122,69 +122,69 @@ pub const SearchIndex = struct {
         for (self.fields, 0..) |field, i| {
             const fv = owned_fields[i] orelse continue;
             const field_idx: u16 = @intCast(i);
-            try self.indexValue(field.field_type, field_idx, internal_id, fv);
+            try self.index_value(field.field_type, field_idx, internal_id, fv);
         }
     }
 
     /// Removes a document and de-indexes its fields. Returns false if absent.
-    pub fn removeDocument(self: *SearchIndex, doc_id: []const u8) bool {
+    pub fn remove_document(self: *SearchIndex, doc_id: []const u8) bool {
         const kv = self.docs.fetchRemove(doc_id) orelse return false;
         const doc = kv.value;
 
         for (self.fields, 0..) |field, i| {
             const fv = doc.fields[i] orelse continue;
             const field_idx: u16 = @intCast(i);
-            self.deindexValue(field.field_type, field_idx, doc.internal_id, fv);
+            self.deindex_value(field.field_type, field_idx, doc.internal_id, fv);
         }
 
         self.allocator.free(kv.key);
-        self.freeFieldValues(&doc);
+        self.free_field_values(&doc);
         self.allocator.free(doc.fields);
         return true;
     }
 
-    pub fn getDocument(self: *const SearchIndex, doc_id: []const u8) ?*const Document {
+    pub fn get_document(self: *const SearchIndex, doc_id: []const u8) ?*const Document {
         return self.docs.getPtr(doc_id);
     }
 
-    pub fn getInverted(self: *const SearchIndex, field_idx: u16) ?*const InvertedIndex {
+    pub fn get_inverted(self: *const SearchIndex, field_idx: u16) ?*const InvertedIndex {
         return self.inverted.getPtr(field_idx);
     }
 
-    pub fn getNumeric(self: *const SearchIndex, field_idx: u16) ?*const NumericIndex {
+    pub fn get_numeric(self: *const SearchIndex, field_idx: u16) ?*const NumericIndex {
         return self.numeric.getPtr(field_idx);
     }
 
-    pub fn getTag(self: *const SearchIndex, field_idx: u16) ?*const TagIndex {
+    pub fn get_tag(self: *const SearchIndex, field_idx: u16) ?*const TagIndex {
         return self.tag.getPtr(field_idx);
     }
 
-    pub fn getVector(self: *const SearchIndex, field_idx: u16) ?*const VectorIndex {
+    pub fn get_vector(self: *const SearchIndex, field_idx: u16) ?*const VectorIndex {
         return self.vector.getPtr(field_idx);
     }
 
-    fn indexValue(self: *SearchIndex, field_type: FieldType, field_idx: u16, doc_id: u64, fv: FieldValue) !void {
+    fn index_value(self: *SearchIndex, field_type: FieldType, field_idx: u16, doc_id: u64, fv: FieldValue) !void {
         switch (field_type) {
             .text => switch (fv) {
-                .string => |s| try self.indexText(field_idx, doc_id, s),
+                .string => |s| try self.index_text(field_idx, doc_id, s),
                 else => {},
             },
             .numeric => switch (fv) {
-                .numeric => |n| try self.indexNumeric(field_idx, doc_id, n),
+                .numeric => |n| try self.index_numeric(field_idx, doc_id, n),
                 else => {},
             },
             .tag => switch (fv) {
-                .string => |s| try self.indexTag(field_idx, doc_id, s),
+                .string => |s| try self.index_tag(field_idx, doc_id, s),
                 else => {},
             },
             .vector => |vp| switch (fv) {
-                .string => |blob| try self.indexVector(field_idx, vp, doc_id, blob),
+                .string => |blob| try self.index_vector(field_idx, vp, doc_id, blob),
                 else => {},
             },
         }
     }
 
-    fn deindexValue(self: *SearchIndex, field_type: FieldType, field_idx: u16, doc_id: u64, fv: FieldValue) void {
+    fn deindex_value(self: *SearchIndex, field_type: FieldType, field_idx: u16, doc_id: u64, fv: FieldValue) void {
         switch (field_type) {
             .text => switch (fv) {
                 .string => |s| if (self.inverted.getPtr(field_idx)) |ii| ii.remove(doc_id, s),
@@ -211,31 +211,31 @@ pub const SearchIndex = struct {
         }
     }
 
-    fn indexText(self: *SearchIndex, field_idx: u16, doc_id: u64, text: []const u8) !void {
+    fn index_text(self: *SearchIndex, field_idx: u16, doc_id: u64, text: []const u8) !void {
         const gop = try self.inverted.getOrPut(self.allocator, field_idx);
         if (!gop.found_existing) gop.value_ptr.* = InvertedIndex.init(self.allocator);
         try gop.value_ptr.add(doc_id, text);
     }
 
-    fn indexNumeric(self: *SearchIndex, field_idx: u16, doc_id: u64, value: f64) !void {
+    fn index_numeric(self: *SearchIndex, field_idx: u16, doc_id: u64, value: f64) !void {
         const gop = try self.numeric.getOrPut(self.allocator, field_idx);
         if (!gop.found_existing) gop.value_ptr.* = NumericIndex.init(self.allocator);
         try gop.value_ptr.add(doc_id, value);
     }
 
-    fn indexTag(self: *SearchIndex, field_idx: u16, doc_id: u64, value: []const u8) !void {
+    fn index_tag(self: *SearchIndex, field_idx: u16, doc_id: u64, value: []const u8) !void {
         const gop = try self.tag.getOrPut(self.allocator, field_idx);
         if (!gop.found_existing) gop.value_ptr.* = TagIndex.init(self.allocator);
         try gop.value_ptr.add(doc_id, value);
     }
 
-    fn indexVector(self: *SearchIndex, field_idx: u16, params: VectorParams, doc_id: u64, blob: []const u8) !void {
+    fn index_vector(self: *SearchIndex, field_idx: u16, params: VectorParams, doc_id: u64, blob: []const u8) !void {
         const gop = try self.vector.getOrPut(self.allocator, field_idx);
         if (!gop.found_existing) gop.value_ptr.* = VectorIndex.init(self.allocator, params);
         try gop.value_ptr.add(doc_id, blob);
     }
 
-    fn freeFieldValues(self: *SearchIndex, doc: *const Document) void {
+    fn free_field_values(self: *SearchIndex, doc: *const Document) void {
         for (doc.fields) |field_value| {
             if (field_value) |fv| {
                 switch (fv) {
@@ -249,7 +249,7 @@ pub const SearchIndex = struct {
 
 const testing = std.testing;
 
-fn makeFields() ![]FieldDef {
+fn make_fields() ![]FieldDef {
     return try testing.allocator.dupe(FieldDef, &.{
         .{ .name = try testing.allocator.dupe(u8, "title"), .field_type = .text },
         .{ .name = try testing.allocator.dupe(u8, "price"), .field_type = .numeric },
@@ -262,12 +262,12 @@ fn makeFields() ![]FieldDef {
     });
 }
 
-fn vecF32(values: []const f32) []const u8 {
+fn vec_f32(values: []const f32) []const u8 {
     return std.mem.sliceAsBytes(values);
 }
 
 test "SearchIndex init and deinit" {
-    const fields = try makeFields();
+    const fields = try make_fields();
     var index = SearchIndex.init(testing.allocator, fields);
     defer index.deinit();
 
@@ -279,69 +279,69 @@ test "SearchIndex init and deinit" {
 }
 
 test "SearchIndex add document indexes all field types" {
-    const fields = try makeFields();
+    const fields = try make_fields();
     var index = SearchIndex.init(testing.allocator, fields);
     defer index.deinit();
 
-    try index.addDocument("doc1", &.{
+    try index.add_document("doc1", &.{
         .{ .string = "the quick fox" },
         .{ .numeric = 9.99 },
         .{ .string = "red,blue" },
-        .{ .string = vecF32(&[_]f32{ 0, 0 }) },
+        .{ .string = vec_f32(&[_]f32{ 0, 0 }) },
     });
-    try index.addDocument("doc2", &.{
+    try index.add_document("doc2", &.{
         .{ .string = "quick dog" },
         .{ .numeric = 25.0 },
         .{ .string = "green" },
-        .{ .string = vecF32(&[_]f32{ 10, 10 }) },
+        .{ .string = vec_f32(&[_]f32{ 10, 10 }) },
     });
 
-    try testing.expectEqual(@as(u64, 2), index.docCount());
+    try testing.expectEqual(@as(u64, 2), index.doc_count());
 
-    const ii = index.getInverted(0).?;
+    const ii = index.get_inverted(0).?;
     try testing.expectEqual(@as(usize, 2), ii.postings("quick").?.len);
 
-    const ni = index.getNumeric(1).?;
+    const ni = index.get_numeric(1).?;
     var range: std.ArrayListUnmanaged(u64) = .empty;
     defer range.deinit(testing.allocator);
     try ni.range(10.0, 50.0, &range);
     try testing.expectEqual(@as(usize, 1), range.items.len);
 
-    const ti = index.getTag(2).?;
-    try testing.expect(ti.docIds("red").?.contains(index.docs.get("doc1").?.internal_id));
+    const ti = index.get_tag(2).?;
+    try testing.expect(ti.doc_ids("red").?.contains(index.docs.get("doc1").?.internal_id));
 
-    const vi = index.getVector(3).?;
+    const vi = index.get_vector(3).?;
     try testing.expectEqual(@as(usize, 2), vi.count());
 }
 
 test "SearchIndex remove document de-indexes" {
-    const fields = try makeFields();
+    const fields = try make_fields();
     var index = SearchIndex.init(testing.allocator, fields);
     defer index.deinit();
 
-    try index.addDocument("doc1", &.{
+    try index.add_document("doc1", &.{
         .{ .string = "alpha beta" },
         .{ .numeric = 1.0 },
         .{ .string = "red" },
-        .{ .string = vecF32(&[_]f32{ 1, 1 }) },
+        .{ .string = vec_f32(&[_]f32{ 1, 1 }) },
     });
 
-    try testing.expect(index.removeDocument("doc1"));
-    try testing.expect(!index.removeDocument("doc1"));
-    try testing.expectEqual(@as(u64, 0), index.docCount());
+    try testing.expect(index.remove_document("doc1"));
+    try testing.expect(!index.remove_document("doc1"));
+    try testing.expectEqual(@as(u64, 0), index.doc_count());
 
-    const ii = index.getInverted(0).?;
-    try testing.expectEqual(@as(u32, 0), ii.docFreq("alpha"));
-    try testing.expectEqual(@as(usize, 0), index.getVector(3).?.count());
+    const ii = index.get_inverted(0).?;
+    try testing.expectEqual(@as(u32, 0), ii.doc_freq("alpha"));
+    try testing.expectEqual(@as(usize, 0), index.get_vector(3).?.count());
 }
 
-test "SearchIndex addDocument rejects duplicates" {
-    const fields = try makeFields();
+test "SearchIndex add_document rejects duplicates" {
+    const fields = try make_fields();
     var index = SearchIndex.init(testing.allocator, fields);
     defer index.deinit();
 
-    try index.addDocument("doc1", &.{ .{ .string = "a" }, null, null, null });
-    try testing.expectError(error.DocumentExists, index.addDocument("doc1", &.{
+    try index.add_document("doc1", &.{ .{ .string = "a" }, null, null, null });
+    try testing.expectError(error.DocumentExists, index.add_document("doc1", &.{
         .{ .string = "b" },
         null,
         null,

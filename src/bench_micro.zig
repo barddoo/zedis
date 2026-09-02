@@ -14,10 +14,10 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("These benchmarks do NOT require a running server.\n\n", .{});
 
     // Run store benchmarks
-    try bench_store.runAllBenchmarks(allocator);
+    try bench_store.run_all_benchmarks(allocator);
 
     // Run command benchmarks
-    try bench_commands.runAllBenchmarks(allocator);
+    try bench_commands.run_all_benchmarks(allocator);
 
     std.debug.print("\n", .{});
     std.debug.print("=" ** 100 ++ "\n", .{});

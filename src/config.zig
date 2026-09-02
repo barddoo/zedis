@@ -20,7 +20,7 @@ pub const MemoryStats = struct {
     total_allocated: usize,
     total_budget: usize,
 
-    pub fn usagePercent(self: MemoryStats) u8 {
+    pub fn usage_percent(self: MemoryStats) u8 {
         return @intCast((self.total_allocated * 100) / self.total_budget);
     }
 };
@@ -154,40 +154,40 @@ rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optim
 aof_write_buffer_size: usize = 64 * 1024, // 64KB buffer for AOF writes
 
 // Computed constants (calculated from other fields)
-pub fn clientPoolSize(self: Config) usize {
+pub fn client_pool_size(self: Config) usize {
     return self.max_clients * @sizeOf(Client);
 }
 
-pub fn pubsubMatrixSize(self: Config) usize {
+pub fn pubsub_matrix_size(self: Config) usize {
     return self.max_channels * self.max_subscribers_per_channel * @sizeOf(ClientHandle);
 }
 
-pub fn fixedMemorySize(self: Config) usize {
-    return self.clientPoolSize() + self.pubsubMatrixSize();
+pub fn fixed_memory_size(self: Config) usize {
+    return self.client_pool_size() + self.pubsub_matrix_size();
 }
 
-pub fn totalMemoryBudget(self: Config) usize {
-    return self.fixedMemorySize() + self.kv_memory_budget;
+pub fn total_memory_budget(self: Config) usize {
+    return self.fixed_memory_size() + self.kv_memory_budget;
 }
 
-pub fn requiresAuth(self: Config) bool {
+pub fn requires_auth(self: Config) bool {
     return self.requirepass != null;
 }
 
-pub fn readConfig(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
+pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
     var args_iter = if (builtin.os.tag == .windows) args.iterate() else try std.process.Args.Iterator.initAllocator(args, allocator);
 
     _ = args_iter.skip();
 
     if (args_iter.next()) |file_name| {
-        return try readFile(allocator, io, file_name);
+        return try read_file(allocator, io, file_name);
     }
 
     // Return default config
     return .{};
 }
 
-fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
+fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
     var file = try Dir.cwd().openFile(io, file_name, .{});
     defer file.close(io);
 
@@ -208,13 +208,13 @@ fn readFile(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Co
         const key = parts.next() orelse continue;
         const value = parts.rest();
 
-        try parseConfigLine(&config, allocator, key, value);
+        try parse_config_line(&config, allocator, key, value);
     }
 
     return config;
 }
 
-fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
+fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
     const trimmed_value = std.mem.trim(u8, value, " \t\r");
 
     // Network
@@ -315,7 +315,7 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
     } else if (eql(u8, key, "max-subscribers-per-channel")) {
         config.max_subscribers_per_channel = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "kv-memory-budget")) {
-        config.kv_memory_budget = try parseMemorySize(trimmed_value);
+        config.kv_memory_budget = try parse_memory_size(trimmed_value);
     } else if (eql(u8, key, "initial-capacity")) {
         config.initial_capacity = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "eviction-policy") or eql(u8, key, "maxmemory-policy")) {
@@ -329,9 +329,9 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
     } else if (eql(u8, key, "requirepass")) {
         config.requirepass = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "rdb-write-buffer-size")) {
-        config.rdb_write_buffer_size = try parseMemorySize(trimmed_value);
+        config.rdb_write_buffer_size = try parse_memory_size(trimmed_value);
     } else if (eql(u8, key, "aof-write-buffer-size")) {
-        config.aof_write_buffer_size = try parseMemorySize(trimmed_value);
+        config.aof_write_buffer_size = try parse_memory_size(trimmed_value);
     } else if (eql(u8, key, "appenddirname")) {
         config.appenddirname = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "no-appendfsync-on-rewrite")) {
@@ -352,7 +352,7 @@ fn parseConfigLine(config: *Config, allocator: std.mem.Allocator, key: []const u
 }
 
 // Helper function to parse memory sizes like "1gb", "512mb", "4096"
-pub fn parseMemorySize(value: []const u8) !usize {
+pub fn parse_memory_size(value: []const u8) !usize {
     const lower = try std.ascii.allocLowerString(std.heap.page_allocator, value);
     defer std.heap.page_allocator.free(lower);
 

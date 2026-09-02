@@ -51,11 +51,11 @@ const BenchContext = struct {
     }
 
     /// Wrapper for benchmark runner that uses default key count
-    pub fn initDefault(allocator: Allocator) !BenchContext {
+    pub fn init_default(allocator: Allocator) !BenchContext {
         return init(allocator, 10_000);
     }
 
-    pub fn initPopulated(allocator: Allocator, key_count: usize) !BenchContext {
+    pub fn init_populated(allocator: Allocator, key_count: usize) !BenchContext {
         var ctx = try init(allocator, key_count);
         errdefer ctx.deinit();
 
@@ -66,8 +66,8 @@ const BenchContext = struct {
         return ctx;
     }
 
-    pub fn initPopulatedDefault(allocator: Allocator) !BenchContext {
-        return initPopulated(allocator, 10_000);
+    pub fn init_populated_default(allocator: Allocator) !BenchContext {
+        return init_populated(allocator, 10_000);
     }
 
     pub fn deinit(self: *BenchContext) void {
@@ -86,21 +86,21 @@ const BenchContext = struct {
 };
 
 /// Benchmark SET operations
-fn benchSet(ctx: *BenchContext) !void {
+fn bench_set(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
     try ctx.store.set(ctx.keys[idx], ctx.values[idx]);
     ctx.counter += 1;
 }
 
 /// Benchmark GET operations (after pre-populating)
-fn benchGet(ctx: *BenchContext) !void {
+fn bench_get(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
     _ = ctx.store.get(ctx.keys[idx]);
     ctx.counter += 1;
 }
 
 /// Benchmark mixed read-write workload (70% reads, 30% writes)
-fn benchMixed(ctx: *BenchContext) !void {
+fn bench_mixed(ctx: *BenchContext) !void {
     const counter = ctx.counter;
     ctx.counter += 1;
     const idx = @mod(counter, ctx.keys.len);
@@ -115,21 +115,21 @@ fn benchMixed(ctx: *BenchContext) !void {
 }
 
 /// Benchmark DELETE operations
-fn benchDelete(ctx: *BenchContext) !void {
+fn bench_delete(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
     _ = ctx.store.delete(ctx.keys[idx]);
     ctx.counter += 1;
 }
 
 /// Benchmark EXISTS operations
-fn benchExists(ctx: *BenchContext) !void {
+fn bench_exists(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
     _ = ctx.store.exists(ctx.keys[idx]);
     ctx.counter += 1;
 }
 
 /// Benchmark short string operations (inline storage optimization)
-fn benchShortString(ctx: *BenchContext) !void {
+fn bench_short_string(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
     const short_value = "short";
     try ctx.store.set(ctx.keys[idx], short_value);
@@ -138,9 +138,9 @@ fn benchShortString(ctx: *BenchContext) !void {
 }
 
 /// Benchmark integer operations (automatic type optimization)
-fn benchInteger(ctx: *BenchContext) !void {
+fn bench_integer(ctx: *BenchContext) !void {
     const idx = @mod(ctx.counter, ctx.keys.len);
-    try ctx.store.setInt(ctx.keys[idx], @as(i64, @intCast(idx)));
+    try ctx.store.set_int(ctx.keys[idx], @as(i64, @intCast(idx)));
     _ = ctx.store.get(ctx.keys[idx]);
     ctx.counter += 1;
 }
@@ -153,7 +153,7 @@ const EvictionBenchContext = struct {
     key_count: usize,
     counter: usize = 0,
 
-    pub fn initDefault(allocator: Allocator) !EvictionBenchContext {
+    pub fn init_default(allocator: Allocator) !EvictionBenchContext {
         const key_count = 256;
         const kv_budget = 288 * 1024;
 
@@ -184,7 +184,7 @@ const EvictionBenchContext = struct {
         });
         errdefer ctx.store.deinit();
 
-        ctx.kv_allocator.attachStore(ctx.store);
+        ctx.kv_allocator.attach_store(ctx.store);
 
         return ctx;
     }
@@ -199,7 +199,7 @@ const EvictionBenchContext = struct {
     }
 };
 
-fn benchEvictionPressure(ctx: *EvictionBenchContext) !void {
+fn bench_eviction_pressure(ctx: *EvictionBenchContext) !void {
     const idx = @mod(ctx.counter, ctx.key_count);
     const read_idx = @mod(ctx.counter / 2, ctx.key_count);
     ctx.counter += 1;
@@ -216,7 +216,7 @@ fn benchEvictionPressure(ctx: *EvictionBenchContext) !void {
     _ = ctx.store.get(read_key);
 }
 
-pub fn runAllBenchmarks(allocator: Allocator) !void {
+pub fn run_all_benchmarks(allocator: Allocator) !void {
     var results: std.ArrayList(bench_runner.BenchmarkResult) = .empty;
 
     defer results.deinit(allocator);
@@ -225,7 +225,7 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
 
     // Benchmark 1: Pure SET operations
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.set (sequential)",
@@ -235,17 +235,17 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = true,
             },
             BenchContext,
-            BenchContext.initDefault,
+            BenchContext.init_default,
             BenchContext.deinit,
-            benchSet,
+            bench_set,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 2: Pure GET operations (pre-populate store first)
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.get (cached)",
@@ -255,17 +255,17 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = false, // Already populated
             },
             BenchContext,
-            BenchContext.initPopulatedDefault,
+            BenchContext.init_populated_default,
             BenchContext.deinit,
-            benchGet,
+            bench_get,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 3: Mixed workload (70% reads, 30% writes)
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.mixed (70R/30W)",
@@ -275,17 +275,17 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = true,
             },
             BenchContext,
-            BenchContext.initPopulatedDefault,
+            BenchContext.init_populated_default,
             BenchContext.deinit,
-            benchMixed,
+            bench_mixed,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 4: Short string optimization
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.set (short strings)",
@@ -295,37 +295,37 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = true,
             },
             BenchContext,
-            BenchContext.initDefault,
+            BenchContext.init_default,
             BenchContext.deinit,
-            benchShortString,
+            bench_short_string,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 5: Integer type optimization
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
-                .name = "Store.setInt (integers)",
+                .name = "Store.set_int (integers)",
                 .iterations = 500_000,
                 .warmup_iterations = 50_000,
                 .track_latency = true,
                 .track_memory = true,
             },
             BenchContext,
-            BenchContext.initDefault,
+            BenchContext.init_default,
             BenchContext.deinit,
-            benchInteger,
+            bench_integer,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 6: EXISTS operations
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.exists",
@@ -335,17 +335,17 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = false,
             },
             BenchContext,
-            BenchContext.initPopulatedDefault,
+            BenchContext.init_populated_default,
             BenchContext.deinit,
-            benchExists,
+            bench_exists,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 7: DELETE operations
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.delete",
@@ -355,17 +355,17 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = true,
             },
             BenchContext,
-            BenchContext.initDefault,
+            BenchContext.init_default,
             BenchContext.deinit,
-            benchDelete,
+            bench_delete,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 8: Budgeted eviction pressure
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Store.eviction (budgeted)",
@@ -375,14 +375,14 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_memory = false,
             },
             EvictionBenchContext,
-            EvictionBenchContext.initDefault,
+            EvictionBenchContext.init_default,
             EvictionBenchContext.deinit,
-            benchEvictionPressure,
+            bench_eviction_pressure,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Print summary table
-    bench_runner.printResults(results.items);
+    bench_runner.print_results(results.items);
 }

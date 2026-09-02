@@ -89,34 +89,34 @@ const ConfigSetError = error{
 // PING command implementation
 pub fn ping(writer: *std.Io.Writer, args: []const Value) !void {
     if (args.len == 1) {
-        try resp.writeSimpleString(writer, "PONG");
+        try resp.write_simple_string(writer, "PONG");
     } else {
-        try resp.writeBulkString(writer, args[1].asSlice());
+        try resp.write_bulk_string(writer, args[1].as_slice());
     }
 }
 
 // ECHO command implementation
 pub fn echo(writer: *std.Io.Writer, args: []const Value) !void {
-    try resp.writeBulkString(writer, args[1].asSlice());
+    try resp.write_bulk_string(writer, args[1].as_slice());
 }
 
 // QUIT command implementation
 pub fn quit(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     _ = args; // Unused parameter
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
     client.connection.close(client.io);
 }
 
 pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
-    const password = args[1].asSlice();
+    const password = args[1].as_slice();
 
-    if (!client.server.config.requiresAuth()) {
+    if (!client.server.config.requires_auth()) {
         return error.AuthNoPasswordSet;
     }
 
     if (std.mem.eql(u8, password, client.server.config.requirepass.?)) {
         client.authenticated = true;
-        try resp.writeOK(writer);
+        try resp.write_ok(writer);
     } else {
         client.authenticated = false;
         return error.AuthInvalidPassword;
@@ -124,73 +124,73 @@ pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
 }
 
 pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
-    const subcommand = args[1].asSlice();
+    const subcommand = args[1].as_slice();
 
     if (std.ascii.eqlIgnoreCase(subcommand, "GET")) {
         if (args.len != 3) {
-            try resp.writeError(writer, "wrong number of arguments for CONFIG GET");
+            try resp.write_error(writer, "wrong number of arguments for CONFIG GET");
             return;
         }
-        try configGet(client, args[2].asSlice(), writer);
+        try config_get(client, args[2].as_slice(), writer);
         return;
     }
 
     if (std.ascii.eqlIgnoreCase(subcommand, "SET")) {
         if (args.len < 4 or @mod(args.len, 2) != 0) {
-            try resp.writeError(writer, "wrong number of arguments for CONFIG SET");
+            try resp.write_error(writer, "wrong number of arguments for CONFIG SET");
             return;
         }
-        try configSet(client, args[2..], writer);
+        try config_set(client, args[2..], writer);
         return;
     }
 
     if (std.ascii.eqlIgnoreCase(subcommand, "RESETSTAT")) {
         if (args.len != 2) {
-            try resp.writeError(writer, "wrong number of arguments for CONFIG RESETSTAT");
+            try resp.write_error(writer, "wrong number of arguments for CONFIG RESETSTAT");
             return;
         }
-        try resp.writeOK(writer);
+        try resp.write_ok(writer);
         return;
     }
 
     if (std.ascii.eqlIgnoreCase(subcommand, "HELP")) {
         if (args.len != 2) {
-            try resp.writeError(writer, "wrong number of arguments for CONFIG HELP");
+            try resp.write_error(writer, "wrong number of arguments for CONFIG HELP");
             return;
         }
-        try configHelp(writer);
+        try config_help(writer);
         return;
     }
 
-    try resp.writeError(writer, "Unknown subcommand or wrong number of arguments for CONFIG");
+    try resp.write_error(writer, "Unknown subcommand or wrong number of arguments for CONFIG");
 }
 
-fn configGet(client: *Client, pattern: []const u8, writer: *Writer) !void {
+fn config_get(client: *Client, pattern: []const u8, writer: *Writer) !void {
     const lowered_pattern = try std.ascii.allocLowerString(client.allocator, pattern);
     defer client.allocator.free(lowered_pattern);
 
     var count: usize = 0;
     for (config_parameters) |param| {
-        if (parameterMatchesPattern(param, lowered_pattern)) {
+        if (parameter_matches_pattern(param, lowered_pattern)) {
             count += 1;
         }
     }
 
-    try resp.writeListLen(writer, count * 2);
+    try resp.write_list_len(writer, count * 2);
 
     for (config_parameters) |param| {
-        if (!parameterMatchesPattern(param, lowered_pattern)) continue;
-        try resp.writeBulkString(writer, param.name);
-        try writeConfigValue(client, writer, param.name);
+        if (!parameter_matches_pattern(param, lowered_pattern)) continue;
+        try resp.write_bulk_string(writer, param.name);
+        try write_config_value(client, writer, param.name);
     }
 }
 
-fn configSet(client: *Client, pairs: []const Value, writer: *Writer) !void {
+fn config_set(client: *Client, pairs: []const Value, writer: *Writer) !void {
     var i: usize = 0;
     while (i < pairs.len) : (i += 2) {
-        const name = pairs[i].asSlice();
-        const value = pairs[i + 1].asSlice();
-        applyConfigSet(client, name, value) catch |err| switch (err) {
+        const name = pairs[i].as_slice();
+        const value = pairs[i + 1].as_slice();
+        apply_config_set(client, name, value) catch |err| switch (err) {
             error.UnknownParameter => {
                 try writer.print("-ERR Unknown option or number of arguments for CONFIG SET - '{s}'\r\n", .{name});
                 return;
@@ -206,10 +206,10 @@ fn configSet(client: *Client, pairs: []const Value, writer: *Writer) !void {
         };
     }
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
-fn configHelp(writer: *Writer) !void {
+fn config_help(writer: *Writer) !void {
     const lines = [_][]const u8{
         "CONFIG GET <pattern> -- Return configuration parameters matching a glob pattern.",
         "CONFIG SET <name> <value> [name value ...] -- Update supported runtime configuration parameters.",
@@ -217,13 +217,13 @@ fn configHelp(writer: *Writer) !void {
         "CONFIG HELP -- Show this help.",
     };
 
-    try resp.writeListLen(writer, lines.len);
+    try resp.write_list_len(writer, lines.len);
     for (lines) |line| {
-        try resp.writeBulkString(writer, line);
+        try resp.write_bulk_string(writer, line);
     }
 }
 
-fn parameterMatchesPattern(param: ConfigParameter, lowered_pattern: []const u8) bool {
+fn parameter_matches_pattern(param: ConfigParameter, lowered_pattern: []const u8) bool {
     if (string_match(lowered_pattern, param.name)) return true;
 
     if (std.mem.indexOfAny(u8, lowered_pattern, "*?") != null) return false;
@@ -233,7 +233,7 @@ fn parameterMatchesPattern(param: ConfigParameter, lowered_pattern: []const u8) 
     return false;
 }
 
-fn findConfigParameter(name: []const u8) ?ConfigParameter {
+fn find_config_parameter(name: []const u8) ?ConfigParameter {
     for (config_parameters) |param| {
         if (std.ascii.eqlIgnoreCase(name, param.name)) return param;
         for (param.aliases) |alias| {
@@ -243,186 +243,186 @@ fn findConfigParameter(name: []const u8) ?ConfigParameter {
     return null;
 }
 
-fn writeConfigValue(client: *Client, writer: *Writer, name: []const u8) !void {
+fn write_config_value(client: *Client, writer: *Writer, name: []const u8) !void {
     const server_config = client.server.config;
 
     if (std.mem.eql(u8, name, "appenddirname")) {
-        try resp.writeBulkString(writer, server_config.appenddirname);
+        try resp.write_bulk_string(writer, server_config.appenddirname);
     } else if (std.mem.eql(u8, name, "appendfilename")) {
-        try resp.writeBulkString(writer, server_config.appendfilename);
+        try resp.write_bulk_string(writer, server_config.appendfilename);
     } else if (std.mem.eql(u8, name, "appendfsync")) {
-        try resp.writeBulkString(writer, server_config.appendfsync);
+        try resp.write_bulk_string(writer, server_config.appendfsync);
     } else if (std.mem.eql(u8, name, "aof-write-buffer-size")) {
-        try writeConfigInt(writer, server_config.aof_write_buffer_size);
+        try write_config_int(writer, server_config.aof_write_buffer_size);
     } else if (std.mem.eql(u8, name, "appendonly")) {
-        try writeConfigBool(writer, server_config.appendonly);
+        try write_config_bool(writer, server_config.appendonly);
     } else if (std.mem.eql(u8, name, "bind")) {
-        try resp.writeBulkString(writer, server_config.bind);
+        try resp.write_bulk_string(writer, server_config.bind);
     } else if (std.mem.eql(u8, name, "clock-update-ms")) {
-        try writeConfigInt(writer, server_config.clock_update_ms);
+        try write_config_int(writer, server_config.clock_update_ms);
     } else if (std.mem.eql(u8, name, "daemonize")) {
-        try writeConfigBool(writer, server_config.daemonize);
+        try write_config_bool(writer, server_config.daemonize);
     } else if (std.mem.eql(u8, name, "dbfilename")) {
-        try resp.writeBulkString(writer, server_config.dbfilename);
+        try resp.write_bulk_string(writer, server_config.dbfilename);
     } else if (std.mem.eql(u8, name, "dir")) {
-        try resp.writeBulkString(writer, server_config.dir);
+        try resp.write_bulk_string(writer, server_config.dir);
     } else if (std.mem.eql(u8, name, "initial-capacity")) {
-        try writeConfigInt(writer, server_config.initial_capacity);
+        try write_config_int(writer, server_config.initial_capacity);
     } else if (std.mem.eql(u8, name, "logfile")) {
-        try resp.writeBulkString(writer, server_config.logfile);
+        try resp.write_bulk_string(writer, server_config.logfile);
     } else if (std.mem.eql(u8, name, "loglevel")) {
-        try resp.writeBulkString(writer, server_config.loglevel);
+        try resp.write_bulk_string(writer, server_config.loglevel);
     } else if (std.mem.eql(u8, name, "max-channels")) {
-        try writeConfigInt(writer, server_config.max_channels);
+        try write_config_int(writer, server_config.max_channels);
     } else if (std.mem.eql(u8, name, "max-subscribers-per-channel")) {
-        try writeConfigInt(writer, server_config.max_subscribers_per_channel);
+        try write_config_int(writer, server_config.max_subscribers_per_channel);
     } else if (std.mem.eql(u8, name, "maxclients")) {
-        try writeConfigInt(writer, server_config.max_clients);
+        try write_config_int(writer, server_config.max_clients);
     } else if (std.mem.eql(u8, name, "maxmemory")) {
-        try writeConfigInt(writer, server_config.kv_memory_budget);
+        try write_config_int(writer, server_config.kv_memory_budget);
     } else if (std.mem.eql(u8, name, "maxmemory-policy")) {
-        try resp.writeBulkString(writer, evictionPolicyName(server_config.eviction_policy));
+        try resp.write_bulk_string(writer, eviction_policy_name(server_config.eviction_policy));
     } else if (std.mem.eql(u8, name, "maxmemory-samples")) {
-        try writeConfigInt(writer, server_config.maxmemory_samples);
+        try write_config_int(writer, server_config.maxmemory_samples);
     } else if (std.mem.eql(u8, name, "pidfile")) {
-        try resp.writeBulkString(writer, server_config.pidfile);
+        try resp.write_bulk_string(writer, server_config.pidfile);
     } else if (std.mem.eql(u8, name, "port")) {
-        try writeConfigInt(writer, server_config.port);
+        try write_config_int(writer, server_config.port);
     } else if (std.mem.eql(u8, name, "protected-mode")) {
-        try writeConfigBool(writer, server_config.protected_mode);
+        try write_config_bool(writer, server_config.protected_mode);
     } else if (std.mem.eql(u8, name, "rdb-write-buffer-size")) {
-        try writeConfigInt(writer, server_config.rdb_write_buffer_size);
+        try write_config_int(writer, server_config.rdb_write_buffer_size);
     } else if (std.mem.eql(u8, name, "rdbchecksum")) {
-        try writeConfigBool(writer, server_config.rdbchecksum);
+        try write_config_bool(writer, server_config.rdbchecksum);
     } else if (std.mem.eql(u8, name, "rdbcompression")) {
-        try writeConfigBool(writer, server_config.rdbcompression);
+        try write_config_bool(writer, server_config.rdbcompression);
     } else if (std.mem.eql(u8, name, "replica-read-only")) {
-        try writeConfigBool(writer, server_config.replica_read_only);
+        try write_config_bool(writer, server_config.replica_read_only);
     } else if (std.mem.eql(u8, name, "replica-serve-stale-data")) {
-        try writeConfigBool(writer, server_config.replica_serve_stale_data);
+        try write_config_bool(writer, server_config.replica_serve_stale_data);
     } else if (std.mem.eql(u8, name, "repl-diskless-load")) {
-        try resp.writeBulkString(writer, server_config.repl_diskless_load);
+        try resp.write_bulk_string(writer, server_config.repl_diskless_load);
     } else if (std.mem.eql(u8, name, "repl-diskless-sync")) {
-        try writeConfigBool(writer, server_config.repl_diskless_sync);
+        try write_config_bool(writer, server_config.repl_diskless_sync);
     } else if (std.mem.eql(u8, name, "repl-diskless-sync-delay")) {
-        try writeConfigInt(writer, server_config.repl_diskless_sync_delay);
+        try write_config_int(writer, server_config.repl_diskless_sync_delay);
     } else if (std.mem.eql(u8, name, "requirepass")) {
-        try resp.writeBulkString(writer, server_config.requirepass orelse "");
+        try resp.write_bulk_string(writer, server_config.requirepass orelse "");
     } else if (std.mem.eql(u8, name, "save")) {
-        try resp.writeBulkString(writer, "");
+        try resp.write_bulk_string(writer, "");
     } else if (std.mem.eql(u8, name, "stop-writes-on-bgsave-error")) {
-        try writeConfigBool(writer, server_config.stop_writes_on_bgsave_error);
+        try write_config_bool(writer, server_config.stop_writes_on_bgsave_error);
     } else if (std.mem.eql(u8, name, "tcp-backlog")) {
-        try writeConfigInt(writer, server_config.tcp_backlog);
+        try write_config_int(writer, server_config.tcp_backlog);
     } else if (std.mem.eql(u8, name, "tcp-keepalive")) {
-        try writeConfigInt(writer, server_config.tcp_keepalive);
+        try write_config_int(writer, server_config.tcp_keepalive);
     } else if (std.mem.eql(u8, name, "timeout")) {
-        try writeConfigInt(writer, server_config.timeout);
+        try write_config_int(writer, server_config.timeout);
     } else if (std.mem.eql(u8, name, "acllog-max-len")) {
-        try writeConfigInt(writer, server_config.acllog_max_len);
+        try write_config_int(writer, server_config.acllog_max_len);
     } else if (std.mem.eql(u8, name, "aof-load-broken")) {
-        try writeConfigBool(writer, server_config.aof_load_broken);
+        try write_config_bool(writer, server_config.aof_load_broken);
     } else if (std.mem.eql(u8, name, "aof-load-broken-max-size")) {
-        try writeConfigInt(writer, server_config.aof_load_broken_max_size);
+        try write_config_int(writer, server_config.aof_load_broken_max_size);
     } else if (std.mem.eql(u8, name, "aof-load-truncated")) {
-        try writeConfigBool(writer, server_config.aof_load_truncated);
+        try write_config_bool(writer, server_config.aof_load_truncated);
     } else if (std.mem.eql(u8, name, "aof-use-rdb-preamble")) {
-        try writeConfigBool(writer, server_config.aof_use_rdb_preamble);
+        try write_config_bool(writer, server_config.aof_use_rdb_preamble);
     } else if (std.mem.eql(u8, name, "auto-aof-rewrite-min-size")) {
-        try resp.writeBulkString(writer, server_config.auto_aof_rewrite_min_size);
+        try resp.write_bulk_string(writer, server_config.auto_aof_rewrite_min_size);
     } else if (std.mem.eql(u8, name, "auto-aof-rewrite-percentage")) {
-        try writeConfigInt(writer, server_config.auto_aof_rewrite_percentage);
+        try write_config_int(writer, server_config.auto_aof_rewrite_percentage);
     } else if (std.mem.eql(u8, name, "disable-thp")) {
-        try writeConfigBool(writer, server_config.disable_thp);
+        try write_config_bool(writer, server_config.disable_thp);
     } else if (std.mem.eql(u8, name, "lazyfree-lazy-eviction")) {
-        try writeConfigBool(writer, server_config.lazyfree_lazy_eviction);
+        try write_config_bool(writer, server_config.lazyfree_lazy_eviction);
     } else if (std.mem.eql(u8, name, "lazyfree-lazy-expire")) {
-        try writeConfigBool(writer, server_config.lazyfree_lazy_expire);
+        try write_config_bool(writer, server_config.lazyfree_lazy_expire);
     } else if (std.mem.eql(u8, name, "lazyfree-lazy-server-del")) {
-        try writeConfigBool(writer, server_config.lazyfree_lazy_server_del);
+        try write_config_bool(writer, server_config.lazyfree_lazy_server_del);
     } else if (std.mem.eql(u8, name, "lazyfree-lazy-user-del")) {
-        try writeConfigBool(writer, server_config.lazyfree_lazy_user_del);
+        try write_config_bool(writer, server_config.lazyfree_lazy_user_del);
     } else if (std.mem.eql(u8, name, "lazyfree-lazy-user-flush")) {
-        try writeConfigBool(writer, server_config.lazyfree_lazy_user_flush);
+        try write_config_bool(writer, server_config.lazyfree_lazy_user_flush);
     } else if (std.mem.eql(u8, name, "no-appendfsync-on-rewrite")) {
-        try writeConfigBool(writer, server_config.no_appendfsync_on_rewrite);
+        try write_config_bool(writer, server_config.no_appendfsync_on_rewrite);
     } else if (std.mem.eql(u8, name, "oom-score-adj")) {
-        try writeConfigBool(writer, server_config.oom_score_adj);
+        try write_config_bool(writer, server_config.oom_score_adj);
     } else if (std.mem.eql(u8, name, "rdb-del-sync-files")) {
-        try writeConfigBool(writer, server_config.rdb_del_sync_files);
+        try write_config_bool(writer, server_config.rdb_del_sync_files);
     } else if (std.mem.eql(u8, name, "repl-disable-tcp-nodelay")) {
-        try writeConfigBool(writer, server_config.repl_disable_tcp_nodelay);
+        try write_config_bool(writer, server_config.repl_disable_tcp_nodelay);
     } else if (std.mem.eql(u8, name, "repl-diskless-sync-max-replicas")) {
-        try writeConfigInt(writer, server_config.repl_diskless_sync_max_replicas);
+        try write_config_int(writer, server_config.repl_diskless_sync_max_replicas);
     } else if (std.mem.eql(u8, name, "replica-lazy-flush")) {
-        try writeConfigBool(writer, server_config.replica_lazy_flush);
+        try write_config_bool(writer, server_config.replica_lazy_flush);
     } else if (std.mem.eql(u8, name, "replica-priority")) {
-        try writeConfigInt(writer, server_config.replica_priority);
+        try write_config_int(writer, server_config.replica_priority);
     } else {
         unreachable;
     }
 }
 
-fn applyConfigSet(client: *Client, name: []const u8, value: []const u8) ConfigSetError!void {
-    const param = findConfigParameter(name) orelse return error.UnknownParameter;
+fn apply_config_set(client: *Client, name: []const u8, value: []const u8) ConfigSetError!void {
+    const param = find_config_parameter(name) orelse return error.UnknownParameter;
     if (!param.mutable) return error.ImmutableParameter;
 
     if (std.mem.eql(u8, param.name, "aof-write-buffer-size")) {
-        client.server.config.aof_write_buffer_size = Config.parseMemorySize(value) catch return error.InvalidValue;
+        client.server.config.aof_write_buffer_size = Config.parse_memory_size(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "max-channels")) {
-        client.server.config.max_channels = parseConfigInt(u32, value) catch return error.InvalidValue;
+        client.server.config.max_channels = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "max-subscribers-per-channel")) {
-        client.server.config.max_subscribers_per_channel = parseConfigInt(u32, value) catch return error.InvalidValue;
+        client.server.config.max_subscribers_per_channel = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "maxmemory-policy")) {
-        const policy = parseEvictionPolicy(value) catch return error.InvalidValue;
+        const policy = parse_eviction_policy(value) catch return error.InvalidValue;
         client.server.config.eviction_policy = policy;
         client.server.store.eviction_policy = policy;
         client.server.kv_allocator.eviction_policy = policy;
         return;
     }
     if (std.mem.eql(u8, param.name, "maxmemory-samples")) {
-        const samples = parseConfigInt(u32, value) catch return error.InvalidValue;
+        const samples = parse_config_int(u32, value) catch return error.InvalidValue;
         if (samples == 0) return error.InvalidValue;
         client.server.config.maxmemory_samples = samples;
         client.server.store.maxmemory_samples = @intCast(samples);
         return;
     }
     if (std.mem.eql(u8, param.name, "protected-mode")) {
-        client.server.config.protected_mode = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.protected_mode = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "rdb-write-buffer-size")) {
-        client.server.config.rdb_write_buffer_size = Config.parseMemorySize(value) catch return error.InvalidValue;
+        client.server.config.rdb_write_buffer_size = Config.parse_memory_size(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "rdbchecksum")) {
-        client.server.config.rdbchecksum = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.rdbchecksum = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "rdbcompression")) {
-        client.server.config.rdbcompression = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.rdbcompression = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "replica-read-only")) {
-        client.server.config.replica_read_only = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.replica_read_only = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "replica-serve-stale-data")) {
-        client.server.config.replica_serve_stale_data = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.replica_serve_stale_data = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "repl-diskless-sync")) {
-        client.server.config.repl_diskless_sync = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.repl_diskless_sync = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "repl-diskless-sync-delay")) {
-        client.server.config.repl_diskless_sync_delay = parseConfigInt(u32, value) catch return error.InvalidValue;
+        client.server.config.repl_diskless_sync_delay = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "requirepass")) {
@@ -433,32 +433,32 @@ fn applyConfigSet(client: *Client, name: []const u8, value: []const u8) ConfigSe
         return;
     }
     if (std.mem.eql(u8, param.name, "stop-writes-on-bgsave-error")) {
-        client.server.config.stop_writes_on_bgsave_error = parseConfigBool(value) catch return error.InvalidValue;
+        client.server.config.stop_writes_on_bgsave_error = parse_config_bool(value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "tcp-keepalive")) {
-        client.server.config.tcp_keepalive = parseConfigInt(u32, value) catch return error.InvalidValue;
+        client.server.config.tcp_keepalive = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
     if (std.mem.eql(u8, param.name, "timeout")) {
-        client.server.config.timeout = parseConfigInt(u32, value) catch return error.InvalidValue;
+        client.server.config.timeout = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
 
     return error.ImmutableParameter;
 }
 
-fn writeConfigBool(writer: *Writer, value: bool) !void {
-    try resp.writeBulkString(writer, if (value) "yes" else "no");
+fn write_config_bool(writer: *Writer, value: bool) !void {
+    try resp.write_bulk_string(writer, if (value) "yes" else "no");
 }
 
-fn writeConfigInt(writer: *Writer, value: anytype) !void {
+fn write_config_int(writer: *Writer, value: anytype) !void {
     var buffer: [32]u8 = undefined;
     const formatted = try std.fmt.bufPrint(&buffer, "{d}", .{value});
-    try resp.writeBulkString(writer, formatted);
+    try resp.write_bulk_string(writer, formatted);
 }
 
-fn evictionPolicyName(policy: Config.EvictionPolicy) []const u8 {
+fn eviction_policy_name(policy: Config.EvictionPolicy) []const u8 {
     return switch (policy) {
         .noeviction => "noeviction",
         .allkeys_lru => "allkeys-lru",
@@ -466,7 +466,7 @@ fn evictionPolicyName(policy: Config.EvictionPolicy) []const u8 {
     };
 }
 
-fn parseConfigBool(value: []const u8) !bool {
+fn parse_config_bool(value: []const u8) !bool {
     if (std.ascii.eqlIgnoreCase(value, "yes") or std.ascii.eqlIgnoreCase(value, "true") or std.mem.eql(u8, value, "1")) {
         return true;
     }
@@ -476,14 +476,14 @@ fn parseConfigBool(value: []const u8) !bool {
     return error.InvalidValue;
 }
 
-fn parseEvictionPolicy(value: []const u8) !Config.EvictionPolicy {
+fn parse_eviction_policy(value: []const u8) !Config.EvictionPolicy {
     if (std.ascii.eqlIgnoreCase(value, "noeviction")) return .noeviction;
     if (std.ascii.eqlIgnoreCase(value, "allkeys-lru")) return .allkeys_lru;
     if (std.ascii.eqlIgnoreCase(value, "volatile-lru")) return .volatile_lru;
     return error.InvalidValue;
 }
 
-fn parseConfigInt(comptime T: type, value: []const u8) !T {
+fn parse_config_int(comptime T: type, value: []const u8) !T {
     return std.fmt.parseInt(T, value, 10);
 }
 
@@ -506,7 +506,7 @@ pub fn help(writer: *std.Io.Writer, args: []const Value) !void {
         \\  DECR <key>           - Decrement the value of a key
     ;
 
-    try resp.writeBulkString(writer, help_text);
+    try resp.write_bulk_string(writer, help_text);
 }
 
 const TestContext = struct {

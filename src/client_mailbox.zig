@@ -23,7 +23,7 @@ pub const ClientMailbox = struct {
         };
     }
 
-    pub fn acquireNode(self: *ClientMailbox, allocator: Allocator, bytes: []u8) !*MessageNode {
+    pub fn acquire_node(self: *ClientMailbox, allocator: Allocator, bytes: []u8) !*MessageNode {
         for (&self.node_pool) |*slot| {
             if (slot.*) |node| {
                 slot.* = null;
@@ -36,7 +36,7 @@ pub const ClientMailbox = struct {
         return node;
     }
 
-    pub fn releaseNode(self: *ClientMailbox, allocator: Allocator, node: *MessageNode) void {
+    pub fn release_node(self: *ClientMailbox, allocator: Allocator, node: *MessageNode) void {
         allocator.free(node.bytes);
         for (&self.node_pool) |*slot| {
             if (slot.* == null) {
@@ -47,11 +47,11 @@ pub const ClientMailbox = struct {
         allocator.destroy(node);
     }
 
-    pub fn freeNodes(self: *ClientMailbox, allocator: Allocator, head: ?*MessageNode) void {
+    pub fn free_nodes(self: *ClientMailbox, allocator: Allocator, head: ?*MessageNode) void {
         var current = head;
         while (current) |node| {
             const next = node.next;
-            self.releaseNode(allocator, node);
+            self.release_node(allocator, node);
             current = next;
         }
     }
@@ -81,8 +81,8 @@ pub const ClientMailbox = struct {
             .next = null,
         };
 
-        self.lockAtomic();
-        defer self.unlockAtomic();
+        self.lock_atomic();
+        defer self.unlock_atomic();
 
         if (!is_active or self.closed.load(.acquire)) return error.OutboxClosed;
         if (self.pending_count >= self.capacity) return error.OutboxFull;
@@ -96,9 +96,9 @@ pub const ClientMailbox = struct {
         self.pending_count += 1;
     }
 
-    pub fn takeAll(self: *ClientMailbox) ?*MessageNode {
-        self.lockAtomic();
-        defer self.unlockAtomic();
+    pub fn take_all(self: *ClientMailbox) ?*MessageNode {
+        self.lock_atomic();
+        defer self.unlock_atomic();
 
         const head = self.head;
         self.head = null;
@@ -107,19 +107,19 @@ pub const ClientMailbox = struct {
         return head;
     }
 
-    pub fn lockAtomic(self: *ClientMailbox) void {
+    pub fn lock_atomic(self: *ClientMailbox) void {
         while (!self.atomic_mutex.tryLock()) {
             std.atomic.spinLoopHint();
         }
     }
 
-    pub fn unlockAtomic(self: *ClientMailbox) void {
+    pub fn unlock_atomic(self: *ClientMailbox) void {
         self.atomic_mutex.unlock();
     }
 
     pub fn deinit(self: *ClientMailbox, allocator: Allocator) void {
         self.close();
-        freeMessageList(allocator, self.takeAll());
+        free_message_list(allocator, self.take_all());
         for (&self.node_pool) |*slot| {
             if (slot.*) |node| {
                 allocator.destroy(node);
@@ -129,7 +129,7 @@ pub const ClientMailbox = struct {
     }
 };
 
-pub fn freeMessageList(allocator: Allocator, head: ?*MessageNode) void {
+pub fn free_message_list(allocator: Allocator, head: ?*MessageNode) void {
     var current = head;
     while (current) |node| {
         const next = node.next;
@@ -148,14 +148,14 @@ test "ClientMailbox enqueues and drains messages" {
     try mailbox.enqueue(testing.allocator, "one", true);
     try mailbox.enqueue(testing.allocator, "two", true);
 
-    const head = mailbox.takeAll();
-    defer freeMessageList(testing.allocator, head);
+    const head = mailbox.take_all();
+    defer free_message_list(testing.allocator, head);
 
     try testing.expect(head != null);
     try testing.expectEqualStrings("one", head.?.bytes);
     try testing.expect(head.?.next != null);
     try testing.expectEqualStrings("two", head.?.next.?.bytes);
-    try testing.expect(mailbox.takeAll() == null);
+    try testing.expect(mailbox.take_all() == null);
 }
 
 test "ClientMailbox rejects closed or full queues" {
@@ -165,8 +165,8 @@ test "ClientMailbox rejects closed or full queues" {
     try mailbox.enqueue(testing.allocator, "one", true);
     try testing.expectError(error.OutboxFull, mailbox.enqueue(testing.allocator, "two", true));
 
-    const head = mailbox.takeAll();
-    defer freeMessageList(testing.allocator, head);
+    const head = mailbox.take_all();
+    defer free_message_list(testing.allocator, head);
     mailbox.close();
     try testing.expectError(error.OutboxClosed, mailbox.enqueue(testing.allocator, "three", true));
 }

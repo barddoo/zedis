@@ -9,14 +9,15 @@ const Writer = Io.Writer;
 
 const ScalableBloomFilter = @import("../bloom/bloom.zig").BloomFilter;
 const Clock = @import("../clock.zig");
+const testing = std.testing;
 
 pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.RESERVE key error_rate capacity [EXPANSION expansion] [NONSCALING]
     if (args.len < 4) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
-    const error_rate_str = args[2].asSlice();
-    const capacity_str = args[3].asSlice();
+    const key = args[1].as_slice();
+    const error_rate_str = args[2].as_slice();
+    const capacity_str = args[3].as_slice();
 
     // Parse error rate
     const error_rate = std.fmt.parseFloat(f64, error_rate_str) catch {
@@ -28,7 +29,6 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
 
     // Parse capacity
     const capacity = std.fmt.parseInt(u64, capacity_str, 10) catch {
-        const testing = std.testing;
         return error.InvalidArgument;
     };
     if (capacity == 0) {
@@ -40,10 +40,10 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
     var non_scaling: bool = false;
     var i: usize = 4;
     while (i < args.len) {
-        const param = args[i].asSlice();
+        const param = args[i].as_slice();
         if (std.ascii.eqlIgnoreCase(param, "EXPANSION")) {
             if (i + 1 >= args.len) return error.WrongNumberOfArguments;
-            const expansion_str = args[i + 1].asSlice();
+            const expansion_str = args[i + 1].as_slice();
             expansion = std.fmt.parseFloat(f64, expansion_str) catch {
                 return error.InvalidArgument;
             };
@@ -75,20 +75,20 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
     });
 
     // Store the Bloom filter
-    try store.createBloomFilter(key, bf);
+    try store.create_bloom_filter(key, bf);
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn bf_add(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.ADD key item
     if (args.len != 3) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
-    const item = args[2].asSlice();
+    const key = args[1].as_slice();
+    const item = args[2].as_slice();
 
     // Get the Bloom filter
-    const bf_ptr = try store.getBloomFilter(key) orelse {
+    const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
@@ -96,17 +96,17 @@ pub fn bf_add(writer: *Writer, store: *Store, args: []const Value) !void {
     const added = try bf_ptr.add(item);
 
     // Return 1 if newly added, 0 if already exists (or false positive)
-    try resp.writeInt(writer, @as(i64, @intFromBool(added)));
+    try resp.write_int(writer, @as(i64, @intFromBool(added)));
 }
 
 pub fn bf_madd(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.MADD key item1 [item2 ...]
     if (args.len < 3) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     // Get the Bloom filter
-    const bf_ptr = try store.getBloomFilter(key) orelse {
+    const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
@@ -115,15 +115,15 @@ pub fn bf_madd(writer: *Writer, store: *Store, args: []const Value) !void {
     defer store.allocator.free(results);
 
     for (args[2..], 0..) |arg, idx| {
-        const item = arg.asSlice();
+        const item = arg.as_slice();
         const added = try bf_ptr.add(item);
         results[idx] = added;
     }
 
     // Return array of integers
-    try resp.writeListLen(writer, results.len);
+    try resp.write_list_len(writer, results.len);
     for (results) |added| {
-        try resp.writeInt(writer, @as(i64, @intFromBool(added)));
+        try resp.write_int(writer, @as(i64, @intFromBool(added)));
     }
 }
 
@@ -131,11 +131,11 @@ pub fn bf_exists(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.EXISTS key item
     if (args.len != 3) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
-    const item = args[2].asSlice();
+    const key = args[1].as_slice();
+    const item = args[2].as_slice();
 
     // Get the Bloom filter
-    const bf_ptr = try store.getBloomFilter(key) orelse {
+    const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
@@ -143,17 +143,17 @@ pub fn bf_exists(writer: *Writer, store: *Store, args: []const Value) !void {
     const exists = bf_ptr.check(item);
 
     // Return 1 if may exist, 0 if definitely doesn't exist
-    try resp.writeInt(writer, @as(i64, @intFromBool(exists)));
+    try resp.write_int(writer, @as(i64, @intFromBool(exists)));
 }
 
 pub fn bf_mexists(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.MEXISTS key item1 [item2 ...]
     if (args.len < 3) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     // Get the Bloom filter
-    const bf_ptr = try store.getBloomFilter(key) orelse {
+    const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
@@ -162,15 +162,15 @@ pub fn bf_mexists(writer: *Writer, store: *Store, args: []const Value) !void {
     defer store.allocator.free(results);
 
     for (args[2..], 0..) |arg, idx| {
-        const item = arg.asSlice();
+        const item = arg.as_slice();
         const exists = bf_ptr.check(item);
         results[idx] = exists;
     }
 
     // Return array of integers
-    try resp.writeListLen(writer, results.len);
+    try resp.write_list_len(writer, results.len);
     for (results) |exists| {
-        try resp.writeInt(writer, @as(i64, @intFromBool(exists)));
+        try resp.write_int(writer, @as(i64, @intFromBool(exists)));
     }
 }
 
@@ -178,51 +178,51 @@ pub fn bf_info(writer: *Writer, store: *Store, args: []const Value) !void {
     // BF.INFO key
     if (args.len != 2) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     // Get the Bloom filter
-    const bf_ptr = try store.getBloomFilter(key) orelse {
+    const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
     // Get filter information
-    const filter_count = bf_ptr.getFilterCount();
-    const total_entries = bf_ptr.getTotalEntries();
-    const memory_usage = bf_ptr.getMemoryUsage();
+    const filter_count = bf_ptr.get_filter_count();
+    const total_entries = bf_ptr.get_total_entries();
+    const memory_usage = bf_ptr.get_memory_usage();
 
     // Return information as an array
-    try resp.writeListLen(writer, 10); // 5 key-value pairs
+    try resp.write_list_len(writer, 10); // 5 key-value pairs
 
     // Capacity
-    try resp.writeBulkString(writer, "Capacity");
+    try resp.write_bulk_string(writer, "Capacity");
     // For scalable Bloom filter, we don't have a single capacity
     // Return the capacity of the first filter as an approximation
     if (filter_count > 0) {
         // We need to access the first filter's capacity
         // For now, return total entries as capacity estimate
-        try resp.writeInt(writer, @as(i64, @intCast(total_entries)));
+        try resp.write_int(writer, @as(i64, @intCast(total_entries)));
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 
     // Size
-    try resp.writeBulkString(writer, "Size");
-    try resp.writeInt(writer, @as(i64, @intCast(memory_usage)));
+    try resp.write_bulk_string(writer, "Size");
+    try resp.write_int(writer, @as(i64, @intCast(memory_usage)));
 
     // Number of filters
-    try resp.writeBulkString(writer, "Number of filters");
-    try resp.writeInt(writer, @as(i64, @intCast(filter_count)));
+    try resp.write_bulk_string(writer, "Number of filters");
+    try resp.write_int(writer, @as(i64, @intCast(filter_count)));
 
     // Number of items inserted
-    try resp.writeBulkString(writer, "Number of items inserted");
-    try resp.writeInt(writer, @as(i64, @intCast(total_entries)));
+    try resp.write_bulk_string(writer, "Number of items inserted");
+    try resp.write_int(writer, @as(i64, @intCast(total_entries)));
 
     // Expansion rate
-    try resp.writeBulkString(writer, "Expansion rate");
-    try resp.writeInt(writer, 2); // Default expansion rate
+    try resp.write_bulk_string(writer, "Expansion rate");
+    try resp.write_int(writer, 2); // Default expansion rate
 
-    try resp.writeBulkString(writer, "Size");
-    try resp.writeInt(writer, @as(i64, @intCast(memory_usage)));
+    try resp.write_bulk_string(writer, "Size");
+    try resp.write_int(writer, @as(i64, @intCast(memory_usage)));
 }
 
 pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -231,7 +231,7 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
     //           [NONSCALING] ITEMS item1 [item2 ...]
     if (args.len < 3) return error.WrongNumberOfArguments;
 
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     var capacity: u64 = 100;
     var error_rate: f64 = 0.01;
@@ -243,11 +243,11 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
     // Parse optional parameters
     var i: usize = 2;
     while (i < args.len) {
-        const param = args[i].asSlice();
+        const param = args[i].as_slice();
 
         if (std.ascii.eqlIgnoreCase(param, "CAPACITY")) {
             if (i + 1 >= args.len) return error.WrongNumberOfArguments;
-            const capacity_str = args[i + 1].asSlice();
+            const capacity_str = args[i + 1].as_slice();
             capacity = std.fmt.parseInt(u64, capacity_str, 10) catch {
                 return error.InvalidArgument;
             };
@@ -255,7 +255,7 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
             i += 2;
         } else if (std.ascii.eqlIgnoreCase(param, "ERROR")) {
             if (i + 1 >= args.len) return error.WrongNumberOfArguments;
-            const error_str = args[i + 1].asSlice();
+            const error_str = args[i + 1].as_slice();
             error_rate = std.fmt.parseFloat(f64, error_str) catch {
                 return error.InvalidArgument;
             };
@@ -265,7 +265,7 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
             i += 2;
         } else if (std.ascii.eqlIgnoreCase(param, "EXPANSION")) {
             if (i + 1 >= args.len) return error.WrongNumberOfArguments;
-            const expansion_str = args[i + 1].asSlice();
+            const expansion_str = args[i + 1].as_slice();
             expansion = std.fmt.parseFloat(f64, expansion_str) catch {
                 return error.InvalidArgument;
             };
@@ -293,7 +293,7 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
 
     // Get or create the Bloom filter
     var bf_ptr: *ScalableBloomFilter = blk: {
-        const existing_bf = try store.getBloomFilter(key);
+        const existing_bf = try store.get_bloom_filter(key);
         if (existing_bf) |bf| {
             if (no_create) {
                 return error.KeyNotFound;
@@ -311,8 +311,8 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
             .error_tightening_ratio = 0.5,
             .no_scaling = non_scaling,
         });
-        try store.createBloomFilter(key, bf);
-        break :blk (try store.getBloomFilter(key)).?;
+        try store.create_bloom_filter(key, bf);
+        break :blk (try store.get_bloom_filter(key)).?;
     };
 
     // Insert items
@@ -321,15 +321,15 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
     defer store.allocator.free(results);
 
     for (args[items_start..], 0..) |arg, idx| {
-        const item = arg.asSlice();
+        const item = arg.as_slice();
         const added = try bf_ptr.add(item);
         results[idx] = added;
     }
 
     // Return array of integers
-    try resp.writeListLen(writer, results.len);
+    try resp.write_list_len(writer, results.len);
     for (results) |added| {
-        try resp.writeInt(writer, @as(i64, @intFromBool(added)));
+        try resp.write_int(writer, @as(i64, @intFromBool(added)));
     }
 }
 
@@ -357,7 +357,7 @@ test "BF.RESERVE command with valid parameters" {
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
     // Verify the bloom filter was created
-    const bf = try store.getBloomFilter("bloom1");
+    const bf = try store.get_bloom_filter("bloom1");
     try testing.expect(bf != null);
 }
 
@@ -735,7 +735,7 @@ test "BF.INSERT command with new bloom filter" {
     try testing.expect(result[0] == '*'); // Starts with array
 
     // Verify the bloom filter was created and items were added
-    const bf = try store.getBloomFilter("bloom1");
+    const bf = try store.get_bloom_filter("bloom1");
     try testing.expect(bf != null);
     try testing.expect(bf.?.check("item1"));
     try testing.expect(bf.?.check("item2"));

@@ -53,7 +53,7 @@ pub const Query = struct {
     knn: ?Knn = null,
 
     pub fn deinit(self: *Query) void {
-        freeNode(self.allocator, &self.filter);
+        free_node(self.allocator, &self.filter);
     }
 };
 
@@ -69,7 +69,7 @@ const Scanner = struct {
         return if (self.pos < self.s.len) self.s[self.pos] else 0;
     }
 
-    fn skipWs(self: *Scanner) void {
+    fn skip_ws(self: *Scanner) void {
         while (self.pos < self.s.len and std.ascii.isWhitespace(self.s[self.pos])) self.pos += 1;
     }
 };
@@ -83,24 +83,24 @@ pub fn parse(allocator: Allocator, query: []const u8) ParseError!Query {
         const filter_s = query[0..idx];
         const knn_s = query[idx + 2 ..];
         var sc = Scanner{ .s = filter_s };
-        const filter = try parseExpr(allocator, &sc);
-        const knn = try parseKnn(knn_s);
+        const filter = try parse_expr(allocator, &sc);
+        const knn = try parse_knn(knn_s);
         return .{ .allocator = allocator, .filter = filter, .knn = knn };
     }
 
     var sc = Scanner{ .s = query };
-    const filter = try parseExpr(allocator, &sc);
+    const filter = try parse_expr(allocator, &sc);
     return .{ .allocator = allocator, .filter = filter };
 }
 
-fn parseExpr(allocator: Allocator, sc: *Scanner) ParseError!Node {
+fn parse_expr(allocator: Allocator, sc: *Scanner) ParseError!Node {
     var conjuncts: std.ArrayListUnmanaged(Node) = .empty;
     defer conjuncts.deinit(allocator);
 
     while (true) {
-        const conj = try parseConjunct(allocator, sc);
+        const conj = try parse_conjunct(allocator, sc);
         try conjuncts.append(allocator, conj);
-        sc.skipWs();
+        sc.skip_ws();
         if (sc.peek() == '|') {
             sc.pos += 1;
             continue;
@@ -112,14 +112,14 @@ fn parseExpr(allocator: Allocator, sc: *Scanner) ParseError!Node {
     return .{ .disjunction = try conjuncts.toOwnedSlice(allocator) };
 }
 
-fn parseConjunct(allocator: Allocator, sc: *Scanner) ParseError!Node {
+fn parse_conjunct(allocator: Allocator, sc: *Scanner) ParseError!Node {
     var factors: std.ArrayListUnmanaged(Node) = .empty;
     defer factors.deinit(allocator);
 
     while (true) {
-        sc.skipWs();
+        sc.skip_ws();
         if (sc.eof() or sc.peek() == '|' or sc.peek() == ')') break;
-        const f = try parseFactor(allocator, sc);
+        const f = try parse_factor(allocator, sc);
         try factors.append(allocator, f);
     }
 
@@ -127,31 +127,31 @@ fn parseConjunct(allocator: Allocator, sc: *Scanner) ParseError!Node {
     return .{ .conjunction = try factors.toOwnedSlice(allocator) };
 }
 
-fn parseFactor(allocator: Allocator, sc: *Scanner) ParseError!Node {
-    sc.skipWs();
+fn parse_factor(allocator: Allocator, sc: *Scanner) ParseError!Node {
+    sc.skip_ws();
     var negate = false;
     if (sc.peek() == '-') {
         negate = true;
         sc.pos += 1;
     }
-    const atom = try parseAtom(allocator, sc);
+    const atom = try parse_atom(allocator, sc);
     if (!negate) return atom;
     const boxed = try allocator.create(Node);
     boxed.* = atom;
     return .{ .not = boxed };
 }
 
-fn parseAtom(allocator: Allocator, sc: *Scanner) ParseError!Node {
-    sc.skipWs();
+fn parse_atom(allocator: Allocator, sc: *Scanner) ParseError!Node {
+    sc.skip_ws();
     switch (sc.peek()) {
         '(' => {
             sc.pos += 1;
-            const node = try parseExpr(allocator, sc);
-            sc.skipWs();
+            const node = try parse_expr(allocator, sc);
+            sc.skip_ws();
             if (sc.peek() == ')') sc.pos += 1;
             return node;
         },
-        '@' => return parseFieldPredicate(allocator, sc),
+        '@' => return parse_field_predicate(allocator, sc),
         '"' => {
             sc.pos += 1;
             const start = sc.pos;
@@ -167,14 +167,14 @@ fn parseAtom(allocator: Allocator, sc: *Scanner) ParseError!Node {
         0 => return error.QuerySyntax,
         else => {
             const start = sc.pos;
-            while (sc.pos < sc.s.len and !isBareStop(sc.s[sc.pos])) sc.pos += 1;
+            while (sc.pos < sc.s.len and !is_bare_stop(sc.s[sc.pos])) sc.pos += 1;
             if (sc.pos == start) return error.QuerySyntax;
             return .{ .term = .{ .text = sc.s[start..sc.pos] } };
         },
     }
 }
 
-fn parseFieldPredicate(allocator: Allocator, sc: *Scanner) ParseError!Node {
+fn parse_field_predicate(allocator: Allocator, sc: *Scanner) ParseError!Node {
     sc.pos += 1; // '@'
     const fstart = sc.pos;
     while (sc.pos < sc.s.len and sc.s[sc.pos] != ':' and !std.ascii.isWhitespace(sc.s[sc.pos])) sc.pos += 1;
@@ -198,48 +198,48 @@ fn parseFieldPredicate(allocator: Allocator, sc: *Scanner) ParseError!Node {
 
     if (sc.peek() == '[') {
         sc.pos += 1;
-        const min = try parseBound(sc);
-        const max = try parseBound(sc);
-        sc.skipWs();
+        const min = try parse_bound(sc);
+        const max = try parse_bound(sc);
+        sc.skip_ws();
         if (sc.peek() == ']') sc.pos += 1;
         return .{ .numeric = .{ .field = field, .min = min, .max = max } };
     }
 
     const tstart = sc.pos;
-    while (sc.pos < sc.s.len and !isBareStop(sc.s[sc.pos])) sc.pos += 1;
+    while (sc.pos < sc.s.len and !is_bare_stop(sc.s[sc.pos])) sc.pos += 1;
     const term = sc.s[tstart..sc.pos];
     if (term.len == 0) return error.QuerySyntax;
     return .{ .field_term = .{ .field = field, .term = term } };
 }
 
-fn parseBound(sc: *Scanner) ParseError!?f64 {
+fn parse_bound(sc: *Scanner) ParseError!?f64 {
     if (sc.peek() == '(') sc.pos += 1;
     if (std.mem.startsWith(u8, sc.s[sc.pos..], "-inf") or std.mem.startsWith(u8, sc.s[sc.pos..], "+inf")) {
         sc.pos += 4;
         return null;
     }
-    sc.skipWs();
+    sc.skip_ws();
     const start = sc.pos;
     while (sc.pos < sc.s.len and !std.ascii.isWhitespace(sc.s[sc.pos]) and sc.s[sc.pos] != ']') sc.pos += 1;
     const num_s = sc.s[start..sc.pos];
     return std.fmt.parseFloat(f64, num_s) catch return error.QuerySyntax;
 }
 
-fn parseKnn(s: []const u8) ParseError!Knn {
+fn parse_knn(s: []const u8) ParseError!Knn {
     var sc = Scanner{ .s = s };
     if (sc.peek() == '[') sc.pos += 1;
-    sc.skipWs();
+    sc.skip_ws();
     if (!std.mem.startsWith(u8, sc.s[sc.pos..], "KNN")) return error.QuerySyntax;
     sc.pos += 3;
-    sc.skipWs();
-    const k = try parseUint(&sc);
-    sc.skipWs();
+    sc.skip_ws();
+    const k = try parse_uint(&sc);
+    sc.skip_ws();
     if (sc.peek() != '@') return error.QuerySyntax;
     sc.pos += 1;
     const fstart = sc.pos;
     while (sc.pos < sc.s.len and !std.ascii.isWhitespace(sc.s[sc.pos]) and sc.s[sc.pos] != '$') sc.pos += 1;
     const field = sc.s[fstart..sc.pos];
-    sc.skipWs();
+    sc.skip_ws();
     if (sc.peek() != '$') return error.QuerySyntax;
     sc.pos += 1;
     const pstart = sc.pos;
@@ -250,29 +250,29 @@ fn parseKnn(s: []const u8) ParseError!Knn {
     return .{ .field = field, .k = k, .vec_param = param };
 }
 
-fn parseUint(sc: *Scanner) ParseError!usize {
+fn parse_uint(sc: *Scanner) ParseError!usize {
     const start = sc.pos;
     while (sc.pos < sc.s.len and std.ascii.isDigit(sc.s[sc.pos])) sc.pos += 1;
     if (sc.pos == start) return error.QuerySyntax;
     return std.fmt.parseInt(usize, sc.s[start..sc.pos], 10) catch return error.QuerySyntax;
 }
 
-inline fn isBareStop(c: u8) bool {
+inline fn is_bare_stop(c: u8) bool {
     return std.ascii.isWhitespace(c) or c == '|' or c == ')' or c == '(';
 }
 
-fn freeNode(allocator: Allocator, node: *Node) void {
+fn free_node(allocator: Allocator, node: *Node) void {
     switch (node.*) {
         .disjunction => |children| {
-            for (children) |*child| freeNode(allocator, child);
+            for (children) |*child| free_node(allocator, child);
             allocator.free(children);
         },
         .conjunction => |children| {
-            for (children) |*child| freeNode(allocator, child);
+            for (children) |*child| free_node(allocator, child);
             allocator.free(children);
         },
         .not => |child| {
-            freeNode(allocator, child);
+            free_node(allocator, child);
             allocator.destroy(child);
         },
         .tag => |t| allocator.free(t.tags),
@@ -282,33 +282,33 @@ fn freeNode(allocator: Allocator, node: *Node) void {
 
 const testing = std.testing;
 
-fn parseTest(allocator: Allocator, q: []const u8) !Query {
+fn parse_test(allocator: Allocator, q: []const u8) !Query {
     return parse(allocator, q);
 }
 
 test "parse bare term" {
-    var q = try parseTest(testing.allocator, "hello");
+    var q = try parse_test(testing.allocator, "hello");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .term);
     try testing.expectEqualStrings("hello", q.filter.term.text);
 }
 
 test "parse implicit AND of terms" {
-    var q = try parseTest(testing.allocator, "hello world");
+    var q = try parse_test(testing.allocator, "hello world");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .conjunction);
     try testing.expectEqual(@as(usize, 2), q.filter.conjunction.len);
 }
 
 test "parse OR" {
-    var q = try parseTest(testing.allocator, "foo|bar");
+    var q = try parse_test(testing.allocator, "foo|bar");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .disjunction);
     try testing.expectEqual(@as(usize, 2), q.filter.disjunction.len);
 }
 
 test "parse fielded term" {
-    var q = try parseTest(testing.allocator, "@title:zig");
+    var q = try parse_test(testing.allocator, "@title:zig");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .field_term);
     try testing.expectEqualStrings("title", q.filter.field_term.field);
@@ -316,14 +316,14 @@ test "parse fielded term" {
 }
 
 test "parse phrase" {
-    var q = try parseTest(testing.allocator, "\"quick fox\"");
+    var q = try parse_test(testing.allocator, "\"quick fox\"");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .phrase);
     try testing.expectEqualStrings("quick fox", q.filter.phrase.text);
 }
 
 test "parse numeric range" {
-    var q = try parseTest(testing.allocator, "@price:[10 50]");
+    var q = try parse_test(testing.allocator, "@price:[10 50]");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .numeric);
     try testing.expectApproxEqAbs(@as(f64, 10), q.filter.numeric.min.?, 0.001);
@@ -331,7 +331,7 @@ test "parse numeric range" {
 }
 
 test "parse numeric open range" {
-    var q = try parseTest(testing.allocator, "@price:[-inf 20]");
+    var q = try parse_test(testing.allocator, "@price:[-inf 20]");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .numeric);
     try testing.expect(q.filter.numeric.min == null);
@@ -339,7 +339,7 @@ test "parse numeric open range" {
 }
 
 test "parse tag set" {
-    var q = try parseTest(testing.allocator, "@color:{red|blue}");
+    var q = try parse_test(testing.allocator, "@color:{red|blue}");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .tag);
     try testing.expectEqual(@as(usize, 2), q.filter.tag.tags.len);
@@ -348,20 +348,20 @@ test "parse tag set" {
 }
 
 test "parse negation" {
-    var q = try parseTest(testing.allocator, "-foo");
+    var q = try parse_test(testing.allocator, "-foo");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .not);
     try testing.expectEqual(std.meta.activeTag(q.filter.not.*), .term);
 }
 
 test "parse all" {
-    var q = try parseTest(testing.allocator, "*");
+    var q = try parse_test(testing.allocator, "*");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .all);
 }
 
 test "parse knn suffix" {
-    var q = try parseTest(testing.allocator, "*=>[KNN 5 @v $B]");
+    var q = try parse_test(testing.allocator, "*=>[KNN 5 @v $B]");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .all);
     try testing.expect(q.knn != null);
@@ -371,7 +371,7 @@ test "parse knn suffix" {
 }
 
 test "parse knn with filter" {
-    var q = try parseTest(testing.allocator, "@title:foo=>[KNN 3 @v $Q]");
+    var q = try parse_test(testing.allocator, "@title:foo=>[KNN 3 @v $Q]");
     defer q.deinit();
     try testing.expectEqual(std.meta.activeTag(q.filter), .field_term);
     try testing.expect(q.knn != null);

@@ -43,7 +43,7 @@ pub const Writer = struct {
     checksum: std.hash.crc.Crc64Redis,
     io: Io,
 
-    fn mapToOpCode(val: ZedisValue) u8 {
+    fn map_to_op_code(val: ZedisValue) u8 {
         return switch (val) {
             .int, .string, .short_string => 0x00,
             .list => 0x01,
@@ -54,19 +54,19 @@ pub const Writer = struct {
     }
 
     // Helper functions to write data and update CRC checksum
-    inline fn writeByte(self: *Writer, byte: u8) !void {
+    inline fn write_byte(self: *Writer, byte: u8) !void {
         self.checksum.update(&.{byte});
         try self.buffered_writer.interface.writeByte(byte);
     }
 
-    inline fn writeInt(self: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) !void {
+    inline fn write_int(self: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
         mem.writeInt(T, &buf, value, endian);
         self.checksum.update(&buf);
         try self.buffered_writer.interface.writeAll(&buf);
     }
 
-    inline fn writeAll(self: *Writer, bytes: []const u8) !void {
+    inline fn write_all(self: *Writer, bytes: []const u8) !void {
         self.checksum.update(bytes);
         try self.buffered_writer.interface.writeAll(bytes);
     }
@@ -110,28 +110,28 @@ pub const Writer = struct {
         self.allocator.free(self.buffer);
     }
 
-    pub fn writeFile(self: *Writer) !void {
-        try self.writeHeader();
-        try self.writeCache();
-        try self.writeEndOfFile();
+    pub fn write_file(self: *Writer) !void {
+        try self.write_header();
+        try self.write_cache();
+        try self.write_end_of_file();
 
         try self.flush();
     }
 
-    fn writeHeader(self: *Writer) !void {
-        try self.writeAuxFields();
+    fn write_header(self: *Writer) !void {
+        try self.write_aux_fields();
 
-        try self.writeByte(OPCODE_SELECT_DB);
-        try self.writeLength(0x00);
+        try self.write_byte(OPCODE_SELECT_DB);
+        try self.write_length(0x00);
 
-        try self.writeByte(OPCODE_RESIZE_DB);
-        try self.writeLength(self.store.size());
+        try self.write_byte(OPCODE_RESIZE_DB);
+        try self.write_length(self.store.size());
         // TODO Write the size of the expiry hash table
-        try self.writeLength(0);
+        try self.write_length(0);
     }
 
-    fn writeEndOfFile(self: *Writer) !void {
-        try self.writeByte(OPCODE_EOF);
+    fn write_end_of_file(self: *Writer) !void {
+        try self.write_byte(OPCODE_EOF);
 
         // Get the accumulated checksum from all writes
         const checksum = self.checksum.final();
@@ -140,84 +140,84 @@ pub const Writer = struct {
         try self.buffered_writer.interface.writeInt(u64, checksum, .little);
     }
 
-    fn writeAuxFields(self: *Writer) !void {
-        try self.writeAll("REDIS");
-        try self.writeAll("0012");
+    fn write_aux_fields(self: *Writer) !void {
+        try self.write_all("REDIS");
+        try self.write_all("0012");
 
-        try self.writeMetadata("redis-ver", .{ .string = "255.255.255" });
+        try self.write_metadata("redis-ver", .{ .string = "255.255.255" });
 
         const bits = if (@sizeOf(usize) == 8) 64 else 32;
-        try self.writeMetadata("redis-bits", .{ .int = bits });
+        try self.write_metadata("redis-bits", .{ .int = bits });
 
         const ts = self.store.clock.now();
         const now_timestamp = ts.toMilliseconds();
-        try self.writeMetadata("ctime", .{ .int = now_timestamp });
+        try self.write_metadata("ctime", .{ .int = now_timestamp });
 
         // TODO
-        try self.writeMetadata("used-mem", .{ .int = 0 });
+        try self.write_metadata("used-mem", .{ .int = 0 });
 
         // TODO
-        try self.writeMetadata("aof-base", .{ .int = 0 });
+        try self.write_metadata("aof-base", .{ .int = 0 });
     }
 
-    fn writeMetadata(self: *Writer, key: []const u8, value: ZedisValue) !void {
+    fn write_metadata(self: *Writer, key: []const u8, value: ZedisValue) !void {
         // 0xFA indicates auxiliary field; we encode key then value as length-prefixed strings.
-        try self.writeByte(0xFA);
-        try self.genericWrite(.{ .string = key });
-        try self.genericWrite(value);
+        try self.write_byte(0xFA);
+        try self.generic_write(.{ .string = key });
+        try self.generic_write(value);
     }
 
-    fn writeCache(self: *Writer) !void {
+    fn write_cache(self: *Writer) !void {
         var it = self.store.map.iterator();
         while (it.next()) |entry| {
-            if (self.store.getTtl(entry.key_ptr.*)) |expiry| {
-                try self.writeByte(OPCODE_EXPIRE_TIME_MS);
-                try self.writeInt(i64, expiry, .little);
+            if (self.store.get_ttl(entry.key_ptr.*)) |expiry| {
+                try self.write_byte(OPCODE_EXPIRE_TIME_MS);
+                try self.write_int(i64, expiry, .little);
             }
 
             const value = entry.value_ptr.*.object.value;
 
-            const op_code = Writer.mapToOpCode(value);
-            try self.writeByte(op_code);
+            const op_code = Writer.map_to_op_code(value);
+            try self.write_byte(op_code);
 
-            try self.writeString(entry.value_ptr.*.key);
+            try self.write_string(entry.value_ptr.*.key);
 
             switch (entry.value_ptr.*.object.value) {
-                .int => |i| try self.writeIntValue(i),
-                .string => |s| try self.writeString(s),
-                .short_string => |ss| try self.writeString(ss.asSlice()),
-                .list => |list_ptr| try self.writeList(list_ptr),
+                .int => |i| try self.write_int_value(i),
+                .string => |s| try self.write_string(s),
+                .short_string => |ss| try self.write_string(ss.as_slice()),
+                .list => |list_ptr| try self.write_list(list_ptr),
                 // TODO
                 else => {},
             }
         }
     }
 
-    fn writeLength(self: *Writer, len: u64) RdbError!void {
+    fn write_length(self: *Writer, len: u64) RdbError!void {
         if (len <= 63) { // 6-bit
-            try self.writeByte(@as(u8, @truncate(len)));
+            try self.write_byte(@as(u8, @truncate(len)));
         } else if (len <= 16383) { // 14-bit
             const first_byte = 0b01000000 | @as(u8, @truncate(len >> 8));
             const second_byte = @as(u8, @truncate(len));
-            try self.writeByte(first_byte);
-            try self.writeByte(second_byte);
+            try self.write_byte(first_byte);
+            try self.write_byte(second_byte);
         } else if (len <= 0xFFFFFFFF) { // 32-bit
-            try self.writeByte(LEN_PREFIX_32_INT);
-            try self.writeInt(u32, @intCast(len), .big);
+            try self.write_byte(LEN_PREFIX_32_INT);
+            try self.write_int(u32, @intCast(len), .big);
         } else { // 64-bit
-            try self.writeByte(LEN_PREFIX_64_INT);
-            try self.writeInt(u64, len, .big);
+            try self.write_byte(LEN_PREFIX_64_INT);
+            try self.write_int(u64, len, .big);
         }
     }
 
-    fn writeString(self: *Writer, str: []const u8) RdbError!void {
-        try self.writeLength(str.len);
-        try self.writeAll(str);
+    fn write_string(self: *Writer, str: []const u8) RdbError!void {
+        try self.write_length(str.len);
+        try self.write_all(str);
     }
 
-    fn writeList(self: *Writer, list: *ZedisList) RdbError!void {
+    fn write_list(self: *Writer, list: *ZedisList) RdbError!void {
         const len = list.len();
-        try self.writeLength(len);
+        try self.write_length(len);
 
         var current = list.list.first;
         while (current) |node| {
@@ -225,43 +225,43 @@ pub const Writer = struct {
             const value = list_node.data;
 
             switch (value) {
-                .int => |i| try self.writeIntValue(i),
-                .string => |s| try self.writeString(s),
-                .short_string => |ss| try self.writeString(ss.asSlice()),
+                .int => |i| try self.write_int_value(i),
+                .string => |s| try self.write_string(s),
+                .short_string => |ss| try self.write_string(ss.as_slice()),
             }
 
             current = node.next;
         }
     }
 
-    fn writeIntValue(self: *Writer, number: i64) RdbError!void {
+    fn write_int_value(self: *Writer, number: i64) RdbError!void {
         if (number >= std.math.minInt(i8) and number <= std.math.maxInt(i8)) {
             // Can fit in i8
-            try self.writeByte(INT_PREFIX_8_BITS);
-            try self.writeInt(i8, @intCast(number), .little);
+            try self.write_byte(INT_PREFIX_8_BITS);
+            try self.write_int(i8, @intCast(number), .little);
         } else if (number >= std.math.minInt(i16) and number <= std.math.maxInt(i16)) {
             // Can fit in i16
-            try self.writeByte(INT_PREFIX_16_BITS);
-            try self.writeInt(i16, @intCast(number), .little);
+            try self.write_byte(INT_PREFIX_16_BITS);
+            try self.write_int(i16, @intCast(number), .little);
         } else if (number >= std.math.minInt(i32) and number <= std.math.maxInt(i32)) {
             // Can fit in i32
-            try self.writeByte(INT_PREFIX_32_BITS);
-            try self.writeInt(i32, @intCast(number), .little);
+            try self.write_byte(INT_PREFIX_32_BITS);
+            try self.write_int(i32, @intCast(number), .little);
         } else {
             // Fallback for larger numbers (i64) or any number that doesn't fit
             // the above: write as a length-prefixed string.
             var buf: [20]u8 = undefined;
             const str = try std.fmt.bufPrint(&buf, "{}", .{number});
-            try self.writeString(str);
+            try self.write_string(str);
         }
     }
 
-    fn genericWrite(self: *Writer, payload: ZedisValue) RdbError!void {
+    fn generic_write(self: *Writer, payload: ZedisValue) RdbError!void {
         switch (payload) {
-            .int => |number| try self.writeIntValue(number),
-            .string => |str| try self.writeString(str),
-            .short_string => |ss| try self.writeString(ss.asSlice()),
-            .list => |list_ptr| try self.writeList(list_ptr),
+            .int => |number| try self.write_int_value(number),
+            .string => |str| try self.write_string(str),
+            .short_string => |ss| try self.write_string(ss.as_slice()),
+            .list => |list_ptr| try self.write_list(list_ptr),
             else => {},
         }
     }
@@ -299,7 +299,7 @@ pub const Reader = struct {
         return .{ .allocator = allocator, .buffer = buffer, .store = store, .file = file, .reader = reader };
     }
 
-    pub fn rdbFileExists() bool {
+    pub fn rdb_file_exists() bool {
         Dir.cwd().access(DEFAULT_FILE_NAME, .{}) catch {
             return false;
         };
@@ -312,7 +312,7 @@ pub const Reader = struct {
         self.file.close();
     }
 
-    pub fn readFile(self: *Reader) !RdbReaderOutput {
+    pub fn read_file(self: *Reader) !RdbReaderOutput {
         var output: RdbReaderOutput = .{
             .rdb_version = undefined,
             .redis_version = undefined,
@@ -335,26 +335,26 @@ pub const Reader = struct {
 
             switch (byte) {
                 OPCODE_AUX => {
-                    const key = try self.readString();
+                    const key = try self.read_string();
 
                     if (eql(u8, key, "redis-ver")) {
-                        output.redis_version = try self.readString();
+                        output.redis_version = try self.read_string();
                     } else if (eql(u8, key, "redis-bits")) {
-                        output.redis_bits = try self.readInt();
+                        output.redis_bits = try self.read_int();
                     } else if (eql(u8, key, "ctime")) {
-                        output.ctime = try self.readInt();
+                        output.ctime = try self.read_int();
                     } else if (eql(u8, key, "used-mem")) {
-                        output.used_mem = try self.readInt();
+                        output.used_mem = try self.read_int();
                     } else if (eql(u8, key, "aof-base")) {
-                        output.aof_base = try self.readInt();
+                        output.aof_base = try self.read_int();
                     }
                 },
                 OPCODE_RESIZE_DB => {
-                    output.resize_db = try self.readLength();
-                    output.resize_db_expiration = try self.readLength();
+                    output.resize_db = try self.read_length();
+                    output.resize_db_expiration = try self.read_length();
                 },
                 OPCODE_SELECT_DB => {
-                    output.select_db = try self.readLength();
+                    output.select_db = try self.read_length();
                 },
 
                 OPCODE_EXPIRE_TIME_MS => {
@@ -363,10 +363,10 @@ pub const Reader = struct {
                     // TODO Load expiration time
                     _ = expiration;
                     _ = op_code;
-                    try self.readEntry();
+                    try self.read_entry();
                 },
                 VALUE_TYPE_STR => {
-                    try self.readEntry();
+                    try self.read_entry();
                 },
                 OPCODE_EOF => {
                     break;
@@ -379,18 +379,18 @@ pub const Reader = struct {
         return output;
     }
 
-    fn readEntry(self: *Reader) !void {
-        const key = try self.readString();
-        const value = try self.genericRead();
+    fn read_entry(self: *Reader) !void {
+        const key = try self.read_string();
+        const value = try self.generic_read();
 
-        try self.store.putObject(key, .{ .value = value });
+        try self.store.put_object(key, .{ .value = value });
     }
 
     fn assert(incoming_byes: []u8, expected: []const u8) void {
         std.debug.assert(mem.eql(u8, incoming_byes, expected));
     }
 
-    fn readLength(self: *Reader) !u64 {
+    fn read_length(self: *Reader) !u64 {
         const first_byte = try self.reader.interface.takeByte();
 
         switch (first_byte) {
@@ -421,7 +421,7 @@ pub const Reader = struct {
         }
     }
 
-    fn readInt(self: *Reader) !i64 {
+    fn read_int(self: *Reader) !i64 {
         const first_byte = try self.reader.interface.takeByte();
         switch (first_byte) {
             INT_PREFIX_8_BITS => {
@@ -435,27 +435,27 @@ pub const Reader = struct {
             },
 
             else => {
-                const bytes = try self.readString();
+                const bytes = try self.read_string();
                 return std.fmt.parseInt(i64, bytes, 10);
             },
         }
     }
 
-    fn readString(self: *Reader) ![]u8 {
-        const len = try self.readLength();
+    fn read_string(self: *Reader) ![]u8 {
+        const len = try self.read_length();
         return self.reader.interface.take(len);
     }
 
-    fn genericRead(self: *Reader) !ZedisValue {
+    fn generic_read(self: *Reader) !ZedisValue {
         const first_byte = try self.reader.interface.peekByte();
 
         switch (first_byte) {
             INT_PREFIX_8_BITS, INT_PREFIX_16_BITS, INT_PREFIX_32_BITS => {
-                const int = try self.readInt();
+                const int = try self.read_int();
                 return .{ .int = int };
             },
             else => {
-                const str = try self.readString();
+                const str = try self.read_string();
                 return .{ .string = str };
             },
         }
@@ -481,7 +481,7 @@ test "ZDB init and deinit" {
     try testing.expect(zdb.store == &store);
 }
 
-test "ZDB writeFile creates valid RDB header" {
+test "ZDB write_file creates valid RDB header" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
@@ -494,7 +494,7 @@ test "ZDB writeFile creates valid RDB header" {
     defer zdb.deinit();
     defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
-    try zdb.writeFile();
+    try zdb.write_file();
 
     const file_content = try Dir.cwd().readFileAlloc(testing.io, test_file, allocator, .unlimited);
     defer allocator.free(file_content);
@@ -503,7 +503,7 @@ test "ZDB writeFile creates valid RDB header" {
     try testing.expect(file_content[9] == 0xFA); // metadata marker
 }
 
-test "ZDB writeString writes correct format" {
+test "ZDB write_string writes correct format" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
@@ -516,7 +516,7 @@ test "ZDB writeString writes correct format" {
     defer zdb.deinit();
     defer Dir.cwd().deleteFile(testing.io, test_file) catch {};
 
-    try zdb.genericWrite(.{ .string = "test" });
+    try zdb.generic_write(.{ .string = "test" });
     try zdb.flush();
     try zdb.file.sync(testing.io);
 
@@ -527,7 +527,7 @@ test "ZDB writeString writes correct format" {
     try testing.expect(mem.eql(u8, file_content[1..5], "test"));
 }
 
-test "ZDB writeMetadata writes correct format" {
+test "ZDB write_metadata writes correct format" {
     const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
@@ -542,7 +542,7 @@ test "ZDB writeMetadata writes correct format" {
 
     const key = "test";
     const value = "random";
-    try zdb.writeMetadata(key, .{ .string = value });
+    try zdb.write_metadata(key, .{ .string = value });
     try zdb.flush();
     try zdb.file.sync(testing.io);
 

@@ -14,13 +14,13 @@ pub fn main(init: std.process.Init) !void {
     defer rt.deinit();
     const io = rt.io();
 
-    const cfg = Config.readConfig(allocator, io, init.minimal.args) catch |err| {
+    const cfg = Config.read_config(allocator, io, init.minimal.args) catch |err| {
         log.err("Failed to read config: {s}", .{@errorName(err)});
         return err;
     };
 
     // Create and start the server with configuration
-    var redis_server = Server.initWithConfig(allocator, cfg.bind, cfg.port, cfg, io) catch |err| {
+    var redis_server = Server.init_with_config(allocator, cfg.bind, cfg.port, cfg, io) catch |err| {
         log.err("Failed to initialize server: {s}", .{@errorName(err)});
         return err;
     };
@@ -32,10 +32,10 @@ pub fn main(init: std.process.Init) !void {
     log.info("Configuration loaded:", .{});
     log.info("  Network: {s}:{d}", .{ cfg.bind, cfg.port });
     log.info("  AOF enabled: {}", .{cfg.appendonly});
-    log.info("  Memory budget: {d} MB", .{cfg.totalMemoryBudget() / (1024 * 1024)});
+    log.info("  Memory budget: {d} MB", .{cfg.total_memory_budget() / (1024 * 1024)});
     log.info("  Max clients: {d}", .{cfg.max_clients});
     log.info("  Eviction policy: {s}", .{@tagName(cfg.eviction_policy)});
-    if (cfg.requiresAuth()) {
+    if (cfg.requires_auth()) {
         log.info("  Auth: enabled", .{});
     } else {
         log.info("  Auth: disabled", .{});

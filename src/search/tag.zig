@@ -27,7 +27,7 @@ pub const TagIndex = struct {
     pub fn add(self: *TagIndex, doc_id: u64, value: []const u8) !void {
         var tags: std.ArrayListUnmanaged([]const u8) = .empty;
         defer tags.deinit(self.allocator);
-        try splitTags(self.allocator, value, &tags);
+        try split_tags(self.allocator, value, &tags);
 
         for (tags.items) |tag| {
             const gop = try self.map.getOrPut(self.allocator, tag);
@@ -42,7 +42,7 @@ pub const TagIndex = struct {
     pub fn remove(self: *TagIndex, doc_id: u64, value: []const u8) void {
         var tags: std.ArrayListUnmanaged([]const u8) = .empty;
         defer tags.deinit(self.allocator);
-        splitTags(self.allocator, value, &tags) catch return;
+        split_tags(self.allocator, value, &tags) catch return;
 
         for (tags.items) |tag| {
             if (self.map.getPtr(tag)) |set| {
@@ -59,16 +59,16 @@ pub const TagIndex = struct {
     }
 
     /// Doc ids for an exact tag (case-insensitive). Null if tag absent.
-    pub fn docIds(self: *const TagIndex, tag: []const u8) ?*const TagSet {
+    pub fn doc_ids(self: *const TagIndex, tag: []const u8) ?*const TagSet {
         return self.map.getPtr(tag);
     }
 
-    pub fn tagCount(self: *const TagIndex) usize {
+    pub fn tag_count(self: *const TagIndex) usize {
         return self.map.count();
     }
 };
 
-fn splitTags(allocator: Allocator, value: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+fn split_tags(allocator: Allocator, value: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
     var start: usize = 0;
     var i: usize = 0;
     while (i <= value.len) : (i += 1) {
@@ -99,10 +99,10 @@ test "tag add and lookup" {
     try ti.add(2, "green");
     try ti.add(3, "red");
 
-    try testing.expectEqual(@as(usize, 2), ti.docIds("red").?.count());
-    try testing.expectEqual(@as(usize, 1), ti.docIds("blue").?.count());
-    try testing.expect(ti.docIds("red").?.contains(1));
-    try testing.expect(ti.docIds("red").?.contains(3));
+    try testing.expectEqual(@as(usize, 2), ti.doc_ids("red").?.count());
+    try testing.expectEqual(@as(usize, 1), ti.doc_ids("blue").?.count());
+    try testing.expect(ti.doc_ids("red").?.contains(1));
+    try testing.expect(ti.doc_ids("red").?.contains(3));
 }
 
 test "tag remove" {
@@ -113,9 +113,9 @@ test "tag remove" {
     try ti.add(2, "red");
     ti.remove(1, "red");
 
-    try testing.expectEqual(@as(usize, 1), ti.docIds("red").?.count());
-    try testing.expect(ti.docIds("red").?.contains(2));
-    try testing.expect(!ti.docIds("red").?.contains(1));
+    try testing.expectEqual(@as(usize, 1), ti.doc_ids("red").?.count());
+    try testing.expect(ti.doc_ids("red").?.contains(2));
+    try testing.expect(!ti.doc_ids("red").?.contains(1));
 }
 
 test "tag empty after removing last doc" {
@@ -124,6 +124,6 @@ test "tag empty after removing last doc" {
 
     try ti.add(1, "solo");
     ti.remove(1, "solo");
-    try testing.expect(ti.docIds("solo") == null);
-    try testing.expectEqual(@as(usize, 0), ti.tagCount());
+    try testing.expect(ti.doc_ids("solo") == null);
+    try testing.expectEqual(@as(usize, 0), ti.tag_count());
 }

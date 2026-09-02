@@ -70,7 +70,7 @@ pub const StackWriter = struct {
         return Writer.buffered(w);
     }
 
-    pub fn toOwnedSlice(self: *StackWriter, w: *const Writer) ![]u8 {
+    pub fn to_owned_slice(self: *StackWriter, w: *const Writer) ![]u8 {
         if (self.overflow) |*list| {
             const result = try list.toOwnedSlice(self.heap_allocator);
             self.overflow = null;

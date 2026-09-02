@@ -10,7 +10,7 @@ const ts = @import("../commands/time_series.zig");
 const key = @import("../commands/keys.zig");
 const server_commands = @import("../commands/server.zig");
 
-pub fn initRegistry(allocator: Allocator) !CommandRegistry {
+pub fn init_registry(allocator: Allocator) !CommandRegistry {
     var registry = CommandRegistry.init(allocator);
 
     try registry.register(.{
@@ -133,7 +133,7 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
 
     try registry.register(.{
         .name = "EXPIREAT",
-        .handler = .{ .store_handler = string.expireAt },
+        .handler = .{ .store_handler = string.expire_at },
         .min_args = 3,
         .max_args = null,
         .description = "Expire key",
@@ -361,7 +361,7 @@ pub fn initRegistry(allocator: Allocator) !CommandRegistry {
 
     try registry.register(.{
         .name = "TYPE",
-        .handler = .{ .store_handler = key.typeCmd },
+        .handler = .{ .store_handler = key.type_cmd },
         .min_args = 2,
         .max_args = 2,
         .description = "Get the data type of a key",

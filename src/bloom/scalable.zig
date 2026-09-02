@@ -78,16 +78,16 @@ pub fn deinit(self: *ScalableBloomFilter) void {
     self.links.deinit(self.allocator);
 }
 
-fn getCurrentLink(self: *ScalableBloomFilter) *Link {
+fn get_current_link(self: *ScalableBloomFilter) *Link {
     return &self.links.items[self.links.items.len - 1];
 }
 
-fn getCurrentLinkConst(self: *const ScalableBloomFilter) *const Link {
+fn get_current_link_const(self: *const ScalableBloomFilter) *const Link {
     return &self.links.items[self.links.items.len - 1];
 }
 
 fn expand(self: *ScalableBloomFilter) !void {
-    const current = self.getCurrentLink();
+    const current = self.get_current_link();
 
     const new_capacity = @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(current.filter.capacity)) * self.growth_factor)));
     const new_error_rate = current.filter.error_rate * self.error_tightening_ratio;
@@ -122,14 +122,14 @@ pub fn add(self: *ScalableBloomFilter, data: []const u8) !bool {
         return false;
     }
 
-    var current = self.getCurrentLink();
+    var current = self.get_current_link();
 
     if (current.entries >= current.filter.capacity) {
         if (self.no_scaling) {
             return error.FilterFull;
         }
         try self.expand();
-        current = self.getCurrentLink();
+        current = self.get_current_link();
     }
 
     const added = current.filter.add(data);
@@ -145,15 +145,15 @@ pub fn contains(self: *const ScalableBloomFilter, data: []const u8) bool {
     return self.check(data);
 }
 
-pub fn getFilterCount(self: *const ScalableBloomFilter) usize {
+pub fn get_filter_count(self: *const ScalableBloomFilter) usize {
     return self.links.items.len;
 }
 
-pub fn getTotalEntries(self: *const ScalableBloomFilter) u64 {
+pub fn get_total_entries(self: *const ScalableBloomFilter) u64 {
     return self.total_entries;
 }
 
-pub fn getMemoryUsage(self: *const ScalableBloomFilter) u64 {
+pub fn get_memory_usage(self: *const ScalableBloomFilter) u64 {
     var total: u64 = 0;
     for (self.links.items) |link| {
         total += link.filter.bytes;
@@ -174,8 +174,8 @@ test "scalable bloom filter initialization" {
     });
     defer filter.deinit();
 
-    try std.testing.expect(filter.getFilterCount() == 1);
-    try std.testing.expect(filter.getTotalEntries() == 0);
+    try std.testing.expect(filter.get_filter_count() == 1);
+    try std.testing.expect(filter.get_total_entries() == 0);
     try std.testing.expect(!filter.no_scaling);
 }
 
@@ -194,12 +194,12 @@ test "scalable bloom filter basic add and check" {
 
     const added = try filter.add("hello");
     try std.testing.expect(added);
-    try std.testing.expect(filter.getTotalEntries() == 1);
+    try std.testing.expect(filter.get_total_entries() == 1);
     try std.testing.expect(filter.check("hello"));
 
     const added_again = try filter.add("hello");
     try std.testing.expect(!added_again);
-    try std.testing.expect(filter.getTotalEntries() == 1);
+    try std.testing.expect(filter.get_total_entries() == 1);
 }
 
 test "scalable bloom filter multiple items" {
@@ -219,7 +219,7 @@ test "scalable bloom filter multiple items" {
         try std.testing.expect(added);
     }
 
-    try std.testing.expect(filter.getTotalEntries() == 5);
+    try std.testing.expect(filter.get_total_entries() == 5);
 
     for (items) |item| {
         try std.testing.expect(filter.check(item));
@@ -241,7 +241,7 @@ test "scalable bloom filter expansion" {
     });
     defer filter.deinit();
 
-    try std.testing.expect(filter.getFilterCount() == 1);
+    try std.testing.expect(filter.get_filter_count() == 1);
 
     // Check the actual capacity of the first filter
     const first_filter = &filter.links.items[0].filter;
@@ -255,14 +255,14 @@ test "scalable bloom filter expansion" {
         _ = try filter.add(item);
     }
 
-    try std.testing.expect(filter.getFilterCount() == 1);
-    try std.testing.expect(filter.getTotalEntries() == actual_capacity);
+    try std.testing.expect(filter.get_filter_count() == 1);
+    try std.testing.expect(filter.get_total_entries() == actual_capacity);
 
     // Adding one more item should trigger expansion
     _ = try filter.add("extra-item");
 
-    try std.testing.expect(filter.getFilterCount() == 2);
-    try std.testing.expect(filter.getTotalEntries() == actual_capacity + 1);
+    try std.testing.expect(filter.get_filter_count() == 2);
+    try std.testing.expect(filter.get_total_entries() == actual_capacity + 1);
 }
 
 test "scalable bloom filter no scaling mode" {
@@ -295,8 +295,8 @@ test "scalable bloom filter no scaling mode" {
         filter.add("extra-item"),
     );
 
-    try std.testing.expect(filter.getFilterCount() == 1);
-    try std.testing.expect(filter.getTotalEntries() == actual_capacity);
+    try std.testing.expect(filter.get_filter_count() == 1);
+    try std.testing.expect(filter.get_total_entries() == actual_capacity);
 }
 
 test "scalable bloom filter check reverse order" {
@@ -334,7 +334,7 @@ test "scalable bloom filter check reverse order" {
     }
     try std.testing.expect(filter.check("extra-item"));
 
-    try std.testing.expect(filter.getFilterCount() == 2);
+    try std.testing.expect(filter.get_filter_count() == 2);
 }
 
 test "scalable bloom filter memory usage" {
@@ -348,7 +348,7 @@ test "scalable bloom filter memory usage" {
     });
     defer filter.deinit();
 
-    const initial_memory = filter.getMemoryUsage();
+    const initial_memory = filter.get_memory_usage();
     try std.testing.expect(initial_memory > 0);
 
     for (0..15) |i| {
@@ -357,7 +357,7 @@ test "scalable bloom filter memory usage" {
         _ = try filter.add(item);
     }
 
-    const final_memory = filter.getMemoryUsage();
+    const final_memory = filter.get_memory_usage();
     try std.testing.expect(final_memory > initial_memory);
 }
 

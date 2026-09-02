@@ -15,12 +15,12 @@ pub const PubSubContext = struct {
         return PubSubContext{ .server = server };
     }
 
-    pub fn subscribeToChannel(self: *PubSubContext, channel_name: []const u8, handle: ClientHandle) !void {
-        return self.server.subscribeToChannel(channel_name, handle);
+    pub fn subscribe_to_channel(self: *PubSubContext, channel_name: []const u8, handle: ClientHandle) !void {
+        return self.server.subscribe_to_channel(channel_name, handle);
     }
 
-    pub fn publishToChannel(self: *PubSubContext, channel_name: []const u8, payload: []const u8) !usize {
-        return self.server.publishToChannel(channel_name, payload);
+    pub fn publish_to_channel(self: *PubSubContext, channel_name: []const u8, payload: []const u8) !usize {
+        return self.server.publish_to_channel(channel_name, payload);
     }
 };
 
@@ -29,24 +29,24 @@ pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !
 
     // Enter pubsub mode on first subscription
     if (!client.is_in_pubsub_mode) {
-        client.enterPubSubMode();
+        client.enter_pub_sub_mode();
     }
 
     var i: i64 = 0;
     for (args[1..]) |item| {
-        const channel_name = item.asSlice();
+        const channel_name = item.as_slice();
         // Subscribe client to channel
-        pubsub_context.subscribeToChannel(channel_name, client.slot_handle) catch |err| switch (err) {
+        pubsub_context.subscribe_to_channel(channel_name, client.slot_handle) catch |err| switch (err) {
             error.ChannelLimitReached => {
-                try resp.writeError(writer, "ERR maximum number of channels reached");
+                try resp.write_error(writer, "ERR maximum number of channels reached");
                 continue;
             },
             error.ChannelFull => {
-                try resp.writeError(writer, "ERR maximum subscribers per channel reached");
+                try resp.write_error(writer, "ERR maximum subscribers per channel reached");
                 continue;
             },
             else => {
-                try resp.writeError(writer, "ERR failed to subscribe to channel");
+                try resp.write_error(writer, "ERR failed to subscribe to channel");
                 continue;
             },
         };
@@ -60,27 +60,27 @@ pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !
         };
 
         // Use a generic writer to send the tuple as a RESP array.
-        try resp.writeTupleAsArray(writer, response_tuple);
+        try resp.write_tuple_as_array(writer, response_tuple);
         i += 1;
     }
 }
 
 pub fn publish(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     var pubsub_context = client.pubsub_context;
-    const channel_name = args[1].asSlice();
-    const message = args[2].asSlice();
-    const payload = try serializePubSubMessage(client.allocator, channel_name, message);
+    const channel_name = args[1].as_slice();
+    const message = args[2].as_slice();
+    const payload = try serialize_pub_sub_message(client.allocator, channel_name, message);
     defer client.allocator.free(payload);
 
-    const messages_sent = try pubsub_context.publishToChannel(channel_name, payload);
-    try resp.writeInt(writer, @as(i64, @intCast(messages_sent)));
+    const messages_sent = try pubsub_context.publish_to_channel(channel_name, payload);
+    try resp.write_int(writer, @as(i64, @intCast(messages_sent)));
 }
 
-fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8, message: []const u8) ![]u8 {
+fn serialize_pub_sub_message(allocator: std.mem.Allocator, channel_name: []const u8, message: []const u8) ![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     errdefer buffer.deinit();
 
-    resp.writeTupleAsArray(&buffer.writer, .{ "message", channel_name, message }) catch |err| switch (err) {
+    resp.write_tuple_as_array(&buffer.writer, .{ "message", channel_name, message }) catch |err| switch (err) {
         error.WriteFailed => return error.OutOfMemory,
     };
 
@@ -112,7 +112,7 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     try testing.expect(channel_id_1_again != null);
 //     try testing.expectEqual(@as(u32, 0), channel_id_1_again.?);
 
-//     try testing.expectEqual(@as(u32, 2), context.getChannelCount());
+//     try testing.expectEqual(@as(u32, 2), context.get_channel_count());
 // }
 
 // test "PubSubContext - subscribe and unsubscribe clients" {
@@ -129,8 +129,8 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     const channel_id = context.findOrCreateChannel("test-channel").?;
 
 //     // Subscribe clients
-//     try context.subscribeToChannel(channel_id, 100);
-//     try context.subscribeToChannel(channel_id, 200);
+//     try context.subscribe_to_channel(channel_id, 100);
+//     try context.subscribe_to_channel(channel_id, 200);
 
 //     const subscribers = context.getChannelSubscribers(channel_id);
 //     try testing.expectEqual(@as(usize, 2), subscribers.len);
@@ -138,7 +138,7 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     try testing.expectEqual(@as(u64, 200), subscribers[1]);
 
 //     // Unsubscribe one client
-//     context.unsubscribeFromChannel(channel_id, 100);
+//     context.unsubscribe_from_channel(channel_id, 100);
 //     const subscribers_after = context.getChannelSubscribers(channel_id);
 //     try testing.expectEqual(@as(usize, 1), subscribers_after.len);
 //     try testing.expectEqual(@as(u64, 200), subscribers_after[0]);
@@ -157,9 +157,9 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     const channel_id = context.findOrCreateChannel("test-channel").?;
 
 //     // Subscribe same client multiple times
-//     try context.subscribeToChannel(channel_id, 100);
-//     try context.subscribeToChannel(channel_id, 100);
-//     try context.subscribeToChannel(channel_id, 100);
+//     try context.subscribe_to_channel(channel_id, 100);
+//     try context.subscribe_to_channel(channel_id, 100);
+//     try context.subscribe_to_channel(channel_id, 100);
 
 //     const subscribers = context.getChannelSubscribers(channel_id);
 //     try testing.expectEqual(@as(usize, 1), subscribers.len);
@@ -177,18 +177,18 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     var context = MockPubSubContext.init(&server);
 
 //     // Subscribe to invalid channel
-//     const result = context.subscribeToChannel(999, 100);
+//     const result = context.subscribe_to_channel(999, 100);
 //     try testing.expectError(error.InvalidChannel, result);
 
 //     // Test channel full condition by filling up a channel
 //     const channel_id = context.findOrCreateChannel("test-channel").?;
 //     var client_id: u64 = 1;
 //     while (client_id <= 16) : (client_id += 1) {
-//         try context.subscribeToChannel(channel_id, client_id);
+//         try context.subscribe_to_channel(channel_id, client_id);
 //     }
 
 //     // Next subscription should fail
-//     const full_result = context.subscribeToChannel(channel_id, 17);
+//     const full_result = context.subscribe_to_channel(channel_id, 17);
 //     try testing.expectError(error.ChannelFull, full_result);
 // }
 
@@ -380,7 +380,7 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 
 //     // Subscribe client to channel
 //     const channel_id = context.findOrCreateChannel("news").?;
-//     try context.subscribeToChannel(channel_id, 200);
+//     try context.subscribe_to_channel(channel_id, 200);
 
 //     // Publish message
 //     const args = [_]Value{
@@ -434,9 +434,9 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 
 //     // Subscribe all clients to the same channel
 //     const channel_id = context.findOrCreateChannel("broadcast").?;
-//     try context.subscribeToChannel(channel_id, 200);
-//     try context.subscribeToChannel(channel_id, 300);
-//     try context.subscribeToChannel(channel_id, 400);
+//     try context.subscribe_to_channel(channel_id, 200);
+//     try context.subscribe_to_channel(channel_id, 300);
+//     try context.subscribe_to_channel(channel_id, 400);
 
 //     // Publish message
 //     const args = [_]Value{
@@ -551,7 +551,7 @@ fn serializePubSubMessage(allocator: std.mem.Allocator, channel_name: []const u8
 //     const channel_id = context.findOrCreateChannel("full-channel").?;
 //     var client_id: u64 = 1;
 //     while (client_id <= 16) : (client_id += 1) {
-//         try context.subscribeToChannel(channel_id, client_id);
+//         try context.subscribe_to_channel(channel_id, client_id);
 //     }
 
 //     // Try to subscribe one more

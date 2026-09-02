@@ -12,52 +12,52 @@ const testing = std.testing;
 const mem = std.mem;
 
 pub fn keys(writer: *Writer, store: *Store, args: []const Value) !void {
-    const pattern = args[1].asSlice();
+    const pattern = args[1].as_slice();
 
     const all_keys = try store.keys(store.allocator, pattern);
     defer store.allocator.free(all_keys);
-    try resp.writeListLen(writer, all_keys.len);
+    try resp.write_list_len(writer, all_keys.len);
     for (all_keys) |key| {
-        try resp.writeBulkString(writer, key);
+        try resp.write_bulk_string(writer, key);
     }
 }
 
 pub fn exists(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     if (store.exists(key)) {
-        try resp.writeInt(writer, 1);
+        try resp.write_int(writer, 1);
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 }
 
 pub fn ttl(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     const exists_key = store.exists(key);
 
     if (!exists_key) {
-        try resp.writeInt(writer, -2);
+        try resp.write_int(writer, -2);
         return;
     }
-    const ttl_int = store.getTtl(key) orelse -1;
-    try resp.writeInt(writer, ttl_int);
+    const ttl_int = store.get_ttl(key) orelse -1;
+    try resp.write_int(writer, ttl_int);
 }
 
 pub fn persist(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     const result = store.persist(key);
     if (result) {
-        try resp.writeInt(writer, 1);
+        try resp.write_int(writer, 1);
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 }
 
-pub fn typeCmd(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+pub fn type_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
 
     const obj = store.get(key);
 
@@ -69,29 +69,29 @@ pub fn typeCmd(writer: *Writer, store: *Store, args: []const Value) !void {
         .search_index => "search_index",
     } else "none";
 
-    try resp.writeBulkString(writer, type_str);
+    try resp.write_bulk_string(writer, type_str);
 }
 
 pub fn rename(writer: *Writer, store: *Store, args: []const Value) !void {
-    const old_key = args[1].asSlice();
-    const new_key = args[2].asSlice();
+    const old_key = args[1].as_slice();
+    const new_key = args[2].as_slice();
 
-    const renamed = try store.renameKey(old_key, new_key);
+    const renamed = try store.rename_key(old_key, new_key);
     if (!renamed) {
         return error.KeyNotFound;
     }
 
-    try resp.writeSimpleString(writer, "OK");
+    try resp.write_simple_string(writer, "OK");
 }
 
 pub fn randomkey(writer: *Writer, store: *Store, _: []const Value) !void {
     var random = std.Random.DefaultPrng.init(@intCast(0));
-    const key = store.randomKey(random.random());
+    const key = store.random_key(random.random());
 
     if (key) |k| {
-        try resp.writeBulkString(writer, k);
+        try resp.write_bulk_string(writer, k);
     } else {
-        try resp.writeNull(writer);
+        try resp.write_null(writer);
     }
 }
 
@@ -244,7 +244,7 @@ test "PERSIST command with key having expiration" {
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
     // Verify expiration was removed
-    const ttl_val = store.getTtl("mykey");
+    const ttl_val = store.get_ttl("mykey");
     try testing.expect(ttl_val == null);
 }
 
@@ -291,7 +291,7 @@ test "TYPE command with string value" {
         .{ .data = "mykey" },
     };
 
-    try typeCmd(&writer, &store, &args);
+    try type_cmd(&writer, &store, &args);
 
     try testing.expectEqualStrings("$6\r\nstring\r\n", writer.buffered());
 }
@@ -308,14 +308,14 @@ test "TYPE command with integer value" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("mykey", 42);
+    try store.set_int("mykey", 42);
 
     const args = [_]Value{
         .{ .data = "TYPE" },
         .{ .data = "mykey" },
     };
 
-    try typeCmd(&writer, &store, &args);
+    try type_cmd(&writer, &store, &args);
 
     try testing.expectEqualStrings("$6\r\nstring\r\n", writer.buffered());
 }
@@ -332,14 +332,14 @@ test "TYPE command with list value" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    _ = try store.createList("mylist");
+    _ = try store.create_list("mylist");
 
     const args = [_]Value{
         .{ .data = "TYPE" },
         .{ .data = "mylist" },
     };
 
-    try typeCmd(&writer, &store, &args);
+    try type_cmd(&writer, &store, &args);
 
     try testing.expectEqualStrings("$4\r\nlist\r\n", writer.buffered());
 }
@@ -361,7 +361,7 @@ test "TYPE command with non-existing key" {
         .{ .data = "nonexistent" },
     };
 
-    try typeCmd(&writer, &store, &args);
+    try type_cmd(&writer, &store, &args);
 
     try testing.expectEqualStrings("$4\r\nnone\r\n", writer.buffered());
 }
@@ -396,7 +396,7 @@ test "RENAME command with existing key" {
     // Verify new key exists with same value
     const new_value = store.get("newkey");
     try testing.expect(new_value != null);
-    try testing.expectEqualStrings("value", new_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("value", new_value.?.value.short_string.as_slice());
 }
 
 test "RENAME command with non-existing key" {
@@ -485,7 +485,7 @@ test "KEYS command returns all keys when pattern is wildcard" {
 
     try store.set("apple", "fruit");
     try store.set("banana", "fruit");
-    try store.setInt("count", 42);
+    try store.set_int("count", 42);
 
     const args = [_]Value{
         .{ .data = "KEYS" },
@@ -534,7 +534,7 @@ test "RENAME overwrites existing destination key" {
     // Verify dest has source's value
     const dest_value = store.get("dest");
     try testing.expect(dest_value != null);
-    try testing.expectEqualStrings("source_value", dest_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("source_value", dest_value.?.value.short_string.as_slice());
 }
 
 test "RENAME preserves list ownership" {
@@ -549,7 +549,7 @@ test "RENAME preserves list ownership" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    const list = try store.createList("source");
+    const list = try store.create_list("source");
     try list.append(PrimitiveValue{ .int = 42 });
 
     const args = [_]Value{
@@ -562,7 +562,7 @@ test "RENAME preserves list ownership" {
 
     try testing.expect(store.get("source") == null);
 
-    const renamed_list = (try store.getList("dest")).?;
+    const renamed_list = (try store.get_list("dest")).?;
     try testing.expectEqual(@as(usize, 1), renamed_list.len());
 
     const item = renamed_list.pop().?;

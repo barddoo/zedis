@@ -20,7 +20,7 @@ pub const BenchmarkOptions = struct {
 };
 
 /// Run a benchmark function and collect performance metrics
-pub fn runBenchmark(
+pub fn run_benchmark(
     allocator: Allocator,
     options: BenchmarkOptions,
     comptime benchFn: fn (allocator: Allocator) anyerror!void,
@@ -59,7 +59,7 @@ pub fn runBenchmark(
             try latency_tracker.record(duration);
         }
 
-        throughput_counter.recordOp();
+        throughput_counter.record_op();
     }
 
     throughput_counter.stop();
@@ -68,33 +68,33 @@ pub fn runBenchmark(
 
     return BenchmarkResult{
         .name = options.name,
-        .throughput = throughput_counter.opsPerSecond(),
+        .throughput = throughput_counter.ops_per_second(),
         .latency_stats = if (options.track_latency) try latency_tracker.calculate() else null,
         .memory_diff = if (options.track_memory) metrics.MemorySnapshot.diff(mem_before, mem_after) else null,
-        .duration_ms = throughput_counter.durationMs(),
+        .duration_ms = throughput_counter.duration_ms(),
     };
 }
 
 /// Run a benchmark with custom setup/teardown and operation function
-pub fn runBenchmarkAdvanced(
+pub fn run_benchmark_advanced(
     allocator: Allocator,
     options: BenchmarkOptions,
     comptime Context: type,
-    setupFn: fn (allocator: Allocator) anyerror!Context,
-    teardownFn: fn (ctx: *Context) void,
-    opFn: fn (ctx: *Context) anyerror!void,
+    setup_fn: fn (allocator: Allocator) anyerror!Context,
+    teardown_fn: fn (ctx: *Context) void,
+    op_fn: fn (ctx: *Context) anyerror!void,
 ) !BenchmarkResult {
     var threaded: Io.Threaded = .init_single_threaded;
     const io = threaded.io();
 
     // Warmup phase
     if (options.warmup_iterations > 0) {
-        var ctx = try setupFn(allocator);
-        defer teardownFn(&ctx);
+        var ctx = try setup_fn(allocator);
+        defer teardown_fn(&ctx);
 
         var i: usize = 0;
         while (i < options.warmup_iterations) : (i += 1) {
-            try opFn(&ctx);
+            try op_fn(&ctx);
         }
     }
 
@@ -105,8 +105,8 @@ pub fn runBenchmarkAdvanced(
     var throughput_counter = metrics.ThroughputCounter.init(io);
 
     // Setup benchmark context
-    var ctx = try setupFn(if (options.track_memory) tracking_allocator.allocator() else allocator);
-    defer teardownFn(&ctx);
+    var ctx = try setup_fn(if (options.track_memory) tracking_allocator.allocator() else allocator);
+    defer teardown_fn(&ctx);
 
     const mem_before = if (options.track_memory) tracking_allocator.snapshot() else undefined;
 
@@ -117,7 +117,7 @@ pub fn runBenchmarkAdvanced(
     while (i < options.iterations) : (i += 1) {
         const start = Io.Clock.awake.now(io);
 
-        try opFn(&ctx);
+        try op_fn(&ctx);
 
         if (options.track_latency) {
             const end = Io.Clock.awake.now(io);
@@ -125,7 +125,7 @@ pub fn runBenchmarkAdvanced(
             try latency_tracker.record(duration);
         }
 
-        throughput_counter.recordOp();
+        throughput_counter.record_op();
     }
 
     throughput_counter.stop();
@@ -134,15 +134,15 @@ pub fn runBenchmarkAdvanced(
 
     return BenchmarkResult{
         .name = options.name,
-        .throughput = throughput_counter.opsPerSecond(),
+        .throughput = throughput_counter.ops_per_second(),
         .latency_stats = if (options.track_latency) try latency_tracker.calculate() else null,
         .memory_diff = if (options.track_memory) metrics.MemorySnapshot.diff(mem_before, mem_after) else null,
-        .duration_ms = throughput_counter.durationMs(),
+        .duration_ms = throughput_counter.duration_ms(),
     };
 }
 
 /// Print benchmark results in a formatted table
-pub fn printResults(results: []const BenchmarkResult) void {
+pub fn print_results(results: []const BenchmarkResult) void {
     std.debug.print("\n", .{});
     std.debug.print("=" ** 110 ++ "\n", .{});
     std.debug.print("BENCHMARK SUMMARY\n", .{});
@@ -172,7 +172,7 @@ pub fn printResults(results: []const BenchmarkResult) void {
         });
 
         if (result.memory_diff) |mem| {
-            const net = mem.netBytes();
+            const net = mem.net_bytes();
             const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
             const sign: u8 = if (net >= 0) '+' else '-';
             std.debug.print(" {c}{d:>10.2} KB\n", .{ sign, net_kb });
@@ -185,7 +185,7 @@ pub fn printResults(results: []const BenchmarkResult) void {
 }
 
 /// Print a single result immediately (for interactive benchmarks)
-pub fn printResult(result: BenchmarkResult) void {
+pub fn print_result(result: BenchmarkResult) void {
     std.debug.print("{s}: {d:.0} ops/s", .{ result.name, result.throughput });
 
     if (result.latency_stats) |stats| {
@@ -195,7 +195,7 @@ pub fn printResult(result: BenchmarkResult) void {
     }
 
     if (result.memory_diff) |mem| {
-        const net = mem.netBytes();
+        const net = mem.net_bytes();
         const net_kb = @as(f64, @floatFromInt(@abs(net))) / 1024.0;
         const sign: u8 = if (net >= 0) '+' else '-';
         std.debug.print(" | mem={c}{d:.2}KB", .{ sign, net_kb });
@@ -204,7 +204,7 @@ pub fn printResult(result: BenchmarkResult) void {
     std.debug.print("\n", .{});
 }
 
-test "runBenchmark basic" {
+test "run_benchmark basic" {
     const allocator = std.testing.allocator;
 
     const TestBench = struct {
@@ -215,7 +215,7 @@ test "runBenchmark basic" {
         }
     };
 
-    const result = try runBenchmark(allocator, .{
+    const result = try run_benchmark(allocator, .{
         .name = "test_benchmark",
         .iterations = 100,
         .warmup_iterations = 10,

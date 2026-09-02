@@ -11,47 +11,47 @@ const testing = std.testing;
 const Clock = @import("../clock.zig");
 
 pub fn set(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const value = args[2].asSlice();
+    const key = args[1].as_slice();
+    const value = args[2].as_slice();
 
     try store.set(key, value);
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn get(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
     const value = store.get(key);
 
     if (value) |v| {
         switch (v.value) {
-            .string => |s| try resp.writeBulkString(writer, s),
-            .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
+            .string => |s| try resp.write_bulk_string(writer, s),
+            .short_string => |ss| try resp.write_bulk_string(writer, ss.as_slice()),
             .int => |i| {
-                try resp.writeIntBulkString(writer, i);
+                try resp.write_int_bulk_string(writer, i);
             },
             .list, .time_series, .bloom_filter, .search_index => return error.WrongType,
         }
     } else {
-        try resp.writeNull(writer);
+        try resp.write_null(writer);
     }
 }
 
 pub fn incr(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const new_value = try incrDecr(store, key, 1);
+    const key = args[1].as_slice();
+    const new_value = try incr_decr(store, key, 1);
 
-    try resp.writeIntBulkString(writer, new_value);
+    try resp.write_int_bulk_string(writer, new_value);
 }
 
 pub fn decr(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const new_value = try incrDecr(store, key, -1);
+    const key = args[1].as_slice();
+    const new_value = try incr_decr(store, key, -1);
 
-    try resp.writeIntBulkString(writer, new_value);
+    try resp.write_int_bulk_string(writer, new_value);
 }
 
-fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
+fn incr_decr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
     const current_value = store_ptr.get(key);
     if (current_value) |v| {
         var new_value: i64 = undefined;
@@ -66,7 +66,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                 };
             },
             .short_string => {
-                const intValue = std.fmt.parseInt(i64, v.value.short_string.asSlice(), 10) catch {
+                const intValue = std.fmt.parseInt(i64, v.value.short_string.as_slice(), 10) catch {
                     return error.ValueNotInteger;
                 };
                 new_value = std.math.add(i64, intValue, value) catch {
@@ -82,7 +82,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
         }
 
         const int_object = ZedisObject{ .value = .{ .int = new_value } };
-        try store_ptr.putObject(key, int_object);
+        try store_ptr.put_object(key, int_object);
 
         return new_value;
     } else {
@@ -90,7 +90,7 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
         const new_value = std.math.add(i64, 0, value) catch {
             return error.ValueNotInteger;
         };
-        try store_ptr.setInt(key, new_value);
+        try store_ptr.set_int(key, new_value);
         return new_value;
     }
 }
@@ -98,18 +98,18 @@ fn incrDecr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
 pub fn del(writer: *Writer, store: *Store, args: []const Value) !void {
     var deleted: u32 = 0;
     for (args[1..]) |key| {
-        if (store.delete(key.asSlice())) {
+        if (store.delete(key.as_slice())) {
             deleted += 1;
         }
     }
 
-    try resp.writeInt(writer, deleted);
+    try resp.write_int(writer, deleted);
 }
 
 pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const expiration_seconds = args[2].asInt() catch {
-        return resp.writeInt(writer, 0);
+    const key = args[1].as_slice();
+    const expiration_seconds = args[2].as_int() catch {
+        return resp.write_int(writer, 0);
     };
 
     const result = if (expiration_seconds < 0)
@@ -121,15 +121,15 @@ pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
         break :blk store.expire(key, current_time + (expiration_seconds * 1000));
     };
 
-    try resp.writeInt(writer, @intFromBool(try result));
+    try resp.write_int(writer, @intFromBool(try result));
 }
 
-pub fn expireAt(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+pub fn expire_at(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
     const ts = store.clock.now();
     const current_time = ts.toMilliseconds();
-    const expiration_timestamp = args[2].asInt() catch {
-        return resp.writeInt(writer, 0);
+    const expiration_timestamp = args[2].as_int() catch {
+        return resp.write_int(writer, 0);
     };
 
     const result = if (expiration_timestamp <= current_time)
@@ -137,12 +137,12 @@ pub fn expireAt(writer: *Writer, store: *Store, args: []const Value) !void {
     else
         store.expire(key, expiration_timestamp) catch false;
 
-    try resp.writeInt(writer, @intFromBool(result));
+    try resp.write_int(writer, @intFromBool(result));
 }
 
 pub fn append(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const append_value = args[2].asSlice();
+    const key = args[1].as_slice();
+    const append_value = args[2].as_slice();
 
     const current_value = store.get(key);
     var new_value: []const u8 = undefined;
@@ -151,7 +151,7 @@ pub fn append(writer: *Writer, store: *Store, args: []const Value) !void {
     if (current_value) |v| {
         const current_str = switch (v.value) {
             .string => |s| s,
-            .short_string => |ss| ss.asSlice(),
+            .short_string => |ss| ss.as_slice(),
             .int => |i| blk: {
                 var buf: [21]u8 = undefined;
                 break :blk std.fmt.bufPrint(&buf, "{d}", .{i}) catch unreachable;
@@ -170,11 +170,11 @@ pub fn append(writer: *Writer, store: *Store, args: []const Value) !void {
     defer if (needs_free) store.allocator.free(new_value);
     try store.set(key, new_value);
 
-    try resp.writeInt(writer, new_value.len);
+    try resp.write_int(writer, new_value.len);
 }
 
 pub fn strlen(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
     const value = store.get(key);
 
     if (value) |v| {
@@ -188,28 +188,28 @@ pub fn strlen(writer: *Writer, store: *Store, args: []const Value) !void {
             },
             else => return error.WrongType,
         };
-        try resp.writeInt(writer, len);
+        try resp.write_int(writer, len);
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 }
 
 pub fn getset(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const new_value = args[2].asSlice();
+    const key = args[1].as_slice();
+    const new_value = args[2].as_slice();
 
     // Get old value
     const old_value = store.get(key);
 
     if (old_value) |v| {
         switch (v.value) {
-            .string => |s| try resp.writeBulkString(writer, s),
-            .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
-            .int => |i| try resp.writeIntBulkString(writer, i),
+            .string => |s| try resp.write_bulk_string(writer, s),
+            .short_string => |ss| try resp.write_bulk_string(writer, ss.as_slice()),
+            .int => |i| try resp.write_int_bulk_string(writer, i),
             else => return error.WrongType,
         }
     } else {
-        try resp.writeNull(writer);
+        try resp.write_null(writer);
     }
 
     // Set new value
@@ -218,22 +218,22 @@ pub fn getset(writer: *Writer, store: *Store, args: []const Value) !void {
 
 pub fn mget(writer: *Writer, store: *Store, args: []const Value) !void {
     // Write array header
-    try resp.writeListLen(writer, args.len - 1);
+    try resp.write_list_len(writer, args.len - 1);
 
     // Get each key
     for (args[1..]) |key_arg| {
-        const key = key_arg.asSlice();
+        const key = key_arg.as_slice();
         const value = store.get(key);
 
         if (value) |v| {
             switch (v.value) {
-                .string => |s| try resp.writeBulkString(writer, s),
-                .short_string => |ss| try resp.writeBulkString(writer, ss.asSlice()),
-                .int => |i| try resp.writeIntBulkString(writer, i),
-                else => try resp.writeNull(writer), // Lists return null
+                .string => |s| try resp.write_bulk_string(writer, s),
+                .short_string => |ss| try resp.write_bulk_string(writer, ss.as_slice()),
+                .int => |i| try resp.write_int_bulk_string(writer, i),
+                else => try resp.write_null(writer), // Lists return null
             }
         } else {
-            try resp.writeNull(writer);
+            try resp.write_null(writer);
         }
     }
 }
@@ -247,20 +247,20 @@ pub fn mset(writer: *Writer, store: *Store, args: []const Value) !void {
     // Set all key-value pairs
     var i: usize = 1;
     while (i < args.len) : (i += 2) {
-        const key = args[i].asSlice();
-        const value = args[i + 1].asSlice();
+        const key = args[i].as_slice();
+        const value = args[i + 1].as_slice();
         try store.set(key, value);
     }
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn setex(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const seconds = args[2].asInt() catch {
+    const key = args[1].as_slice();
+    const seconds = args[2].as_int() catch {
         return error.ValueNotInteger;
     };
-    const value = args[3].asSlice();
+    const value = args[3].as_slice();
 
     // Set the value
     try store.set(key, value);
@@ -273,46 +273,46 @@ pub fn setex(writer: *Writer, store: *Store, args: []const Value) !void {
         _ = try store.expire(key, expiration_time);
     }
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn setnx(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const value = args[2].asSlice();
+    const key = args[1].as_slice();
+    const value = args[2].as_slice();
 
     const exists = store.get(key) != null;
 
     if (!exists) {
         try store.set(key, value);
-        try resp.writeInt(writer, 1);
+        try resp.write_int(writer, 1);
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 }
 
 pub fn incrby(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const increment = args[2].asInt() catch {
+    const key = args[1].as_slice();
+    const increment = args[2].as_int() catch {
         return error.ValueNotInteger;
     };
 
-    const new_value = try incrDecr(store, key, increment);
-    try resp.writeIntBulkString(writer, new_value);
+    const new_value = try incr_decr(store, key, increment);
+    try resp.write_int_bulk_string(writer, new_value);
 }
 
 pub fn decrby(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const decrement = args[2].asInt() catch {
+    const key = args[1].as_slice();
+    const decrement = args[2].as_int() catch {
         return error.ValueNotInteger;
     };
 
-    const new_value = try incrDecr(store, key, -decrement);
-    try resp.writeIntBulkString(writer, new_value);
+    const new_value = try incr_decr(store, key, -decrement);
+    try resp.write_int_bulk_string(writer, new_value);
 }
 
 pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const increment_str = args[2].asSlice();
+    const key = args[1].as_slice();
+    const increment_str = args[2].as_slice();
 
     // Parse increment as float
     const increment = std.fmt.parseFloat(f64, increment_str) catch {
@@ -331,7 +331,7 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
                 };
             },
             .short_string => |ss| {
-                current_float = std.fmt.parseFloat(f64, ss.asSlice()) catch {
+                current_float = std.fmt.parseFloat(f64, ss.as_slice()) catch {
                     return error.InvalidFloat;
                 };
             },
@@ -368,7 +368,7 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
     try store.set(key, result);
 
     // Return as bulk string
-    try resp.writeBulkString(writer, result);
+    try resp.write_bulk_string(writer, result);
 }
 
 test "SET command with string value" {
@@ -395,7 +395,7 @@ test "SET command with string value" {
 
     const stored_value = store.get("key1");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("hello", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("hello", stored_value.?.value.short_string.as_slice());
 }
 
 test "SET command with integer value" {
@@ -422,7 +422,7 @@ test "SET command with integer value" {
 
     const stored_value = store.get("key1");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("42", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("42", stored_value.?.value.short_string.as_slice());
 }
 
 test "GET command with existing string value" {
@@ -461,7 +461,7 @@ test "GET command with existing integer value" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("key1", 42);
+    try store.set_int("key1", 42);
 
     const args = [_]Value{
         .{ .data = "GET" },
@@ -533,7 +533,7 @@ test "INCR command on existing integer" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("counter", 5);
+    try store.set_int("counter", 5);
 
     const args = [_]Value{
         .{ .data = "INCR" },
@@ -638,7 +638,7 @@ test "DECR command on existing integer" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("counter", 10);
+    try store.set_int("counter", 10);
 
     const args = [_]Value{
         .{ .data = "DECR" },
@@ -695,7 +695,7 @@ test "DEL command with multiple keys" {
 
     try store.set("key1", "value1");
     try store.set("key2", "value2");
-    try store.setInt("key3", 42);
+    try store.set_int("key3", 42);
 
     const args = [_]Value{
         .{ .data = "DEL" },
@@ -760,7 +760,7 @@ test "APPEND command on non-existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.as_slice());
 }
 
 test "APPEND command on existing key" {
@@ -789,7 +789,7 @@ test "APPEND command on existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("Hello World", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("Hello World", stored_value.?.value.short_string.as_slice());
 }
 
 test "STRLEN command on existing key" {
@@ -864,7 +864,7 @@ test "GETSET command on existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("World", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("World", stored_value.?.value.short_string.as_slice());
 }
 
 test "GETSET command on non-existing key" {
@@ -891,7 +891,7 @@ test "GETSET command on non-existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("World", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("World", stored_value.?.value.short_string.as_slice());
 }
 
 test "MGET command with multiple keys" {
@@ -907,7 +907,7 @@ test "MGET command with multiple keys" {
     var writer = Writer.fixed(&buffer);
 
     try store.set("key1", "value1");
-    try store.setInt("key2", 42);
+    try store.set_int("key2", 42);
 
     const args = [_]Value{
         .{ .data = "MGET" },
@@ -947,11 +947,11 @@ test "MSET command with multiple key-value pairs" {
 
     const v1 = store.get("key1");
     try testing.expect(v1 != null);
-    try testing.expectEqualStrings("value1", v1.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("value1", v1.?.value.short_string.as_slice());
 
     const v2 = store.get("key2");
     try testing.expect(v2 != null);
-    try testing.expectEqualStrings("value2", v2.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("value2", v2.?.value.short_string.as_slice());
 }
 
 test "SETEX command sets key with expiration" {
@@ -979,7 +979,7 @@ test "SETEX command sets key with expiration" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.as_slice());
 }
 
 test "SETNX command on non-existing key" {
@@ -1006,7 +1006,7 @@ test "SETNX command on non-existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("Hello", stored_value.?.value.short_string.as_slice());
 }
 
 test "SETNX command on existing key" {
@@ -1035,7 +1035,7 @@ test "SETNX command on existing key" {
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
-    try testing.expectEqualStrings("World", stored_value.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("World", stored_value.?.value.short_string.as_slice());
 }
 
 test "INCRBY command on non-existing key" {
@@ -1077,7 +1077,7 @@ test "INCRBY command on existing integer" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("mykey", 10);
+    try store.set_int("mykey", 10);
 
     const args = [_]Value{
         .{ .data = "INCRBY" },
@@ -1133,7 +1133,7 @@ test "DECRBY command on existing integer" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    try store.setInt("mykey", 10);
+    try store.set_int("mykey", 10);
 
     const args = [_]Value{
         .{ .data = "DECRBY" },

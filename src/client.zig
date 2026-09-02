@@ -15,7 +15,7 @@ const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
 const Server = @import("./server.zig");
 const PubSubContext = @import("./commands/pubsub.zig").PubSubContext;
 const ClientMailbox = @import("./client_mailbox.zig").ClientMailbox;
-const freeMessageList = @import("./client_mailbox.zig").freeMessageList;
+const free_message_list = @import("./client_mailbox.zig").free_message_list;
 const Config = @import("./config.zig");
 const resp = @import("./commands/resp.zig");
 const ClientHandle = @import("./types.zig").ClientHandle;
@@ -76,7 +76,7 @@ pub const Client = struct {
         self.connection.close(self.io);
     }
 
-    pub fn enterPubSubMode(self: *Client) void {
+    pub fn enter_pub_sub_mode(self: *Client) void {
         self.is_in_pubsub_mode = true;
         log.debug("Client {} entered pubsub mode", .{self.client_id});
     }
@@ -95,7 +95,7 @@ pub const Client = struct {
         while (true) {
             if (self.disconnect_requested.load(.acquire)) return;
 
-            try self.flushMailbox();
+            try self.flush_mailbox();
             if (self.disconnect_requested.load(.acquire)) return;
 
             // Use arena allocator for parsing (temporary)
@@ -139,12 +139,12 @@ pub const Client = struct {
             }
             var sw = StackWriter.init(self.allocator);
             var response_writer = sw.writer();
-            self.server.processCommandDirect(self, command.getArgs(), &response_writer);
+            self.server.process_command_direct(self, command.get_args(), &response_writer);
             self.server.store_mutex.unlock();
 
             // AOF write after mutex release: zio makes file I/O async,
             // suspending this coroutine instead of blocking the OS thread.
-            self.server.writeAof(command.getArgSlice(0) orelse "", command.getArgs());
+            self.server.write_aof(command.get_arg_slice(0) orelse "", command.get_args());
 
             command.deinit();
 
@@ -159,7 +159,7 @@ pub const Client = struct {
             sw.deinit();
 
             // Check mailbox for pubsub messages that arrived during command execution
-            try self.flushMailbox();
+            try self.flush_mailbox();
 
             if (self.disconnect_requested.load(.acquire)) {
                 log.debug("client {d}: disconnect after cmd", .{self.client_id});
@@ -177,20 +177,20 @@ pub const Client = struct {
     }
 
     // Dispatches the parsed command to the appropriate handler function.
-    fn executeCommand(self: *Client, writer: *std.Io.Writer, command: Command) !void {
-        try self.command_registry.executeCommandClient(self, writer, command.getArgs());
+    fn execute_command(self: *Client, writer: *std.Io.Writer, command: Command) !void {
+        try self.command_registry.execute_command_client(self, writer, command.get_args());
     }
 
-    pub fn isAuthenticated(self: *Client) bool {
-        return self.authenticated or !self.server.config.requiresAuth();
+    pub fn is_authenticated(self: *Client) bool {
+        return self.authenticated or !self.server.config.requires_auth();
     }
 
     // Helper to get the store
-    pub fn getCurrentStore(self: *Client) *Store {
+    pub fn get_current_store(self: *Client) *Store {
         return self.store;
     }
 
-    fn waitForReadable(self: *Client, timeout_ms: i32) !bool {
+    fn wait_for_readable(self: *Client, timeout_ms: i32) !bool {
         var fds = [_]pollfd{.{
             .fd = self.connection.socket.handle,
             .events = std.posix.POLL.IN,
@@ -208,9 +208,9 @@ pub const Client = struct {
         return revents & std.posix.POLL.IN != 0;
     }
 
-    fn flushMailbox(self: *Client) !void {
-        const head = self.mailbox.takeAll();
-        defer self.mailbox.freeNodes(self.allocator, head);
+    fn flush_mailbox(self: *Client) !void {
+        const head = self.mailbox.take_all();
+        defer self.mailbox.free_nodes(self.allocator, head);
 
         if (head == null) return;
 

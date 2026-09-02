@@ -14,7 +14,7 @@ const BitStream = struct {
     }
 
     /// Initialize a read-only BitStream from existing data (zero-copy, no allocation)
-    pub fn initReadOnly(data: []const u8) BitStream {
+    pub fn init_read_only(data: []const u8) BitStream {
         return .{
             .buffer = .{ .items = @constCast(data), .capacity = data.len },
             .allocator = null,
@@ -80,7 +80,7 @@ const BitStream = struct {
         self.bit_offset = 0;
     }
 
-    pub fn toOwnedSlice(self: *BitStream) ![]u8 {
+    pub fn to_owned_slice(self: *BitStream) ![]u8 {
         return self.buffer.toOwnedSlice();
     }
 
@@ -381,7 +381,7 @@ pub const ChunkDecompressor = struct {
 
     pub fn init(compressed_data: []const u8) ChunkDecompressor {
         return .{
-            .stream = BitStream.initReadOnly(compressed_data),
+            .stream = BitStream.init_read_only(compressed_data),
             // Initialize with dummy pointers, will be fixed in next()
             .ts_decompressor = .{ .stream = undefined, .last_ts = 0, .previous_delta = 0, .count = 0 },
             .val_decompressor = .{ .stream = undefined, .last_value_bits = 0, .last_leading_zeros = 0, .last_trailing_zeros = 0, .count = 0 },

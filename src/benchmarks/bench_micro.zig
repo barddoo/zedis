@@ -23,10 +23,10 @@ pub fn main() !void {
     try stdout.writeAll("These benchmarks do NOT require a running server.\n\n");
 
     // Run store benchmarks
-    try bench_store.runAllBenchmarks(allocator);
+    try bench_store.run_all_benchmarks(allocator);
 
     // Run command benchmarks
-    try bench_commands.runAllBenchmarks(allocator);
+    try bench_commands.run_all_benchmarks(allocator);
 
     try stdout.writeAll("\n");
     try stdout.writeAll("█" ** 100);

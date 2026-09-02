@@ -11,51 +11,51 @@ const Writer = Io.Writer;
 
 // --- RESP Writing Helpers ---
 
-pub fn writeError(writer: *Writer, msg: []const u8) !void {
+pub fn write_error(writer: *Writer, msg: []const u8) !void {
     try writer.print("-ERR {s}\r\n", .{msg});
 }
 
-pub fn writeSimpleString(writer: *Writer, str: []const u8) !void {
+pub fn write_simple_string(writer: *Writer, str: []const u8) !void {
     try writer.print("+{s}\r\n", .{str});
 }
 
-pub fn writeOK(writer: *Writer) !void {
+pub fn write_ok(writer: *Writer) !void {
     try writer.writeAll("+OK\r\n");
 }
 
-pub fn writeBulkString(writer: *Writer, str: []const u8) !void {
+pub fn write_bulk_string(writer: *Writer, str: []const u8) !void {
     try writer.print("${d}\r\n{s}\r\n", .{ str.len, str });
 }
 
-pub fn writeIntBulkString(writer: *Writer, value: i64) !void {
+pub fn write_int_bulk_string(writer: *Writer, value: i64) !void {
     var buf: [19]u8 = undefined;
     const len = std.fmt.printInt(&buf, value, 10, .upper, .{});
     try writer.print("${d}\r\n{s}\r\n", .{ len, buf[0..len] });
 }
 
-pub fn writeSingleIntBulkString(writer: *Writer, value: i64) !void {
+pub fn write_single_int_bulk_string(writer: *Writer, value: i64) !void {
     try writer.print("${d}\r\n{d}\r\n", .{ 1, value });
 }
 
-pub fn writeInt(writer: *Writer, value: anytype) !void {
+pub fn write_int(writer: *Writer, value: anytype) !void {
     const T = @TypeOf(value);
     const type_info = @typeInfo(T);
 
     // Compile-time check that value is an integer type
     comptime {
         if (type_info != .int and type_info != .comptime_int) {
-            @compileError("writeInt requires an integer type, got " ++ @typeName(T));
+            @compileError("write_int requires an integer type, got " ++ @typeName(T));
         }
     }
 
     try writer.print(":{d}\r\n", .{value});
 }
 
-pub fn writeListLen(writer: *Writer, count: usize) !void {
+pub fn write_list_len(writer: *Writer, count: usize) !void {
     try writer.print("*{d}\r\n", .{count});
 }
 
-pub fn writeTupleAsArray(writer: *Writer, items: anytype) !void {
+pub fn write_tuple_as_array(writer: *Writer, items: anytype) !void {
     const T = @TypeOf(items);
     const info = @typeInfo(T);
 
@@ -83,31 +83,31 @@ pub fn writeTupleAsArray(writer: *Writer, items: anytype) !void {
         // Check the type of the current item and call the correct serializer.
         const ItemType = @TypeOf(item);
         if (ItemType == []const u8) {
-            try writeBulkString(writer, item);
+            try write_bulk_string(writer, item);
         } else if (ItemType == i64) {
-            try writeInt(writer, item);
+            try write_int(writer, item);
         } else {
             // Handle string literals and other pointer-to-array types by checking if they can be coerced to []const u8
             const item_as_slice: []const u8 = item;
-            try writeBulkString(writer, item_as_slice);
+            try write_bulk_string(writer, item_as_slice);
         }
     }
 }
 
-pub fn writeNull(writer: *Writer) !void {
+pub fn write_null(writer: *Writer) !void {
     try writer.writeAll("$-1\r\n");
 }
 
-pub fn writeDoubleBulkString(writer: *Writer, value: f64) !void {
+pub fn write_double_bulk_string(writer: *Writer, value: f64) !void {
     var buf: [32]u8 = undefined;
     const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
     try writer.print("${d}\r\n{s}\r\n", .{ formatted.len, formatted });
 }
 
-pub fn writePrimitiveValue(writer: *Writer, value: PrimitiveValue) !void {
+pub fn write_primitive_value(writer: *Writer, value: PrimitiveValue) !void {
     switch (value) {
-        .string => |str| try writeBulkString(writer, str),
-        .short_string => |ss| try writeBulkString(writer, ss.asSlice()),
-        .int => |i| try writeInt(writer, i),
+        .string => |str| try write_bulk_string(writer, str),
+        .short_string => |ss| try write_bulk_string(writer, ss.as_slice()),
+        .int => |i| try write_int(writer, i),
     }
 }

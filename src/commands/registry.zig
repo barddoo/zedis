@@ -65,7 +65,7 @@ pub const CommandRegistry = struct {
         return self.commands.get(name);
     }
 
-    pub fn shouldWriteToAof(self: *CommandRegistry, name: []const u8) bool {
+    pub fn should_write_to_aof(self: *CommandRegistry, name: []const u8) bool {
         var buf: [32]u8 = undefined;
         if (name.len > buf.len) return false;
         const upper_name = std.ascii.upperString(&buf, name);
@@ -75,7 +75,7 @@ pub const CommandRegistry = struct {
         return false;
     }
 
-    fn handleCommandError(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
+    fn handle_command_error(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
         const msg = switch (err) {
             error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
             error.ValueNotInteger => "ERR value is not an integer or out of range",
@@ -105,21 +105,21 @@ pub const CommandRegistry = struct {
                 break :blk "ERR while processing command";
             },
         };
-        resp.writeError(writer, msg) catch {};
+        resp.write_error(writer, msg) catch {};
     }
 
-    pub fn executeCommandClient(
+    pub fn execute_command_client(
         self: *CommandRegistry,
         client: *Client,
         writer: *std.Io.Writer,
         args: []const Value,
     ) !void {
-        try self.executeCommand(writer, client, client.getCurrentStore(), args);
+        try self.execute_command(writer, client, client.get_current_store(), args);
 
         try writer.flush();
     }
 
-    pub fn executeCommandAof(
+    pub fn execute_command_aof(
         self: *CommandRegistry,
         store: *Store,
         args: []const Value,
@@ -129,10 +129,10 @@ pub const CommandRegistry = struct {
         var discarding = std.Io.Writer.Discarding.init(&.{});
         // We should only be calling this command from the aof, so auth is assumed.
         // We should not be calling commands that require a real client.
-        try self.executeCommand(&discarding.writer, &dummy_client, store, args);
+        try self.execute_command(&discarding.writer, &dummy_client, store, args);
     }
 
-    pub fn executeCommand(
+    pub fn execute_command(
         self: *CommandRegistry,
         writer: *std.Io.Writer,
         client: *Client,
@@ -140,10 +140,10 @@ pub const CommandRegistry = struct {
         args: []const Value,
     ) !void {
         if (args.len == 0) {
-            return resp.writeError(writer, "ERR empty command");
+            return resp.write_error(writer, "ERR empty command");
         }
 
-        const command_name = args[0].asSlice();
+        const command_name = args[0].as_slice();
 
         var buf: [32]u8 = undefined;
         if (command_name.len > buf.len) return error.CommandTooLong;
@@ -152,19 +152,19 @@ pub const CommandRegistry = struct {
         // Skip auth check for commands that don't need it
         if (!std.mem.eql(u8, upper_name, "AUTH") and
             !std.mem.eql(u8, upper_name, "PING") and
-            !client.isAuthenticated())
+            !client.is_authenticated())
         {
-            return resp.writeError(writer, "NOAUTH Authentication required");
+            return resp.write_error(writer, "NOAUTH Authentication required");
         }
 
         if (self.get(upper_name)) |cmd_info| {
             // Validate argument count
             if (args.len < cmd_info.min_args) {
-                return resp.writeError(writer, "ERR wrong number of arguments");
+                return resp.write_error(writer, "ERR wrong number of arguments");
             }
             if (cmd_info.max_args) |max_args| {
                 if (args.len > max_args) {
-                    return resp.writeError(writer, "ERR wrong number of arguments");
+                    return resp.write_error(writer, "ERR wrong number of arguments");
                 }
             }
 
@@ -172,26 +172,26 @@ pub const CommandRegistry = struct {
                 .client_handler => |handler| {
                     // If we haven't provided a client, this is an invariant failure
                     handler(client, args, writer) catch |err| {
-                        handleCommandError(writer, cmd_info.name, err);
+                        handle_command_error(writer, cmd_info.name, err);
                         return;
                     };
                 },
                 .store_handler => |handler| {
                     // If we haven't provided a store, this is an invariant failure
                     handler(writer, store, args) catch |err| {
-                        handleCommandError(writer, cmd_info.name, err);
+                        handle_command_error(writer, cmd_info.name, err);
                         return;
                     };
                 },
                 .default => |handler| {
                     handler(writer, args) catch |err| {
-                        handleCommandError(writer, cmd_info.name, err);
+                        handle_command_error(writer, cmd_info.name, err);
                         return;
                     };
                 },
             }
         } else {
-            resp.writeError(writer, "ERR unknown command") catch {};
+            resp.write_error(writer, "ERR unknown command") catch {};
         }
     }
 };

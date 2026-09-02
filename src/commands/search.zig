@@ -22,7 +22,7 @@ const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.CREATE index [ON HASH] [PREFIX count prefix...] SCHEMA field type [type options]...
     if (args.len < 2) return error.WrongNumberOfArguments;
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
     if (store.exists(key)) return error.AlreadyExists;
 
@@ -30,7 +30,7 @@ pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
     var i: usize = 2;
     var schema_start: ?usize = null;
     while (i < args.len) : (i += 1) {
-        if (eqlIgnoreCase(args[i].asSlice(), "SCHEMA")) {
+        if (eqlIgnoreCase(args[i].as_slice(), "SCHEMA")) {
             schema_start = i + 1;
             break;
         }
@@ -46,9 +46,9 @@ pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
 
     i = start;
     while (i < args.len) {
-        const fname = args[i].asSlice();
+        const fname = args[i].as_slice();
         if (i + 1 >= args.len) return error.SyntaxError;
-        const ftype = args[i + 1].asSlice();
+        const ftype = args[i + 1].as_slice();
 
         const name_owned = try store.allocator.dupe(u8, fname);
         errdefer store.allocator.free(name_owned);
@@ -65,9 +65,9 @@ pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
         } else if (eqlIgnoreCase(ftype, "VECTOR")) {
             // VECTOR <algo> <count> <attr> <val> ...  (count = number of tokens)
             if (i + 3 >= args.len) return error.SyntaxError;
-            const algo = args[i + 2].asSlice();
+            const algo = args[i + 2].as_slice();
             if (!eqlIgnoreCase(algo, "FLAT")) return error.UnsupportedVectorAlgorithm;
-            const attr_tokens = try args[i + 3].asU64();
+            const attr_tokens = try args[i + 3].as_u64();
             if (attr_tokens % 2 != 0) return error.InvalidArgument;
             if (i + 4 + attr_tokens > args.len) return error.SyntaxError;
 
@@ -79,17 +79,17 @@ pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
             var j: usize = i + 4;
             var token: u64 = 0;
             while (token < attr_tokens) : (token += 2) {
-                const attr = args[j].asSlice();
-                const val = args[j + 1].asSlice();
+                const attr = args[j].as_slice();
+                const val = args[j + 1].as_slice();
                 if (eqlIgnoreCase(attr, "TYPE")) {
-                    params.typ = VectorType.fromSlice(val) orelse return error.InvalidArgument;
+                    params.typ = VectorType.from_slice(val) orelse return error.InvalidArgument;
                     type_set = true;
                 } else if (eqlIgnoreCase(attr, "DIM")) {
-                    params.dim = try args[j + 1].asU16();
+                    params.dim = try args[j + 1].as_u16();
                     if (params.dim == 0) return error.InvalidArgument;
                     dim_set = true;
                 } else if (eqlIgnoreCase(attr, "DISTANCE_METRIC")) {
-                    params.metric = DistanceMetric.fromSlice(val) orelse return error.InvalidArgument;
+                    params.metric = DistanceMetric.from_slice(val) orelse return error.InvalidArgument;
                     metric_set = true;
                 }
                 j += 2;
@@ -113,16 +113,16 @@ pub fn ft_create(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const owned_fields = try fields.toOwnedSlice(store.allocator);
     const si = SearchIndex.init(store.allocator, owned_fields);
-    try store.createSearchIndex(key, si);
+    try store.create_search_index(key, si);
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn ft_dropindex(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.DROPINDEX idx [DD]
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
     if (!store.delete(key)) return error.KeyNotFound;
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn ft_list(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -132,18 +132,18 @@ pub fn ft_list(writer: *Writer, store: *Store, args: []const Value) !void {
 
     var count: usize = 0;
     for (all_keys) |k| {
-        if (store.getType(k) == .search_index) count += 1;
+        if (store.get_type(k) == .search_index) count += 1;
     }
 
-    try resp.writeListLen(writer, count);
+    try resp.write_list_len(writer, count);
     for (all_keys) |k| {
-        if (store.getType(k) == .search_index) {
-            try resp.writeBulkString(writer, k);
+        if (store.get_type(k) == .search_index) {
+            try resp.write_bulk_string(writer, k);
         }
     }
 }
 
-fn typeString(field_type: FieldType) []const u8 {
+fn type_string(field_type: FieldType) []const u8 {
     return switch (field_type) {
         .text => "TEXT",
         .numeric => "NUMERIC",
@@ -154,34 +154,34 @@ fn typeString(field_type: FieldType) []const u8 {
 
 pub fn ft_info(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.INFO idx
-    const key = args[1].asSlice();
-    const index = try store.getSearchIndex(key) orelse return error.KeyNotFound;
+    const key = args[1].as_slice();
+    const index = try store.get_search_index(key) orelse return error.KeyNotFound;
 
-    try resp.writeListLen(writer, 6);
-    try resp.writeBulkString(writer, "index_name");
-    try resp.writeBulkString(writer, key);
-    try resp.writeBulkString(writer, "num_docs");
-    try resp.writeInt(writer, @as(i64, @intCast(index.docCount())));
-    try resp.writeBulkString(writer, "attributes");
-    try resp.writeListLen(writer, index.fields.len * 2);
+    try resp.write_list_len(writer, 6);
+    try resp.write_bulk_string(writer, "index_name");
+    try resp.write_bulk_string(writer, key);
+    try resp.write_bulk_string(writer, "num_docs");
+    try resp.write_int(writer, @as(i64, @intCast(index.doc_count())));
+    try resp.write_bulk_string(writer, "attributes");
+    try resp.write_list_len(writer, index.fields.len * 2);
     for (index.fields) |f| {
-        try resp.writeBulkString(writer, f.name);
-        try resp.writeBulkString(writer, typeString(f.field_type));
+        try resp.write_bulk_string(writer, f.name);
+        try resp.write_bulk_string(writer, type_string(f.field_type));
     }
 }
 
 pub fn ft_add(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.ADD idx docId score [NOSAVE] [REPLACE] [LANGUAGE lang] FIELDS n f1 v1 ...
     if (args.len < 4) return error.WrongNumberOfArguments;
-    const key = args[1].asSlice();
-    const doc_id = args[2].asSlice();
-    _ = try args[3].asF64(); // legacy score; unused for ranking
+    const key = args[1].as_slice();
+    const doc_id = args[2].as_slice();
+    _ = try args[3].as_f64(); // legacy score; unused for ranking
 
     var replace = false;
     var fields_start: ?usize = null;
     var i: usize = 4;
     while (i < args.len) {
-        const a = args[i].asSlice();
+        const a = args[i].as_slice();
         if (eqlIgnoreCase(a, "REPLACE")) {
             replace = true;
             i += 1;
@@ -199,11 +199,11 @@ pub fn ft_add(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const start = fields_start orelse return error.SyntaxError;
     if (start >= args.len) return error.SyntaxError;
-    const pair_count = try args[start].asU64();
+    const pair_count = try args[start].as_u64();
     if (start + 1 + 2 * pair_count > args.len) return error.SyntaxError;
 
-    const index = try store.getSearchIndex(key) orelse return error.KeyNotFound;
-    if (index.getDocument(doc_id) != null and !replace) return error.DocumentExists;
+    const index = try store.get_search_index(key) orelse return error.KeyNotFound;
+    if (index.get_document(doc_id) != null and !replace) return error.DocumentExists;
 
     const values = try store.allocator.alloc(?FieldValue, index.fields.len);
     defer store.allocator.free(values);
@@ -211,9 +211,9 @@ pub fn ft_add(writer: *Writer, store: *Store, args: []const Value) !void {
 
     var p: usize = 0;
     while (p < pair_count) : (p += 1) {
-        const fname = args[start + 1 + 2 * p].asSlice();
-        const fval = args[start + 1 + 2 * p + 1].asSlice();
-        const fidx = index.fieldIndex(fname) orelse return error.FieldNotFound;
+        const fname = args[start + 1 + 2 * p].as_slice();
+        const fval = args[start + 1 + 2 * p + 1].as_slice();
+        const fidx = index.field_index(fname) orelse return error.FieldNotFound;
         switch (index.fields[fidx].field_type) {
             .numeric => {
                 values[fidx] = .{ .numeric = std.fmt.parseFloat(f64, fval) catch return error.InvalidFloat };
@@ -222,37 +222,37 @@ pub fn ft_add(writer: *Writer, store: *Store, args: []const Value) !void {
         }
     }
 
-    if (replace and index.getDocument(doc_id) != null) {
-        _ = index.removeDocument(doc_id);
+    if (replace and index.get_document(doc_id) != null) {
+        _ = index.remove_document(doc_id);
     }
-    try index.addDocument(doc_id, values);
-    try resp.writeOK(writer);
+    try index.add_document(doc_id, values);
+    try resp.write_ok(writer);
 }
 
 pub fn ft_del(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.DEL idx docId [DD]
-    const key = args[1].asSlice();
-    const doc_id = args[2].asSlice();
-    const index = try store.getSearchIndex(key) orelse return error.KeyNotFound;
-    const removed = index.removeDocument(doc_id);
-    try resp.writeInt(writer, @as(i64, @intFromBool(removed)));
+    const key = args[1].as_slice();
+    const doc_id = args[2].as_slice();
+    const index = try store.get_search_index(key) orelse return error.KeyNotFound;
+    const removed = index.remove_document(doc_id);
+    try resp.write_int(writer, @as(i64, @intFromBool(removed)));
 }
 
 pub fn ft_get(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.GET idx docId
-    const key = args[1].asSlice();
-    const doc_id = args[2].asSlice();
-    const index = try store.getSearchIndex(key) orelse return error.KeyNotFound;
-    const doc = index.getDocument(doc_id) orelse return error.DocumentNotFound;
+    const key = args[1].as_slice();
+    const doc_id = args[2].as_slice();
+    const index = try store.get_search_index(key) orelse return error.KeyNotFound;
+    const doc = index.get_document(doc_id) orelse return error.DocumentNotFound;
 
-    try resp.writeListLen(writer, index.fields.len * 2);
+    try resp.write_list_len(writer, index.fields.len * 2);
     for (index.fields, 0..) |f, fi| {
-        try resp.writeBulkString(writer, f.name);
+        try resp.write_bulk_string(writer, f.name);
         const fv = doc.fields[fi];
         if (fv) |v| switch (v) {
-            .string => |s| try resp.writeBulkString(writer, s),
-            .numeric => |n| try resp.writeDoubleBulkString(writer, n),
-        } else try resp.writeNull(writer);
+            .string => |s| try resp.write_bulk_string(writer, s),
+            .numeric => |n| try resp.write_double_bulk_string(writer, n),
+        } else try resp.write_null(writer);
     }
 }
 
@@ -260,9 +260,9 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
     // FT.SEARCH idx query [NOCONTENT] [WITHSCORES] [SORTBY f [ASC|DESC]]
     //                   [LIMIT off num] [RETURN n f...] [PARAMS n k v...] [DIALECT n]
     if (args.len < 3) return error.WrongNumberOfArguments;
-    const key = args[1].asSlice();
-    const query_str = args[2].asSlice();
-    const index = try store.getSearchIndex(key) orelse return error.KeyNotFound;
+    const key = args[1].as_slice();
+    const query_str = args[2].as_slice();
+    const index = try store.get_search_index(key) orelse return error.KeyNotFound;
 
     var opts = SearchOptions{};
     var params: std.StringHashMapUnmanaged([]const u8) = .empty;
@@ -270,7 +270,7 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
 
     var i: usize = 3;
     while (i < args.len) {
-        const a = args[i].asSlice();
+        const a = args[i].as_slice();
         if (eqlIgnoreCase(a, "NOCONTENT")) {
             opts.no_content = true;
             i += 1;
@@ -279,41 +279,41 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
             i += 1;
         } else if (eqlIgnoreCase(a, "SORTBY")) {
             if (i + 1 >= args.len) return error.SyntaxError;
-            opts.sort_by = args[i + 1].asSlice();
+            opts.sort_by = args[i + 1].as_slice();
             i += 2;
-            if (i < args.len and eqlIgnoreCase(args[i].asSlice(), "ASC")) {
+            if (i < args.len and eqlIgnoreCase(args[i].as_slice(), "ASC")) {
                 opts.sort_asc = true;
                 i += 1;
-            } else if (i < args.len and eqlIgnoreCase(args[i].asSlice(), "DESC")) {
+            } else if (i < args.len and eqlIgnoreCase(args[i].as_slice(), "DESC")) {
                 opts.sort_asc = false;
                 i += 1;
             }
         } else if (eqlIgnoreCase(a, "LIMIT")) {
             if (i + 2 >= args.len) return error.SyntaxError;
-            opts.limit_offset = try args[i + 1].asUsize();
-            opts.limit_count = try args[i + 2].asUsize();
+            opts.limit_offset = try args[i + 1].as_usize();
+            opts.limit_count = try args[i + 2].as_usize();
             i += 3;
         } else if (eqlIgnoreCase(a, "RETURN")) {
             if (i + 1 >= args.len) return error.SyntaxError;
-            const count = try args[i + 1].asUsize();
+            const count = try args[i + 1].as_usize();
             if (i + 1 + count >= args.len + 1) return error.SyntaxError;
             var fields: std.ArrayListUnmanaged([]const u8) = .empty;
             defer fields.deinit(store.allocator);
             var j: usize = 0;
             while (j < count) : (j += 1) {
-                try fields.append(store.allocator, args[i + 2 + j].asSlice());
+                try fields.append(store.allocator, args[i + 2 + j].as_slice());
             }
             opts.return_fields = try fields.toOwnedSlice(store.allocator);
             defer store.allocator.free(opts.return_fields.?);
             i += 2 + count;
         } else if (eqlIgnoreCase(a, "PARAMS")) {
             if (i + 1 >= args.len) return error.SyntaxError;
-            const count = try args[i + 1].asUsize();
+            const count = try args[i + 1].as_usize();
             if (i + 1 + 2 * count > args.len) return error.SyntaxError;
             var j: usize = 0;
             while (j < count) : (j += 1) {
-                const name = args[i + 2 + 2 * j].asSlice();
-                const value = args[i + 3 + 2 * j].asSlice();
+                const name = args[i + 2 + 2 * j].as_slice();
+                const value = args[i + 3 + 2 * j].as_slice();
                 try params.put(store.allocator, name, value);
             }
             i += 2 + 2 * count;
@@ -327,37 +327,37 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
     var results = try search_engine.search(store.allocator, index, query_str, &params, &opts);
     defer results.deinit(store.allocator);
 
-    try resp.writeListLen(writer, results.items.len);
+    try resp.write_list_len(writer, results.items.len);
     for (results.items) |r| {
-        try resp.writeBulkString(writer, r.doc_id);
-        if (opts.with_scores) try resp.writeDoubleBulkString(writer, r.score);
+        try resp.write_bulk_string(writer, r.doc_id);
+        if (opts.with_scores) try resp.write_double_bulk_string(writer, r.score);
         if (opts.no_content) continue;
 
-        const doc = index.getDocument(r.doc_id) orelse continue;
+        const doc = index.get_document(r.doc_id) orelse continue;
         const nfields = if (opts.return_fields) |rfs| rfs.len else index.fields.len;
-        try resp.writeListLen(writer, nfields * 2);
+        try resp.write_list_len(writer, nfields * 2);
 
         if (opts.return_fields) |rfs| {
             for (rfs) |fname| {
-                try resp.writeBulkString(writer, fname);
-                const field_idx = index.fieldIndex(fname) orelse {
-                    try resp.writeNull(writer);
+                try resp.write_bulk_string(writer, fname);
+                const field_idx = index.field_index(fname) orelse {
+                    try resp.write_null(writer);
                     continue;
                 };
                 const fv = doc.fields[field_idx];
                 if (fv) |v| switch (v) {
-                    .string => |s| try resp.writeBulkString(writer, s),
-                    .numeric => |n| try resp.writeDoubleBulkString(writer, n),
-                } else try resp.writeNull(writer);
+                    .string => |s| try resp.write_bulk_string(writer, s),
+                    .numeric => |n| try resp.write_double_bulk_string(writer, n),
+                } else try resp.write_null(writer);
             }
         } else {
             for (index.fields, 0..) |f, fi| {
-                try resp.writeBulkString(writer, f.name);
+                try resp.write_bulk_string(writer, f.name);
                 const fv = doc.fields[fi];
                 if (fv) |v| switch (v) {
-                    .string => |s| try resp.writeBulkString(writer, s),
-                    .numeric => |n| try resp.writeDoubleBulkString(writer, n),
-                } else try resp.writeNull(writer);
+                    .string => |s| try resp.write_bulk_string(writer, s),
+                    .numeric => |n| try resp.write_double_bulk_string(writer, n),
+                } else try resp.write_null(writer);
             }
         }
     }
@@ -551,10 +551,10 @@ test "FT.DROPINDEX removes index" {
     const drop_args = [_]Value{ .{ .data = "FT.DROPINDEX" }, .{ .data = "idx1" } };
     try ft_dropindex(&writer2, &store, &drop_args);
     try testing.expectEqualStrings("+OK\r\n", writer2.buffered());
-    try testing.expect(store.getSearchIndex("idx1") == null);
+    try testing.expect(store.get_search_index("idx1") == null);
 }
 
-fn vecF32Blob(values: []const f32) []const u8 {
+fn vec_f32_blob(values: []const f32) []const u8 {
     return std.mem.sliceAsBytes(values);
 }
 
@@ -569,7 +569,7 @@ test "FT.ADD under kv allocator does not OOM" {
         .eviction_policy = .allkeys_lru,
     });
     defer store.deinit();
-    kv.attachStore(&store);
+    kv.attach_store(&store);
 
     var buf: [8192]u8 = undefined;
     var writer = Writer.fixed(&buf);
@@ -599,10 +599,10 @@ test "FT.ADD under kv allocator does not OOM" {
     var buf2: [8192]u8 = undefined;
     var writer2 = Writer.fixed(&buf2);
     const add = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },         .{ .data = "doc1" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "4" },            .{ .data = "title" }, .{ .data = "the quick brown fox jumps over the lazy dog, repeatedly, with many words to grow the posting arrays well beyond any initial capacity" },
-        .{ .data = "price" },  .{ .data = "9.99" },         .{ .data = "color" }, .{ .data = "red,blue" },
-        .{ .data = "v" },      vecF32Blob(&[_]f32{ 0, 0 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },           .{ .data = "doc1" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "4" },              .{ .data = "title" }, .{ .data = "the quick brown fox jumps over the lazy dog, repeatedly, with many words to grow the posting arrays well beyond any initial capacity" },
+        .{ .data = "price" },  .{ .data = "9.99" },           .{ .data = "color" }, .{ .data = "red,blue" },
+        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 0, 0 }),
     };
     try ft_add(&writer2, &store, &add);
     try testing.expectEqualStrings("+OK\r\n", writer2.buffered());
@@ -768,18 +768,18 @@ test "FT.SEARCH vector KNN returns nearest doc" {
     try ft_create(&writer, &store, &create_args);
 
     const add = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },         .{ .data = "doc1" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "2" },            .{ .data = "title" }, .{ .data = "first" },
-        .{ .data = "v" },      vecF32Blob(&[_]f32{ 0, 0 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },           .{ .data = "doc1" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "2" },              .{ .data = "title" }, .{ .data = "first" },
+        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 0, 0 }),
     };
     var buf2: [8192]u8 = undefined;
     var writer2 = Writer.fixed(&buf2);
     try ft_add(&writer2, &store, &add);
 
     const add2 = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },           .{ .data = "doc2" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "2" },              .{ .data = "title" }, .{ .data = "second" },
-        .{ .data = "v" },      vecF32Blob(&[_]f32{ 10, 10 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },             .{ .data = "doc2" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "2" },                .{ .data = "title" }, .{ .data = "second" },
+        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 10, 10 }),
     };
     var buf3: [8192]u8 = undefined;
     var writer3 = Writer.fixed(&buf3);
@@ -794,7 +794,7 @@ test "FT.SEARCH vector KNN returns nearest doc" {
         .{ .data = "PARAMS" },
         .{ .data = "2" },
         .{ .data = "B" },
-        vecF32Blob(&[_]f32{ 0, 0 }),
+        vec_f32_blob(&[_]f32{ 0, 0 }),
         .{ .data = "DIALECT" },
         .{ .data = "2" },
     };

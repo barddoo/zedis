@@ -21,10 +21,10 @@ pub fn init(io: Io, clock_update_ms: u32) Clock {
 
 pub fn start(self: *Clock) !void {
     if (!self.cached) return;
-    self.update_task = self.io.concurrent(updateLoop, .{self}) catch |err| switch (err) {
+    self.update_task = self.io.concurrent(update_loop, .{self}) catch |err| switch (err) {
         error.ConcurrencyUnavailable => {
             // io backend does not support coroutines; fall back to OS thread
-            const thread = try std.Thread.spawn(.{}, updateLoop, .{self});
+            const thread = try std.Thread.spawn(.{}, update_loop, .{self});
             thread.detach();
             return;
         },
@@ -39,7 +39,7 @@ pub fn deinit(self: *Clock) void {
     }
 }
 
-fn updateLoop(self: *Clock) anyerror!void {
+fn update_loop(self: *Clock) anyerror!void {
     const duration: Io.Duration = .fromMilliseconds(self.clock_update_ms);
     while (true) {
         ts = .now(self.io, .real);

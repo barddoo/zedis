@@ -1,7 +1,7 @@
 const std = @import("std");
 const Store = @import("../store.zig").Store;
 const CommandRegistry = @import("../commands/registry.zig").CommandRegistry;
-const initRegistry = @import("../commands/init_registry.zig").initRegistry;
+const init_registry = @import("../commands/init_registry.zig").init_registry;
 const Parser = @import("../parser.zig");
 const Value = Parser.Value;
 const bench_runner = @import("bench_runner.zig");
@@ -49,7 +49,7 @@ const CommandBenchContext = struct {
         });
         errdefer ctx.store.deinit();
 
-        ctx.registry = try initRegistry(allocator);
+        ctx.registry = try init_registry(allocator);
 
         // Use discarding writer for benchmarking (we don't need output)
         ctx.discarding = Writer.Discarding.init(&.{});
@@ -72,15 +72,15 @@ const CommandBenchContext = struct {
         self.allocator.destroy(self.clock);
     }
 
-    pub fn resetWriter(self: *CommandBenchContext) void {
+    pub fn reset_writer(self: *CommandBenchContext) void {
         self.discarding.count = 0;
         self.discarding.writer.end = 0;
     }
 };
 
 /// Benchmark SET command
-fn benchCommandSet(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_set(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     var val_buf: [64]u8 = undefined;
@@ -93,12 +93,12 @@ fn benchCommandSet(ctx: *CommandBenchContext) !void {
         .{ .data = value },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark GET command (with pre-populated data)
-fn benchCommandGet(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_get(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{@mod(counter, 10000)});
@@ -108,12 +108,12 @@ fn benchCommandGet(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark INCR command
-fn benchCommandIncr(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_incr(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "counter:{d}", .{@mod(counter, 100)});
@@ -123,12 +123,12 @@ fn benchCommandIncr(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark DEL command
-fn benchCommandDel(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_del(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{counter});
@@ -141,12 +141,12 @@ fn benchCommandDel(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark EXISTS command
-fn benchCommandExists(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_exists(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{@mod(counter, 10000)});
@@ -156,12 +156,12 @@ fn benchCommandExists(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark LPUSH command
-fn benchCommandLpush(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_lpush(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     var val_buf: [32]u8 = undefined;
@@ -174,12 +174,12 @@ fn benchCommandLpush(ctx: *CommandBenchContext) !void {
         .{ .data = value },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark LRANGE command
-fn benchCommandLrange(ctx: *CommandBenchContext) !void {
-    ctx.resetWriter();
+fn bench_command_lrange(ctx: *CommandBenchContext) !void {
+    ctx.reset_writer();
     const counter = ctx.counter.fetchAdd(1, .monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "list:{d}", .{@mod(counter, 100)});
@@ -191,11 +191,11 @@ fn benchCommandLrange(ctx: *CommandBenchContext) !void {
         .{ .data = "10" },
     };
 
-    try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
 }
 
 /// Benchmark RESP parsing
-fn benchRespParsing(allocator: Allocator) !void {
+fn bench_resp_parsing(allocator: Allocator) !void {
     const input = "*3\r\n$3\r\nSET\r\n$4\r\nkey1\r\n$6\r\nvalue1\r\n";
     var reader = std.Io.Reader.fixed(input);
     var p = Parser.init(allocator);
@@ -203,7 +203,7 @@ fn benchRespParsing(allocator: Allocator) !void {
     cmd.deinit();
 }
 
-pub fn runAllBenchmarks(allocator: Allocator) !void {
+pub fn run_all_benchmarks(allocator: Allocator) !void {
     var results: std.ArrayList(bench_runner.BenchmarkResult) = .empty;
     defer results.deinit(allocator);
 
@@ -211,7 +211,7 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
 
     // Benchmark 1: SET command
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: SET",
@@ -223,10 +223,10 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandSet,
+            bench_command_set,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 2: GET command (pre-populate first)
@@ -244,7 +244,7 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             try ctx.store.set(key, value);
         }
 
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: GET (cached)",
@@ -256,15 +256,15 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandGet,
+            bench_command_get,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 3: INCR command
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: INCR",
@@ -276,15 +276,15 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandIncr,
+            bench_command_incr,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 4: DEL command
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: DEL",
@@ -296,10 +296,10 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandDel,
+            bench_command_del,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 5: EXISTS command
@@ -315,7 +315,7 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             try ctx.store.set(key, "value");
         }
 
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: EXISTS",
@@ -327,15 +327,15 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandExists,
+            bench_command_exists,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 6: LPUSH command
     {
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: LPUSH",
@@ -347,10 +347,10 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandLpush,
+            bench_command_lpush,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 7: LRANGE command (with pre-populated lists)
@@ -373,12 +373,12 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                     .{ .data = key },
                     .{ .data = value },
                 };
-                ctx.resetWriter();
-                try ctx.registry.executeCommand(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+                ctx.reset_writer();
+                try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
             }
         }
 
-        const result = try bench_runner.runBenchmarkAdvanced(
+        const result = try bench_runner.run_benchmark_advanced(
             allocator,
             .{
                 .name = "Command: LRANGE",
@@ -390,15 +390,15 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
             CommandBenchContext,
             CommandBenchContext.init,
             CommandBenchContext.deinit,
-            benchCommandLrange,
+            bench_command_lrange,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Benchmark 8: RESP parsing
     {
-        const result = try bench_runner.runBenchmark(
+        const result = try bench_runner.run_benchmark(
             allocator,
             .{
                 .name = "RESP Parsing",
@@ -407,12 +407,12 @@ pub fn runAllBenchmarks(allocator: Allocator) !void {
                 .track_latency = true,
                 .track_memory = true,
             },
-            benchRespParsing,
+            bench_resp_parsing,
         );
         try results.append(allocator, result);
-        bench_runner.printResult(result);
+        bench_runner.print_result(result);
     }
 
     // Print summary table
-    bench_runner.printResults(results.items);
+    bench_runner.print_results(results.items);
 }

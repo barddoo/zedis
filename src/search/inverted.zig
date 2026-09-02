@@ -44,7 +44,7 @@ pub const InvertedIndex = struct {
         defer tokenizer.deinit();
         try tokenizer.tokenize(text);
 
-        var uniques = tokenizer.uniqueTokens();
+        var uniques = tokenizer.unique_tokens();
         defer uniques.deinit(self.allocator);
 
         for (uniques.items) |u| {
@@ -68,7 +68,7 @@ pub const InvertedIndex = struct {
         defer tokenizer.deinit();
         tokenizer.tokenize(text) catch return;
 
-        var uniques = tokenizer.uniqueTokens();
+        var uniques = tokenizer.unique_tokens();
         defer uniques.deinit(self.allocator);
 
         for (uniques.items) |u| {
@@ -96,7 +96,7 @@ pub const InvertedIndex = struct {
         }
     }
 
-    pub fn avgDocLen(self: *const InvertedIndex) f64 {
+    pub fn avg_doc_len(self: *const InvertedIndex) f64 {
         if (self.num_docs == 0) return 0;
         return @as(f64, @floatFromInt(self.total_len)) / @as(f64, @floatFromInt(self.num_docs));
     }
@@ -108,7 +108,7 @@ pub const InvertedIndex = struct {
     }
 
     pub fn bm25(self: *const InvertedIndex, doc_id: u64, df: u32, freq: u32) f64 {
-        const avgdl = self.avgDocLen();
+        const avgdl = self.avg_doc_len();
         const dl: f64 = @floatFromInt(self.doc_len.get(doc_id) orelse 0);
         const t: f64 = @floatFromInt(freq);
         const denom = t + k1 * (1 - b + b * dl / (if (avgdl == 0) 1.0 else avgdl));
@@ -129,16 +129,16 @@ pub const InvertedIndex = struct {
         return info.posts.items;
     }
 
-    pub fn docFreq(self: *const InvertedIndex, term: []const u8) u32 {
+    pub fn doc_freq(self: *const InvertedIndex, term: []const u8) u32 {
         const info = self.terms.get(term) orelse return 0;
         return info.df;
     }
 
-    pub fn termCount(self: *const InvertedIndex) usize {
+    pub fn term_count(self: *const InvertedIndex) usize {
         return self.terms.count();
     }
 
-    pub fn docLength(self: *const InvertedIndex, doc_id: u64) u32 {
+    pub fn doc_length(self: *const InvertedIndex, doc_id: u64) u32 {
         return self.doc_len.get(doc_id) orelse 0;
     }
 };
@@ -171,12 +171,12 @@ test "inverted remove document" {
 
     try ii.add(1, "alpha beta");
     try ii.add(2, "alpha gamma");
-    try testing.expectEqual(@as(u32, 2), ii.docFreq("alpha"));
+    try testing.expectEqual(@as(u32, 2), ii.doc_freq("alpha"));
 
     ii.remove(1, "alpha beta");
 
-    try testing.expectEqual(@as(u32, 1), ii.docFreq("alpha"));
-    try testing.expect(ii.docFreq("beta") == 0);
+    try testing.expectEqual(@as(u32, 1), ii.doc_freq("alpha"));
+    try testing.expect(ii.doc_freq("beta") == 0);
     try testing.expect(ii.terms.get("beta") == null);
     try testing.expectEqual(@as(u64, 1), ii.num_docs);
 }
@@ -188,8 +188,8 @@ test "inverted bm25 prefers rare term in short doc" {
     try ii.add(1, "cat");
     try ii.add(2, "cat dog bird fish bear wolf deer elk");
 
-    const s1 = ii.bm25(1, ii.docFreq("cat"), ii.tf(1, "cat"));
-    const s2 = ii.bm25(2, ii.docFreq("cat"), ii.tf(2, "cat"));
+    const s1 = ii.bm25(1, ii.doc_freq("cat"), ii.tf(1, "cat"));
+    const s2 = ii.bm25(2, ii.doc_freq("cat"), ii.tf(2, "cat"));
     // Equal tf, but shorter doc should score higher (bm25 length normalization)
     try testing.expect(s1 > s2);
 }

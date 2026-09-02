@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const Client = @import("client.zig").Client;
 const ClientMailbox = @import("client_mailbox.zig").ClientMailbox;
 const MessageNode = @import("client_mailbox.zig").MessageNode;
-const freeMessageList = @import("client_mailbox.zig").freeMessageList;
+const free_message_list = @import("client_mailbox.zig").free_message_list;
 const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
 const command_init = @import("./commands/init_registry.zig");
 const Reader = @import("./rdb/zdb.zig").Reader;
@@ -40,14 +40,14 @@ pub const CommandQueue = struct {
     tail: ?*CommandNode = null,
     mutex: std.atomic.Mutex = .unlocked,
 
-    fn lockMutex(m: *std.atomic.Mutex) void {
+    fn lock_mutex(m: *std.atomic.Mutex) void {
         while (!m.tryLock()) {
             std.atomic.spinLoopHint();
         }
     }
 
     pub fn push(self: *CommandQueue, node: *CommandNode) void {
-        lockMutex(&self.mutex);
+        lock_mutex(&self.mutex);
         defer self.mutex.unlock();
 
         node.next = null;
@@ -59,8 +59,8 @@ pub const CommandQueue = struct {
         self.tail = node;
     }
 
-    pub fn popAll(self: *CommandQueue) ?*CommandNode {
-        lockMutex(&self.mutex);
+    pub fn pop_all(self: *CommandQueue) ?*CommandNode {
+        lock_mutex(&self.mutex);
         defer self.mutex.unlock();
 
         const h = self.head;
@@ -126,21 +126,21 @@ createdTime: i64,
 // AOF logging
 aof_writer: aof.Writer,
 
-fn lockPubsub(self: *Server) void {
+fn lock_pubsub(self: *Server) void {
     while (!self.pubsub_mutex.tryLock()) {
         std.atomic.spinLoopHint();
     }
 }
 
-fn unlockPubsub(self: *Server) void {
+fn unlock_pubsub(self: *Server) void {
     self.pubsub_mutex.unlock();
 }
 
-fn packFreeListHead(index: u32, tag: u32) u64 {
+fn pack_free_list_head(index: u32, tag: u32) u64 {
     return (@as(u64, tag) << 32) | index;
 }
 
-fn unpackFreeListHead(raw: u64) struct { index: u32, tag: u32 } {
+fn unpack_free_list_head(raw: u64) struct { index: u32, tag: u32 } {
     return .{
         .index = @intCast(raw & std.math.maxInt(u32)),
         .tag = @intCast(raw >> 32),
@@ -152,7 +152,7 @@ const ClientAllocation = struct {
     slot: *ClientSlot,
 };
 
-pub fn initWithConfig(
+pub fn init_with_config(
     base_allocator: Allocator,
     host: []const u8,
     port: u16,
@@ -179,7 +179,7 @@ pub fn initWithConfig(
     });
 
     // Initialize command registry with base allocator (lives for server lifetime)
-    const registry = try command_init.initRegistry(base_allocator);
+    const registry = try command_init.init_registry(base_allocator);
 
     // Allocate fixed memory pools on heap
     const client_slots = try base_allocator.alloc(ClientSlot, config.max_clients);
@@ -206,7 +206,7 @@ pub fn initWithConfig(
 
         // Fixed allocations - heap allocated
         .client_slots = client_slots,
-        .free_list_head = .init(packFreeListHead(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
+        .free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
 
         // KV allocator and store
         .kv_allocator = kv_allocator,
@@ -233,9 +233,9 @@ pub fn initWithConfig(
 
     // Rebind self-references after the final Server value is in place.
     server.store.clock = &server.clock;
-    server.kv_allocator.attachStore(&server.store);
+    server.kv_allocator.attach_store(&server.store);
 
-    if (config.requiresAuth()) {
+    if (config.requires_auth()) {
         log.info("Authentication required", .{});
     } else {
         log.debug("No authentication required", .{});
@@ -258,12 +258,12 @@ pub fn initWithConfig(
         }
     } else {
         // Load RDB file if it exists
-        if (Reader.rdbFileExists()) {
+        if (Reader.rdb_file_exists()) {
             if (Reader.init(base_allocator, &server.store)) |reader_value| {
                 var reader = reader_value;
                 defer reader.deinit();
 
-                if (reader.readFile()) |data| {
+                if (reader.read_file()) |data| {
                     log.info("Loading RDB into store", .{});
                     server.createdTime = data.ctime;
                 } else |err| {
@@ -276,7 +276,7 @@ pub fn initWithConfig(
     }
 
     log.info("Server initialized - Fixed: {}MB, KV: {}MB", .{
-        config.fixedMemorySize() / (1024 * 1024),
+        config.fixed_memory_size() / (1024 * 1024),
         config.kv_memory_budget / (1024 * 1024),
     });
 
@@ -291,7 +291,7 @@ pub fn deinit(self: *Server) void {
         t.join();
     }
     // Drain remaining commands (client threads may have enqueued before stop signal)
-    while (self.command_queue.popAll()) |head| {
+    while (self.command_queue.pop_all()) |head| {
         var node: ?*CommandNode = head;
         while (node) |n| {
             n.done.set(self.io);
@@ -333,13 +333,13 @@ pub fn deinit(self: *Server) void {
     log.info("Server deinitialized - all memory freed", .{});
 }
 
-fn storeThreadLoop(server: *Server) void {
+fn store_thread_loop(server: *Server) void {
     while (!server.store_thread_stop.load(.acquire)) {
-        if (server.command_queue.popAll()) |head| {
+        if (server.command_queue.pop_all()) |head| {
             var node: ?*CommandNode = head;
             while (node) |n| {
                 const next = n.next;
-                server.processCommand(n);
+                server.process_command(n);
                 n.done.set(server.io);
                 node = next;
             }
@@ -350,11 +350,11 @@ fn storeThreadLoop(server: *Server) void {
     }
 }
 
-fn processCommand(self: *Server, node: *CommandNode) void {
+fn process_command(self: *Server, node: *CommandNode) void {
     var sw = StackWriter.init(self.base_allocator);
     defer sw.deinit();
     var response_writer = sw.writer();
-    self.processCommandDirect(node.client, node.args, &response_writer);
+    self.process_command_direct(node.client, node.args, &response_writer);
 
     const response = sw.slice(&response_writer);
     if (response.len == 0) return;
@@ -365,23 +365,23 @@ fn processCommand(self: *Server, node: *CommandNode) void {
     const slot = &self.client_slots[client_slot.slot_index];
 
     const owned = self.base_allocator.dupe(u8, response) catch return;
-    const msg_node = slot.mailbox.acquireNode(self.base_allocator, owned) catch {
+    const msg_node = slot.mailbox.acquire_node(self.base_allocator, owned) catch {
         self.base_allocator.free(owned);
         return;
     };
 
-    slot.mailbox.lockAtomic();
-    defer slot.mailbox.unlockAtomic();
+    slot.mailbox.lock_atomic();
+    defer slot.mailbox.unlock_atomic();
 
     const is_active = slot.state.load(.acquire) == .active and
         slot.generation.load(.acquire) == client.slot_handle.generation and
         !slot.mailbox.closed.load(.acquire);
     if (!is_active) {
-        slot.mailbox.releaseNode(self.base_allocator, msg_node);
+        slot.mailbox.release_node(self.base_allocator, msg_node);
         return;
     }
     if (slot.mailbox.pending_count >= slot.mailbox.capacity) {
-        slot.mailbox.releaseNode(self.base_allocator, msg_node);
+        slot.mailbox.release_node(self.base_allocator, msg_node);
         return;
     }
 
@@ -394,11 +394,11 @@ fn processCommand(self: *Server, node: *CommandNode) void {
     slot.mailbox.pending_count += 1;
 }
 
-pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
-    self.registry.executeCommand(
+pub fn process_command_direct(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
+    self.registry.execute_command(
         response_writer,
         client,
-        client.getCurrentStore(),
+        client.get_current_store(),
         args,
     ) catch |err| {
         log.err("Command execution failed: {s}", .{@errorName(err)});
@@ -407,17 +407,17 @@ pub fn processCommandDirect(self: *Server, client: *Client, args: []const Value,
 
 /// Write a command to the AOF file. Called after store_mutex is released,
 /// so the file write (which zio makes async) does not serialize other commands.
-pub fn writeAof(self: *Server, command_name: []const u8, args: []const Value) void {
+pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) void {
     if (!self.aof_writer.enabled) return;
-    if (!self.registry.shouldWriteToAof(command_name)) return;
-    self.aof_writer.writeCommand(args);
+    if (!self.registry.should_write_to_aof(command_name)) return;
+    self.aof_writer.write_command(args);
 }
 
 // The main server loop. It waits for incoming connections and
 // handles each client (one thread per connection).
 pub fn listen(self: *Server) !void {
     // Spawn store thread AFTER server is in final location
-    self.store_thread = try std.Thread.spawn(.{}, storeThreadLoop, .{self});
+    self.store_thread = try std.Thread.spawn(.{}, store_thread_loop, .{self});
     defer {
         self.store_thread_stop.store(true, .release);
         self.command_queue_event.set(self.io);
@@ -434,19 +434,19 @@ pub fn listen(self: *Server) !void {
         };
 
         // Handle this client on its own thread
-        connection_group.async(self.io, handleConnectionAsync, .{ self, conn });
+        connection_group.async(self.io, handle_connection_async, .{ self, conn });
     }
 }
 
-fn handleConnectionAsync(self: *Server, conn: Stream) void {
-    self.handleConnection(conn) catch |err| {
+fn handle_connection_async(self: *Server, conn: Stream) void {
+    self.handle_connection(conn) catch |err| {
         log.err("Connection error: {s}", .{@errorName(err)});
     };
 }
 
-fn handleConnection(self: *Server, conn: Stream) !void {
+fn handle_connection(self: *Server, conn: Stream) !void {
     // Allocate client from fixed pool
-    const allocation = self.allocateClientSlot() orelse {
+    const allocation = self.allocate_client_slot() orelse {
         log.warn("Maximum client connections reached, rejecting connection", .{});
         conn.close(self.io);
         return;
@@ -469,10 +469,10 @@ fn handleConnection(self: *Server, conn: Stream) !void {
     client_slot.state.store(.active, .release);
 
     defer {
-        _ = self.beginClientShutdown(allocation.handle, client_slot.client.is_in_pubsub_mode);
+        _ = self.begin_client_shutdown(allocation.handle, client_slot.client.is_in_pubsub_mode);
         // Always clean up and deallocate when connection ends
         client_slot.client.deinit();
-        self.deallocateClientSlot(allocation.handle);
+        self.deallocate_client_slot(allocation.handle);
         log.debug("Client {} deallocated from pool", .{client_slot.client.client_id});
     }
 
@@ -480,15 +480,15 @@ fn handleConnection(self: *Server, conn: Stream) !void {
     log.debug("Client {} handled", .{client_slot.client.client_id});
 }
 
-fn allocateClientSlot(self: *Server) ?ClientAllocation {
+fn allocate_client_slot(self: *Server) ?ClientAllocation {
     while (true) {
         const head_raw = self.free_list_head.load(.acquire);
-        const head = unpackFreeListHead(head_raw);
+        const head = unpack_free_list_head(head_raw);
         if (head.index == invalid_client_slot_index) return null;
 
         const slot = &self.client_slots[head.index];
         const next_index = slot.next_free.load(.acquire);
-        const next_raw = packFreeListHead(next_index, head.tag +% 1);
+        const next_raw = pack_free_list_head(next_index, head.tag +% 1);
 
         if (self.free_list_head.cmpxchgWeak(head_raw, next_raw, .acq_rel, .acquire) == null) {
             slot.disconnect_requested.store(false, .release);
@@ -504,7 +504,7 @@ fn allocateClientSlot(self: *Server) ?ClientAllocation {
     }
 }
 
-fn deallocateClientSlot(self: *Server, handle: ClientHandle) void {
+fn deallocate_client_slot(self: *Server, handle: ClientHandle) void {
     if (handle.slot_index >= self.client_slots.len) return;
 
     const slot = &self.client_slots[handle.slot_index];
@@ -514,23 +514,23 @@ fn deallocateClientSlot(self: *Server, handle: ClientHandle) void {
     slot.disconnect_requested.store(false, .release);
     _ = slot.generation.fetchAdd(1, .acq_rel);
     slot.state.store(.free, .release);
-    self.pushFreeSlot(handle.slot_index);
+    self.push_free_slot(handle.slot_index);
 }
 
-fn pushFreeSlot(self: *Server, index: u32) void {
+fn push_free_slot(self: *Server, index: u32) void {
     const slot = &self.client_slots[index];
     while (true) {
         const head_raw = self.free_list_head.load(.acquire);
-        const head = unpackFreeListHead(head_raw);
+        const head = unpack_free_list_head(head_raw);
         slot.next_free.store(head.index, .release);
 
-        if (self.free_list_head.cmpxchgWeak(head_raw, packFreeListHead(index, head.tag +% 1), .acq_rel, .acquire) == null) {
+        if (self.free_list_head.cmpxchgWeak(head_raw, pack_free_list_head(index, head.tag +% 1), .acq_rel, .acquire) == null) {
             return;
         }
     }
 }
 
-fn createMessageNode(self: *Server, payload: []const u8) !*MessageNode {
+fn create_message_node(self: *Server, payload: []const u8) !*MessageNode {
     const owned = try self.base_allocator.dupe(u8, payload);
     errdefer self.base_allocator.free(owned);
 
@@ -544,19 +544,19 @@ fn createMessageNode(self: *Server, payload: []const u8) !*MessageNode {
     return node;
 }
 
-fn enqueueToHandle(self: *Server, handle: ClientHandle, payload: []const u8) !void {
+fn enqueue_to_handle(self: *Server, handle: ClientHandle, payload: []const u8) !void {
     if (handle.slot_index >= self.client_slots.len) return error.StaleHandle;
 
     const slot = &self.client_slots[handle.slot_index];
     const owned = try self.base_allocator.dupe(u8, payload);
-    const node = slot.mailbox.acquireNode(self.base_allocator, owned) catch |err| {
+    const node = slot.mailbox.acquire_node(self.base_allocator, owned) catch |err| {
         self.base_allocator.free(owned);
         return err;
     };
-    errdefer slot.mailbox.releaseNode(self.base_allocator, node);
+    errdefer slot.mailbox.release_node(self.base_allocator, node);
 
-    slot.mailbox.lockAtomic();
-    defer slot.mailbox.unlockAtomic();
+    slot.mailbox.lock_atomic();
+    defer slot.mailbox.unlock_atomic();
 
     const is_active = slot.state.load(.acquire) == .active and
         slot.generation.load(.acquire) == handle.generation and
@@ -573,7 +573,7 @@ fn enqueueToHandle(self: *Server, handle: ClientHandle, payload: []const u8) !vo
     slot.mailbox.pending_count += 1;
 }
 
-fn beginClientShutdown(self: *Server, handle: ClientHandle, prune_subscriptions: bool) bool {
+fn begin_client_shutdown(self: *Server, handle: ClientHandle, prune_subscriptions: bool) bool {
     if (handle.slot_index >= self.client_slots.len) return false;
 
     const slot = &self.client_slots[handle.slot_index];
@@ -583,7 +583,7 @@ fn beginClientShutdown(self: *Server, handle: ClientHandle, prune_subscriptions:
         slot.disconnect_requested.store(true, .release);
         slot.mailbox.close();
         if (prune_subscriptions) {
-            self.cleanupDisconnectedPubSubClient(handle);
+            self.cleanup_disconnected_pub_sub_client(handle);
         }
         return true;
     }
@@ -591,7 +591,7 @@ fn beginClientShutdown(self: *Server, handle: ClientHandle, prune_subscriptions:
     return false;
 }
 
-fn findOrCreateChannelLocked(self: *Server, channel_name: []const u8) !*[]ClientHandle {
+fn find_or_create_channel_locked(self: *Server, channel_name: []const u8) !*[]ClientHandle {
     if (self.pubsub_map.getPtr(channel_name)) |ptr| return ptr;
 
     if (self.pubsub_map.count() >= self.config.max_channels) {
@@ -608,14 +608,14 @@ fn findOrCreateChannelLocked(self: *Server, channel_name: []const u8) !*[]Client
     return self.pubsub_map.getPtr(channel_name).?;
 }
 
-fn containsHandle(handles: []const ClientHandle, handle: ClientHandle) bool {
+fn contains_handle(handles: []const ClientHandle, handle: ClientHandle) bool {
     for (handles) |candidate| {
         if (ClientHandle.eql(candidate, handle)) return true;
     }
     return false;
 }
 
-fn removeHandleFromSlice(self: *Server, current_subscribers: []const ClientHandle, handle: ClientHandle) !?[]ClientHandle {
+fn remove_handle_from_slice(self: *Server, current_subscribers: []const ClientHandle, handle: ClientHandle) !?[]ClientHandle {
     var remove_index: ?usize = null;
     for (current_subscribers, 0..) |existing_handle, i| {
         if (ClientHandle.eql(existing_handle, handle)) {
@@ -635,12 +635,12 @@ fn removeHandleFromSlice(self: *Server, current_subscribers: []const ClientHandl
     return new_subscribers;
 }
 
-fn pruneHandlesFromChannelLocked(self: *Server, channel_name: []const u8, handles: []const ClientHandle) !void {
+fn prune_handles_from_channel_locked(self: *Server, channel_name: []const u8, handles: []const ClientHandle) !void {
     const current_subscribers = self.pubsub_map.get(channel_name) orelse return;
 
     var kept_count: usize = 0;
     for (current_subscribers) |existing_handle| {
-        if (!containsHandle(handles, existing_handle)) kept_count += 1;
+        if (!contains_handle(handles, existing_handle)) kept_count += 1;
     }
 
     if (kept_count == current_subscribers.len) return;
@@ -655,7 +655,7 @@ fn pruneHandlesFromChannelLocked(self: *Server, channel_name: []const u8, handle
     const next_subscribers = try self.base_allocator.alloc(ClientHandle, kept_count);
     var next_index: usize = 0;
     for (current_subscribers) |existing_handle| {
-        if (containsHandle(handles, existing_handle)) continue;
+        if (contains_handle(handles, existing_handle)) continue;
         next_subscribers[next_index] = existing_handle;
         next_index += 1;
     }
@@ -664,20 +664,20 @@ fn pruneHandlesFromChannelLocked(self: *Server, channel_name: []const u8, handle
     self.pubsub_map.getPtr(channel_name).?.* = next_subscribers;
 }
 
-fn pruneHandlesFromChannel(self: *Server, channel_name: []const u8, handles: []const ClientHandle) !void {
+fn prune_handles_from_channel(self: *Server, channel_name: []const u8, handles: []const ClientHandle) !void {
     if (handles.len == 0) return;
 
-    self.lockPubsub();
-    defer self.unlockPubsub();
+    self.lock_pubsub();
+    defer self.unlock_pubsub();
 
-    try self.pruneHandlesFromChannelLocked(channel_name, handles);
+    try self.prune_handles_from_channel_locked(channel_name, handles);
 }
 
-pub fn subscribeToChannel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
-    self.lockPubsub();
-    defer self.unlockPubsub();
+pub fn subscribe_to_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
+    self.lock_pubsub();
+    defer self.unlock_pubsub();
 
-    const subscribers_ptr = try self.findOrCreateChannelLocked(channel_name);
+    const subscribers_ptr = try self.find_or_create_channel_locked(channel_name);
     const current_subscribers = subscribers_ptr.*;
 
     for (current_subscribers) |existing_handle| {
@@ -693,12 +693,12 @@ pub fn subscribeToChannel(self: *Server, channel_name: []const u8, handle: Clien
     subscribers_ptr.* = new_subscribers;
 }
 
-pub fn unsubscribeFromChannel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
-    self.lockPubsub();
-    defer self.unlockPubsub();
+pub fn unsubscribe_from_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
+    self.lock_pubsub();
+    defer self.unlock_pubsub();
 
     const current_subscribers = self.pubsub_map.get(channel_name) orelse return;
-    const new_subscribers = try self.removeHandleFromSlice(current_subscribers, handle) orelse return;
+    const new_subscribers = try self.remove_handle_from_slice(current_subscribers, handle) orelse return;
 
     if (new_subscribers.len == 0) {
         if (self.pubsub_map.fetchRemove(channel_name)) |removed| {
@@ -712,14 +712,14 @@ pub fn unsubscribeFromChannel(self: *Server, channel_name: []const u8, handle: C
     self.pubsub_map.getPtr(channel_name).?.* = new_subscribers;
 }
 
-pub fn publishToChannel(self: *Server, channel_name: []const u8, payload: []const u8) !usize {
-    self.lockPubsub();
+pub fn publish_to_channel(self: *Server, channel_name: []const u8, payload: []const u8) !usize {
+    self.lock_pubsub();
     const current_subscribers = self.pubsub_map.get(channel_name) orelse {
-        self.unlockPubsub();
+        self.unlock_pubsub();
         return 0;
     };
     const snapshot = try self.base_allocator.dupe(ClientHandle, current_subscribers);
-    self.unlockPubsub();
+    self.unlock_pubsub();
     defer self.base_allocator.free(snapshot);
 
     var stale_handles: std.ArrayList(ClientHandle) = .empty;
@@ -727,12 +727,12 @@ pub fn publishToChannel(self: *Server, channel_name: []const u8, payload: []cons
 
     var messages_sent: usize = 0;
     for (snapshot) |handle| {
-        if (self.enqueueToHandle(handle, payload)) |_| {
+        if (self.enqueue_to_handle(handle, payload)) |_| {
             messages_sent += 1;
         } else |err| switch (err) {
             error.StaleHandle => try stale_handles.append(self.base_allocator, handle),
             error.OutboxFull => {
-                _ = self.beginClientShutdown(handle, true);
+                _ = self.begin_client_shutdown(handle, true);
                 try stale_handles.append(self.base_allocator, handle);
             },
             else => return err,
@@ -740,22 +740,22 @@ pub fn publishToChannel(self: *Server, channel_name: []const u8, payload: []cons
     }
 
     if (stale_handles.items.len > 0) {
-        try self.pruneHandlesFromChannel(channel_name, stale_handles.items);
+        try self.prune_handles_from_channel(channel_name, stale_handles.items);
     }
 
     return messages_sent;
 }
 
-pub fn cleanupDisconnectedPubSubClient(self: *Server, handle: ClientHandle) void {
-    self.lockPubsub();
-    defer self.unlockPubsub();
+pub fn cleanup_disconnected_pub_sub_client(self: *Server, handle: ClientHandle) void {
+    self.lock_pubsub();
+    defer self.unlock_pubsub();
 
     var empty_channels: std.ArrayList([]const u8) = .empty;
     defer empty_channels.deinit(self.base_allocator);
 
     var channel_iterator = self.pubsub_map.iterator();
     while (channel_iterator.next()) |entry| {
-        const updated_subscribers = self.removeHandleFromSlice(entry.value_ptr.*, handle) catch |err| {
+        const updated_subscribers = self.remove_handle_from_slice(entry.value_ptr.*, handle) catch |err| {
             log.warn("Failed to unsubscribe slot {} from channel {s}: {s}", .{
                 handle.slot_index,
                 entry.key_ptr.*,
@@ -787,25 +787,25 @@ pub fn cleanupDisconnectedPubSubClient(self: *Server, handle: ClientHandle) void
 }
 
 // Memory statistics
-pub fn getMemoryStats(self: *Server) Config.MemoryStats {
-    const fixed_size = self.config.fixedMemorySize();
-    const total_budget = self.config.totalMemoryBudget();
+pub fn get_memory_stats(self: *Server) Config.MemoryStats {
+    const fixed_size = self.config.fixed_memory_size();
+    const total_budget = self.config.total_memory_budget();
     return Config.MemoryStats{
         .fixed_memory_used = fixed_size,
-        .kv_memory_used = self.kv_allocator.getMemoryUsage(),
-        .total_allocated = fixed_size + self.kv_allocator.getMemoryUsage(),
+        .kv_memory_used = self.kv_allocator.get_memory_usage(),
+        .total_allocated = fixed_size + self.kv_allocator.get_memory_usage(),
         .total_budget = total_budget,
     };
 }
-pub fn getChannelCount(self: *Server) u32 {
-    self.lockPubsub();
-    defer self.unlockPubsub();
+pub fn get_channel_count(self: *Server) u32 {
+    self.lock_pubsub();
+    defer self.unlock_pubsub();
     return @intCast(self.pubsub_map.count());
 }
 
 const testing = std.testing;
 
-fn initTestServer(allocator: Allocator, max_clients: u32) !Server {
+fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
     const client_slots = try allocator.alloc(ClientSlot, max_clients);
     for (client_slots, 0..) |*slot, index| {
         slot.* = .{};
@@ -824,7 +824,7 @@ fn initTestServer(allocator: Allocator, max_clients: u32) !Server {
         .listener = undefined,
         .io = testing.io,
         .client_slots = client_slots,
-        .free_list_head = .init(packFreeListHead(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
+        .free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
         .pubsub_map = .init(allocator),
         .pubsub_mutex = .unlocked,
         .command_queue = .{},
@@ -845,7 +845,7 @@ fn initTestServer(allocator: Allocator, max_clients: u32) !Server {
     return server;
 }
 
-fn deinitTestServer(server: *Server) void {
+fn deinit_test_server(server: *Server) void {
     server.clock.deinit();
 
     var iterator = server.pubsub_map.iterator();
@@ -862,41 +862,41 @@ fn deinitTestServer(server: *Server) void {
 }
 
 test "Server reuses freed slots with a new generation" {
-    var server = try initTestServer(testing.allocator, 2);
-    defer deinitTestServer(&server);
+    var server = try init_test_server(testing.allocator, 2);
+    defer deinit_test_server(&server);
 
-    const first = server.allocateClientSlot().?;
+    const first = server.allocate_client_slot().?;
     try testing.expectEqual(@as(u32, 0), first.handle.slot_index);
     try testing.expectEqual(@as(u32, 0), first.handle.generation);
 
-    server.deallocateClientSlot(first.handle);
+    server.deallocate_client_slot(first.handle);
 
-    const second = server.allocateClientSlot().?;
+    const second = server.allocate_client_slot().?;
     try testing.expectEqual(@as(u32, 0), second.handle.slot_index);
     try testing.expectEqual(@as(u32, 1), second.handle.generation);
 }
 
-test "Server publishToChannel enqueues active subscribers and prunes stale handles" {
-    var server = try initTestServer(testing.allocator, 2);
-    defer deinitTestServer(&server);
+test "Server publish_to_channel enqueues active subscribers and prunes stale handles" {
+    var server = try init_test_server(testing.allocator, 2);
+    defer deinit_test_server(&server);
 
-    const active = server.allocateClientSlot().?;
+    const active = server.allocate_client_slot().?;
     active.slot.state.store(.active, .release);
 
-    try server.subscribeToChannel("news", active.handle);
-    try server.subscribeToChannel("news", .{ .slot_index = 1, .generation = 99 });
+    try server.subscribe_to_channel("news", active.handle);
+    try server.subscribe_to_channel("news", .{ .slot_index = 1, .generation = 99 });
 
-    const delivered = try server.publishToChannel("news", "payload");
+    const delivered = try server.publish_to_channel("news", "payload");
     try testing.expectEqual(@as(usize, 1), delivered);
 
-    const queued = active.slot.mailbox.takeAll();
-    defer freeMessageList(server.base_allocator, queued);
+    const queued = active.slot.mailbox.take_all();
+    defer free_message_list(server.base_allocator, queued);
 
     try testing.expect(queued != null);
     try testing.expectEqualStrings("payload", queued.?.bytes);
 
-    server.lockPubsub();
-    defer server.unlockPubsub();
+    server.lock_pubsub();
+    defer server.unlock_pubsub();
 
     const subscribers = server.pubsub_map.get("news").?;
     try testing.expectEqual(@as(usize, 1), subscribers.len);

@@ -27,11 +27,11 @@ pub const ValueType = enum(u8) {
     bloom_filter,
     search_index,
 
-    pub fn toRdbOpcode(self: ValueType) u8 {
+    pub fn to_rdb_opcode(self: ValueType) u8 {
         return @intFromEnum(self);
     }
 
-    pub fn fromOpCode(num: u8) ValueType {
+    pub fn from_op_code(num: u8) ValueType {
         return @enumFromInt(num);
     }
 };
@@ -91,7 +91,7 @@ pub const Store = struct {
     eviction_policy: Config.EvictionPolicy,
     maxmemory_samples: usize,
 
-    inline fn maybeResize(self: *Store) !void {
+    inline fn maybe_resize(self: *Store) !void {
         const capacity = self.map.capacity();
         if (capacity == 0) {
             try self.map.ensureTotalCapacity(self.allocator, 1);
@@ -131,7 +131,7 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         var map_it = self.map.iterator();
         while (map_it.next()) |entry| {
-            self.freeEntry(entry.value_ptr.*);
+            self.free_entry(entry.value_ptr.*);
         }
 
         self.map.deinit(self.allocator);
@@ -147,31 +147,31 @@ pub const Store = struct {
         return @intCast(self.map.count());
     }
 
-    fn deleteMapEntry(self: *Store, map_entry: EntryMap.Entry) void {
+    fn delete_map_entry(self: *Store, map_entry: EntryMap.Entry) void {
         const entry = map_entry.value_ptr.*;
         self.map.removeByPtr(map_entry.key_ptr);
-        self.freeEntry(entry);
+        self.free_entry(entry);
         self.deletions_since_rehash += 1;
-        self.maybeMaintenance();
+        self.maybe_maintenance();
     }
 
-    fn nextAccessStamp(self: *Store) u64 {
+    fn next_access_stamp(self: *Store) u64 {
         return self.lru_clock.fetchAdd(1, .monotonic) + 1;
     }
 
-    inline fn usesGlobalLru(self: *const Store) bool {
+    inline fn uses_global_lru(self: *const Store) bool {
         return self.eviction_policy == .allkeys_lru;
     }
 
-    inline fn tracksVolatileEntries(self: *const Store) bool {
+    inline fn tracks_volatile_entries(self: *const Store) bool {
         return self.eviction_policy != .noeviction;
     }
 
-    inline fn tracksAccessTime(self: *const Store) bool {
+    inline fn tracks_access_time(self: *const Store) bool {
         return self.eviction_policy != .noeviction;
     }
 
-    fn cloneOwnedObject(self: *Store, object: ZedisObject) !ZedisObject {
+    fn clone_owned_object(self: *Store, object: ZedisObject) !ZedisObject {
         var cloned = object;
         switch (object.value) {
             .string => |str| {
@@ -188,7 +188,7 @@ pub const Store = struct {
         return cloned;
     }
 
-    fn freeObjectValue(self: *Store, object: ZedisObject) void {
+    fn free_object_value(self: *Store, object: ZedisObject) void {
         switch (object.value) {
             .string => |str| {
                 if (str.len > 0) self.allocator.free(str);
@@ -214,7 +214,7 @@ pub const Store = struct {
         }
     }
 
-    fn detachLru(self: *Store, entry: *StoreEntry) void {
+    fn detach_lru(self: *Store, entry: *StoreEntry) void {
         const fallback = entry.prev_lru orelse entry.next_lru;
 
         if (entry.prev_lru) |prev| {
@@ -237,7 +237,7 @@ pub const Store = struct {
         }
     }
 
-    fn attachLruHead(self: *Store, entry: *StoreEntry) void {
+    fn attach_lru_head(self: *Store, entry: *StoreEntry) void {
         entry.prev_lru = null;
         entry.next_lru = self.lru_head;
 
@@ -250,7 +250,7 @@ pub const Store = struct {
         self.lru_head = entry;
     }
 
-    fn detachVolatile(self: *Store, entry: *StoreEntry) void {
+    fn detach_volatile(self: *Store, entry: *StoreEntry) void {
         const fallback = entry.prev_volatile orelse entry.next_volatile;
 
         if (entry.prev_volatile) |prev| {
@@ -273,7 +273,7 @@ pub const Store = struct {
         }
     }
 
-    fn attachVolatileHead(self: *Store, entry: *StoreEntry) void {
+    fn attach_volatile_head(self: *Store, entry: *StoreEntry) void {
         entry.prev_volatile = null;
         entry.next_volatile = self.volatile_lru_head;
 
@@ -286,56 +286,56 @@ pub const Store = struct {
         self.volatile_lru_head = entry;
     }
 
-    fn recordAccess(self: *Store, entry: *StoreEntry) void {
-        if (!self.tracksAccessTime()) return;
-        entry.last_access = self.nextAccessStamp();
+    fn record_access(self: *Store, entry: *StoreEntry) void {
+        if (!self.tracks_access_time()) return;
+        entry.last_access = self.next_access_stamp();
     }
 
-    fn touchEntry(self: *Store, entry: *StoreEntry) void {
-        self.recordAccess(entry);
+    fn touch_entry(self: *Store, entry: *StoreEntry) void {
+        self.record_access(entry);
     }
 
-    fn freeEntry(self: *Store, entry: *StoreEntry) void {
-        self.detachLru(entry);
-        self.detachVolatile(entry);
-        self.freeObjectValue(entry.object);
+    fn free_entry(self: *Store, entry: *StoreEntry) void {
+        self.detach_lru(entry);
+        self.detach_volatile(entry);
+        self.free_object_value(entry.object);
         if (entry.key.len > 0) self.allocator.free(entry.key);
         self.allocator.destroy(entry);
     }
 
-    fn resolveEntry(self: *Store, key: []const u8, touch: bool) ?*StoreEntry {
+    fn resolve_entry(self: *Store, key: []const u8, touch: bool) ?*StoreEntry {
         const map_entry = self.map.getEntry(key) orelse return null;
         const entry = map_entry.value_ptr.*;
 
         if (entry.expires_at) |expiration_time| {
             const now = self.clock.now().toMilliseconds();
             if (now > expiration_time) {
-                self.deleteMapEntry(map_entry);
+                self.delete_map_entry(map_entry);
                 return null;
             }
         }
 
-        if (touch) self.touchEntry(entry);
+        if (touch) self.touch_entry(entry);
         return entry;
     }
 
-    fn setString(self: *Store, key: []const u8, value: []const u8) !void {
+    fn set_string(self: *Store, key: []const u8, value: []const u8) !void {
         const zedis_value: ZedisValue = if (value.len <= 23)
-            .{ .short_string = ShortString.fromSlice(value) }
+            .{ .short_string = ShortString.from_slice(value) }
         else
             .{ .string = value };
-        try self.putObject(key, .{ .value = zedis_value });
+        try self.put_object(key, .{ .value = zedis_value });
     }
 
-    pub fn setInt(self: *Store, key: []const u8, value: i64) !void {
-        try self.putObject(key, .{ .value = .{ .int = value } });
+    pub fn set_int(self: *Store, key: []const u8, value: i64) !void {
+        try self.put_object(key, .{ .value = .{ .int = value } });
     }
 
     pub fn set(self: *Store, key: []const u8, value: []const u8) !void {
-        try self.setString(key, value);
+        try self.set_string(key, value);
     }
 
-    pub inline fn putObject(self: *Store, key: []const u8, object: ZedisObject) !void {
+    pub inline fn put_object(self: *Store, key: []const u8, object: ZedisObject) !void {
         assert(key.len > 0);
 
         if (self.map.get(key)) |entry| {
@@ -345,23 +345,23 @@ pub const Store = struct {
 
             // Mark the entry as recently used before allocating the replacement
             // value so LRU-driven allocators don't evict the key being updated.
-            self.touchEntry(entry);
+            self.touch_entry(entry);
 
-            const new_object = try self.cloneOwnedObject(object);
-            errdefer self.freeObjectValue(new_object);
+            const new_object = try self.clone_owned_object(object);
+            errdefer self.free_object_value(new_object);
 
-            self.freeObjectValue(entry.object);
+            self.free_object_value(entry.object);
             entry.object = new_object;
             return;
         }
 
-        try self.maybeResize();
+        try self.maybe_resize();
 
         const owned_key = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned_key);
 
-        const new_object = try self.cloneOwnedObject(object);
-        errdefer self.freeObjectValue(new_object);
+        const new_object = try self.clone_owned_object(object);
+        errdefer self.free_object_value(new_object);
 
         const entry = try self.allocator.create(StoreEntry);
         errdefer self.allocator.destroy(entry);
@@ -369,12 +369,12 @@ pub const Store = struct {
         entry.* = .{
             .key = owned_key,
             .object = new_object,
-            .last_access = if (self.tracksAccessTime()) self.nextAccessStamp() else 0,
+            .last_access = if (self.tracks_access_time()) self.next_access_stamp() else 0,
         };
 
         try self.map.put(self.allocator, entry.key, entry);
-        if (self.usesGlobalLru()) {
-            self.attachLruHead(entry);
+        if (self.uses_global_lru()) {
+            self.attach_lru_head(entry);
         }
     }
 
@@ -382,24 +382,24 @@ pub const Store = struct {
         assert(key.len > 0);
 
         const map_entry = self.map.getEntry(key) orelse return false;
-        self.deleteMapEntry(map_entry);
+        self.delete_map_entry(map_entry);
         return true;
     }
 
     pub inline fn exists(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
-        return self.resolveEntry(key, false) != null;
+        return self.resolve_entry(key, false) != null;
     }
 
-    pub inline fn getType(self: *Store, key: []const u8) ?ValueType {
+    pub inline fn get_type(self: *Store, key: []const u8) ?ValueType {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, false) orelse return null;
+        const entry = self.resolve_entry(key, false) orelse return null;
         return std.meta.activeTag(entry.object.value);
     }
 
     pub inline fn get(self: *Store, key: []const u8) ?*const ZedisObject {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, true) orelse return null;
+        const entry = self.resolve_entry(key, true) orelse return null;
         return &entry.object;
     }
 
@@ -416,9 +416,9 @@ pub const Store = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    pub fn getList(self: *Store, key: []const u8) !?*ZedisList {
+    pub fn get_list(self: *Store, key: []const u8) !?*ZedisList {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, true) orelse return null;
+        const entry = self.resolve_entry(key, true) orelse return null;
 
         switch (entry.object.value) {
             .list => |list_ptr| return list_ptr,
@@ -426,9 +426,9 @@ pub const Store = struct {
         }
     }
 
-    pub fn getTimeSeries(self: *Store, key: []const u8) !?*TimeSeries {
+    pub fn get_time_series(self: *Store, key: []const u8) !?*TimeSeries {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, true) orelse return null;
+        const entry = self.resolve_entry(key, true) orelse return null;
 
         switch (entry.object.value) {
             .time_series => |ts_ptr| return ts_ptr,
@@ -436,17 +436,17 @@ pub const Store = struct {
         }
     }
 
-    pub fn createList(self: *Store, key: []const u8) !*ZedisList {
+    pub fn create_list(self: *Store, key: []const u8) !*ZedisList {
         assert(key.len > 0);
         const list_ptr = try self.allocator.create(ZedisList);
         errdefer self.allocator.destroy(list_ptr);
 
         list_ptr.* = ZedisList.init(self.allocator);
-        try self.putObject(key, .{ .value = .{ .list = list_ptr } });
-        return self.resolveEntry(key, true).?.object.value.list;
+        try self.put_object(key, .{ .value = .{ .list = list_ptr } });
+        return self.resolve_entry(key, true).?.object.value.list;
     }
 
-    pub fn createBloomFilter(self: *Store, key: []const u8, bf: ScalableBloomFilter) !void {
+    pub fn create_bloom_filter(self: *Store, key: []const u8, bf: ScalableBloomFilter) !void {
         assert(key.len > 0);
         if (self.exists(key)) return error.AlreadyExists;
 
@@ -454,12 +454,12 @@ pub const Store = struct {
         errdefer self.allocator.destroy(bf_ptr);
 
         bf_ptr.* = bf;
-        try self.putObject(key, .{ .value = .{ .bloom_filter = bf_ptr } });
+        try self.put_object(key, .{ .value = .{ .bloom_filter = bf_ptr } });
     }
 
-    pub fn getBloomFilter(self: *Store, key: []const u8) !?*ScalableBloomFilter {
+    pub fn get_bloom_filter(self: *Store, key: []const u8) !?*ScalableBloomFilter {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, true) orelse return null;
+        const entry = self.resolve_entry(key, true) orelse return null;
 
         switch (entry.object.value) {
             .bloom_filter => |bf_ptr| return bf_ptr,
@@ -467,7 +467,7 @@ pub const Store = struct {
         }
     }
 
-    pub fn createSearchIndex(self: *Store, key: []const u8, si: SearchIndex) !void {
+    pub fn create_search_index(self: *Store, key: []const u8, si: SearchIndex) !void {
         assert(key.len > 0);
         if (self.exists(key)) return error.AlreadyExists;
 
@@ -475,12 +475,12 @@ pub const Store = struct {
         errdefer self.allocator.destroy(si_ptr);
 
         si_ptr.* = si;
-        try self.putObject(key, .{ .value = .{ .search_index = si_ptr } });
+        try self.put_object(key, .{ .value = .{ .search_index = si_ptr } });
     }
 
-    pub fn getSearchIndex(self: *Store, key: []const u8) !?*SearchIndex {
+    pub fn get_search_index(self: *Store, key: []const u8) !?*SearchIndex {
         assert(key.len > 0);
-        const entry = self.resolveEntry(key, true) orelse return null;
+        const entry = self.resolve_entry(key, true) orelse return null;
 
         switch (entry.object.value) {
             .search_index => |si_ptr| return si_ptr,
@@ -488,9 +488,9 @@ pub const Store = struct {
         }
     }
 
-    pub fn getSetList(self: *Store, key: []const u8) !*ZedisList {
-        const list = try self.getList(key);
-        if (list == null) return try self.createList(key);
+    pub fn get_set_list(self: *Store, key: []const u8) !*ZedisList {
+        const list = try self.get_list(key);
+        if (list == null) return try self.create_list(key);
         return list.?;
     }
 
@@ -500,26 +500,26 @@ pub const Store = struct {
 
         const entry = self.map.get(key) orelse return false;
         entry.expires_at = time;
-        self.touchEntry(entry);
-        if (self.tracksVolatileEntries()) {
+        self.touch_entry(entry);
+        if (self.tracks_volatile_entries()) {
             if (entry.prev_volatile != null or entry.next_volatile != null or self.volatile_lru_head == entry) {
-                self.detachVolatile(entry);
-                self.attachVolatileHead(entry);
+                self.detach_volatile(entry);
+                self.attach_volatile_head(entry);
             } else {
-                self.attachVolatileHead(entry);
+                self.attach_volatile_head(entry);
             }
         }
         return true;
     }
 
-    pub inline fn isExpired(self: Store, key: []const u8) bool {
+    pub inline fn is_expired(self: Store, key: []const u8) bool {
         assert(key.len > 0);
         const entry = self.map.get(key) orelse return false;
         const expiration_time = entry.expires_at orelse return false;
         return self.clock.now().toMilliseconds() > expiration_time;
     }
 
-    pub inline fn getTtl(self: Store, key: []const u8) ?i64 {
+    pub inline fn get_ttl(self: Store, key: []const u8) ?i64 {
         assert(key.len > 0);
         const entry = self.map.get(key) orelse return null;
         return entry.expires_at;
@@ -531,14 +531,14 @@ pub const Store = struct {
         if (entry.expires_at == null) return false;
 
         entry.expires_at = null;
-        if (self.tracksVolatileEntries()) {
-            self.detachVolatile(entry);
+        if (self.tracks_volatile_entries()) {
+            self.detach_volatile(entry);
         }
-        self.touchEntry(entry);
+        self.touch_entry(entry);
         return true;
     }
 
-    pub inline fn randomKey(self: *Store, random: std.Random) ?[]const u8 {
+    pub inline fn random_key(self: *Store, random: std.Random) ?[]const u8 {
         const total_keys = self.map.count();
         if (total_keys == 0) return null;
 
@@ -559,7 +559,7 @@ pub const Store = struct {
     pub inline fn flush_db(self: *Store) void {
         var it = self.map.iterator();
         while (it.next()) |entry| {
-            self.freeEntry(entry.value_ptr.*);
+            self.free_entry(entry.value_ptr.*);
         }
 
         self.map.clearRetainingCapacity();
@@ -572,7 +572,7 @@ pub const Store = struct {
         self.deletions_since_rehash = 0;
     }
 
-    fn evictExpiredVolatile(self: *Store) bool {
+    fn evict_expired_volatile(self: *Store) bool {
         var scanned: usize = 0;
         var current = self.volatile_lru_tail;
 
@@ -595,7 +595,7 @@ pub const Store = struct {
         return false;
     }
 
-    fn sampleGlobalVictim(self: *Store) ?*StoreEntry {
+    fn sample_global_victim(self: *Store) ?*StoreEntry {
         const start = self.allkeys_sample_cursor orelse self.lru_tail orelse return null;
 
         var best = start;
@@ -621,7 +621,7 @@ pub const Store = struct {
         return best;
     }
 
-    fn sampleVolatileVictim(self: *Store) ?*StoreEntry {
+    fn sample_volatile_victim(self: *Store) ?*StoreEntry {
         const start = self.volatile_sample_cursor orelse self.volatile_lru_tail orelse return null;
 
         var best = start;
@@ -647,31 +647,31 @@ pub const Store = struct {
         return best;
     }
 
-    pub fn evictOne(self: *Store, policy: Config.EvictionPolicy) bool {
+    pub fn evict_one(self: *Store, policy: Config.EvictionPolicy) bool {
         switch (policy) {
             .noeviction => return false,
             .allkeys_lru => {
-                if (self.evictExpiredVolatile()) return true;
-                const victim = self.sampleGlobalVictim() orelse return false;
+                if (self.evict_expired_volatile()) return true;
+                const victim = self.sample_global_victim() orelse return false;
                 return self.delete(victim.key);
             },
             .volatile_lru => {
-                if (self.evictExpiredVolatile()) return true;
-                const victim = self.sampleVolatileVictim() orelse return false;
+                if (self.evict_expired_volatile()) return true;
+                const victim = self.sample_volatile_victim() orelse return false;
                 return self.delete(victim.key);
             },
         }
     }
 
-    pub fn renameKey(self: *Store, old_key: []const u8, new_key: []const u8) !bool {
+    pub fn rename_key(self: *Store, old_key: []const u8, new_key: []const u8) !bool {
         assert(old_key.len > 0);
         assert(new_key.len > 0);
 
         if (std.mem.eql(u8, old_key, new_key)) {
-            return self.resolveEntry(old_key, false) != null;
+            return self.resolve_entry(old_key, false) != null;
         }
 
-        const entry = self.resolveEntry(old_key, false) orelse return false;
+        const entry = self.resolve_entry(old_key, false) orelse return false;
 
         if (self.map.get(new_key)) |_| {
             _ = self.delete(new_key);
@@ -692,20 +692,20 @@ pub const Store = struct {
         };
 
         self.allocator.free(old_owned_key);
-        self.touchEntry(entry);
+        self.touch_entry(entry);
         return true;
     }
 
-    pub fn createTimeSeries(self: *Store, key: []const u8, ts: TimeSeries) !void {
+    pub fn create_time_series(self: *Store, key: []const u8, ts: TimeSeries) !void {
         assert(key.len > 0);
         const ts_ptr = try self.allocator.create(TimeSeries);
         errdefer self.allocator.destroy(ts_ptr);
 
         ts_ptr.* = ts;
-        try self.putObject(key, .{ .value = .{ .time_series = ts_ptr } });
+        try self.put_object(key, .{ .value = .{ .time_series = ts_ptr } });
     }
 
-    pub inline fn maybeMaintenance(self: *Store) void {
+    pub inline fn maybe_maintenance(self: *Store) void {
         const now = self.clock.now().toMilliseconds();
         if (now - self.last_maintenance_check < 50) return;
         self.last_maintenance_check = now;
@@ -770,15 +770,15 @@ test "Store set and get" {
 
     const result = store.get("key1");
     try testing.expect(result != null);
-    try testing.expectEqualStrings("hello", result.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("hello", result.?.value.short_string.as_slice());
 }
 
-test "Store setInt and get" {
+test "Store set_int and get" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    try store.setInt("counter", 42);
+    try store.set_int("counter", 42);
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result = store.get("counter");
@@ -793,7 +793,7 @@ test "Store setObject with ZedisObject" {
 
     const obj = ZedisObject{ .value = .{ .string = try testing.testing.allocator.dupe(u8, "test") } };
     defer testing.allocator.free(obj.value.string);
-    try store.putObject("key1", obj);
+    try store.put_object("key1", obj);
 
     const result = store.get("key1");
     try testing.expect(result != null);
@@ -838,18 +838,18 @@ test "Store exists" {
     try testing.expect(!store.exists("key1"));
 }
 
-test "Store getType" {
+test "Store get_type" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    try testing.expect(store.getType("nonexistent") == null);
+    try testing.expect(store.get_type("nonexistent") == null);
 
     try store.set("str_key", "hello");
-    try testing.expectEqual(ValueType.short_string, store.getType("str_key").?);
+    try testing.expectEqual(ValueType.short_string, store.get_type("str_key").?);
 
-    try store.setInt("int_key", 42);
-    try testing.expectEqual(ValueType.int, store.getType("int_key").?);
+    try store.set_int("int_key", 42);
+    try testing.expectEqual(ValueType.int, store.get_type("int_key").?);
 }
 
 test "Store overwrite existing key" {
@@ -862,14 +862,14 @@ test "Store overwrite existing key" {
 
     const result1 = store.get("key1");
     try testing.expect(result1 != null);
-    try testing.expectEqualStrings("original", result1.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("original", result1.?.value.short_string.as_slice());
 
     try store.set("key1", "updated");
     try testing.expectEqual(@as(u32, 1), store.size());
 
     const result2 = store.get("key1");
     try testing.expect(result2 != null);
-    try testing.expectEqualStrings("updated", result2.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("updated", result2.?.value.short_string.as_slice());
 }
 
 test "Store overwrite string with integer" {
@@ -878,10 +878,10 @@ test "Store overwrite string with integer" {
     defer store.deinit();
 
     try store.set("key1", "hello");
-    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+    try testing.expectEqual(ValueType.short_string, store.get_type("key1").?);
 
-    try store.setInt("key1", 123);
-    try testing.expectEqual(ValueType.int, store.getType("key1").?);
+    try store.set_int("key1", 123);
+    try testing.expectEqual(ValueType.int, store.get_type("key1").?);
     try testing.expectEqual(@as(i64, 123), store.get("key1").?.value.int);
 }
 
@@ -890,12 +890,12 @@ test "Store overwrite integer with string" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    try store.setInt("key1", 456);
-    try testing.expectEqual(ValueType.int, store.getType("key1").?);
+    try store.set_int("key1", 456);
+    try testing.expectEqual(ValueType.int, store.get_type("key1").?);
 
     try store.set("key1", "world");
-    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
-    try testing.expectEqualStrings("world", store.get("key1").?.value.short_string.asSlice());
+    try testing.expectEqual(ValueType.short_string, store.get_type("key1").?);
+    try testing.expectEqualStrings("world", store.get("key1").?.value.short_string.as_slice());
 }
 
 test "Store expire functionality" {
@@ -904,21 +904,21 @@ test "Store expire functionality" {
     defer store.deinit();
 
     try store.set("key1", "value1");
-    try testing.expect(!store.isExpired("key1"));
+    try testing.expect(!store.is_expired("key1"));
 
     // Set expiration to far future
     const now = Io.Clock.real.now(testing.io);
     const future_time = now.toMilliseconds() + 1000000;
     const success = try store.expire("key1", future_time);
     try testing.expect(success);
-    try testing.expect(!store.isExpired("key1"));
+    try testing.expect(!store.is_expired("key1"));
     try testing.expect(store.get("key1") != null);
-    try testing.expectEqual(future_time, store.getTtl("key1").?);
+    try testing.expectEqual(future_time, store.get_ttl("key1").?);
 
     // Set expiration to past
     const past_time: i64 = 12345;
     _ = try store.expire("key1", past_time);
-    try testing.expect(store.isExpired("key1"));
+    try testing.expect(store.is_expired("key1"));
     try testing.expect(store.get("key1") == null); // Should be deleted on get
 }
 
@@ -941,7 +941,7 @@ test "Store delete removes from expiration map" {
 
     const deleted = store.delete("key1");
     try testing.expect(deleted);
-    try testing.expect(!store.isExpired("key1"));
+    try testing.expect(!store.is_expired("key1"));
 }
 
 test "Store multiple keys with different types" {
@@ -951,13 +951,13 @@ test "Store multiple keys with different types" {
 
     try store.set("str1", "hello");
     try store.set("str2", "world");
-    try store.setInt("int1", 123);
-    try store.setInt("int2", -456);
+    try store.set_int("int1", 123);
+    try store.set_int("int2", -456);
 
     try testing.expectEqual(@as(u32, 4), store.size());
 
-    try testing.expectEqualStrings("hello", store.get("str1").?.value.short_string.asSlice());
-    try testing.expectEqualStrings("world", store.get("str2").?.value.short_string.asSlice());
+    try testing.expectEqualStrings("hello", store.get("str1").?.value.short_string.as_slice());
+    try testing.expectEqualStrings("world", store.get("str2").?.value.short_string.as_slice());
     try testing.expectEqual(@as(i64, 123), store.get("int1").?.value.int);
     try testing.expectEqual(@as(i64, -456), store.get("int2").?.value.int);
 }
@@ -971,7 +971,7 @@ test "Store empty string values" {
 
     const result = store.get("empty");
     try testing.expect(result != null);
-    try testing.expectEqualStrings("", result.?.value.short_string.asSlice());
+    try testing.expectEqualStrings("", result.?.value.short_string.as_slice());
 }
 
 test "Store zero integer values" {
@@ -979,24 +979,24 @@ test "Store zero integer values" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    try store.setInt("zero", 0);
+    try store.set_int("zero", 0);
 
     const result = store.get("zero");
     try testing.expect(result != null);
     try testing.expectEqual(@as(i64, 0), result.?.value.int);
 }
 
-test "Store createList and getList" {
+test "Store create_list and get_list" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    try testing.expect(try store.getList("mylist") == null);
+    try testing.expect(try store.get_list("mylist") == null);
 
-    const list = try store.createList("mylist");
+    const list = try store.create_list("mylist");
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    const retrieved_list = try store.getList("mylist");
+    const retrieved_list = try store.get_list("mylist");
     try testing.expect(retrieved_list != null);
     try testing.expectEqual(@as(usize, 0), retrieved_list.?.len());
 }
@@ -1006,23 +1006,23 @@ test "Store list append and insert operations" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const list = try store.createList("test_append_insert");
+    const list = try store.create_list("test_append_insert");
 
     try testing.expectEqual(@as(usize, 0), list.len());
 
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "first") });
     try testing.expectEqual(@as(usize, 1), list.len());
-    try testing.expectEqualStrings("first", list.getByIndex(0).?.string);
+    try testing.expectEqualStrings("first", list.get_by_index(0).?.string);
 
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "second") });
     try testing.expectEqual(@as(usize, 2), list.len());
-    try testing.expectEqualStrings("second", list.getByIndex(1).?.string);
+    try testing.expectEqualStrings("second", list.get_by_index(1).?.string);
 
     try list.prepend(.{ .string = try testing.testing.allocator.dupe(u8, "zero") });
     try testing.expectEqual(@as(usize, 3), list.len());
-    try testing.expectEqualStrings("zero", list.getByIndex(0).?.string);
-    try testing.expectEqualStrings("first", list.getByIndex(1).?.string);
-    try testing.expectEqualStrings("second", list.getByIndex(2).?.string);
+    try testing.expectEqualStrings("zero", list.get_by_index(0).?.string);
+    try testing.expectEqualStrings("first", list.get_by_index(1).?.string);
+    try testing.expectEqualStrings("second", list.get_by_index(2).?.string);
 }
 
 test "Store list with mixed value types" {
@@ -1030,26 +1030,26 @@ test "Store list with mixed value types" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const list = try store.createList("test_mixed_values");
+    const list = try store.create_list("test_mixed_values");
 
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "hello") });
     try list.append(.{ .int = 42 });
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "world") });
 
     try testing.expectEqual(@as(usize, 3), list.len());
-    try testing.expectEqualStrings("hello", list.getByIndex(0).?.string);
-    try testing.expectEqual(@as(i64, 42), list.getByIndex(1).?.int);
-    try testing.expectEqualStrings("world", list.getByIndex(2).?.string);
+    try testing.expectEqualStrings("hello", list.get_by_index(0).?.string);
+    try testing.expectEqual(@as(i64, 42), list.get_by_index(1).?.int);
+    try testing.expectEqualStrings("world", list.get_by_index(2).?.string);
 }
 
-test "Store getList with wrong type" {
+test "Store get_list with wrong type" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
     try store.set("notalist", "hello");
 
-    const list = store.getList("notalist");
+    const list = store.get_list("notalist");
     try testing.expect(list == error.WrongType);
 }
 
@@ -1058,8 +1058,8 @@ test "Store list type checking" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    _ = try store.createList("mylist");
-    try testing.expectEqual(ValueType.list, store.getType("mylist").?);
+    _ = try store.create_list("mylist");
+    try testing.expectEqual(ValueType.list, store.get_type("mylist").?);
 }
 
 test "Store overwrite string with list" {
@@ -1068,12 +1068,12 @@ test "Store overwrite string with list" {
     defer store.deinit();
 
     try store.set("key1", "hello");
-    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
+    try testing.expectEqual(ValueType.short_string, store.get_type("key1").?);
 
-    _ = try store.createList("key1");
-    try testing.expectEqual(ValueType.list, store.getType("key1").?);
+    _ = try store.create_list("key1");
+    try testing.expectEqual(ValueType.list, store.get_type("key1").?);
 
-    const list = try store.getList("key1");
+    const list = try store.get_list("key1");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 0), list.?.len());
 }
@@ -1083,15 +1083,15 @@ test "Store overwrite list with string" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const list = try store.createList("key1");
+    const list = try store.create_list("key1");
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item") });
-    try testing.expectEqual(ValueType.list, store.getType("key1").?);
+    try testing.expectEqual(ValueType.list, store.get_type("key1").?);
 
     try store.set("key1", "hello");
-    try testing.expectEqual(ValueType.short_string, store.getType("key1").?);
-    try testing.expectEqualStrings("hello", store.get("key1").?.value.short_string.asSlice());
+    try testing.expectEqual(ValueType.short_string, store.get_type("key1").?);
+    try testing.expectEqualStrings("hello", store.get("key1").?.value.short_string.as_slice());
 
-    const retrieved_list = store.getList("key1");
+    const retrieved_list = store.get_list("key1");
     try testing.expect(retrieved_list == error.WrongType);
 }
 
@@ -1100,7 +1100,7 @@ test "Store delete list key" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const list = try store.createList("mylist");
+    const list = try store.create_list("mylist");
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
 
@@ -1111,7 +1111,7 @@ test "Store delete list key" {
     try testing.expect(deleted);
     try testing.expect(!store.exists("mylist"));
     try testing.expectEqual(@as(u32, 0), store.size());
-    try testing.expect(try store.getList("mylist") == null);
+    try testing.expect(try store.get_list("mylist") == null);
 }
 
 test "Store empty list operations" {
@@ -1119,16 +1119,16 @@ test "Store empty list operations" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const list = try store.createList("test_empty_ops");
+    const list = try store.create_list("test_empty_ops");
     try testing.expectEqual(@as(usize, 0), list.len());
 
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "") });
     try testing.expectEqual(@as(usize, 1), list.len());
-    try testing.expectEqualStrings("", list.getByIndex(0).?.string);
+    try testing.expectEqualStrings("", list.get_by_index(0).?.string);
 
     try list.append(.{ .int = 0 });
     try testing.expectEqual(@as(usize, 2), list.len());
-    try testing.expectEqual(@as(i64, 0), list.getByIndex(1).?.int);
+    try testing.expectEqual(@as(i64, 0), list.get_by_index(1).?.int);
 }
 
 test "Store flush_db removes all keys" {
@@ -1139,10 +1139,10 @@ test "Store flush_db removes all keys" {
     // Add various types of keys
     try store.set("str1", "hello");
     try store.set("str2", "world");
-    try store.setInt("int1", 42);
-    try store.setInt("int2", -100);
+    try store.set_int("int1", 42);
+    try store.set_int("int2", -100);
 
-    const list = try store.createList("mylist");
+    const list = try store.create_list("mylist");
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
     try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
 
@@ -1168,7 +1168,7 @@ test "Store flush_db removes all keys" {
     // Verify getting keys returns null
     try testing.expect(store.get("str1") == null);
     try testing.expect(store.get("int1") == null);
-    try testing.expect(try store.getList("mylist") == null);
+    try testing.expect(try store.get_list("mylist") == null);
 }
 
 test "Store flush_db on empty store" {
@@ -1191,7 +1191,7 @@ test "Store flush_db allows reuse after flush" {
 
     // Add keys
     try store.set("key1", "value1");
-    try store.setInt("key2", 123);
+    try store.set_int("key2", 123);
     try testing.expectEqual(@as(u32, 2), store.size());
 
     // Flush
@@ -1200,11 +1200,11 @@ test "Store flush_db allows reuse after flush" {
 
     // Add new keys after flush
     try store.set("key3", "value3");
-    try store.setInt("key4", 456);
+    try store.set_int("key4", 456);
     try testing.expectEqual(@as(u32, 2), store.size());
 
     // Verify new keys work correctly
-    try testing.expectEqualStrings("value3", store.get("key3").?.value.short_string.asSlice());
+    try testing.expectEqualStrings("value3", store.get("key3").?.value.short_string.as_slice());
     try testing.expectEqual(@as(i64, 456), store.get("key4").?.value.int);
 
     // Verify old keys don't exist
@@ -1264,7 +1264,7 @@ test "Store maintenance() rehashes and reduces capacity" {
         defer testing.allocator.free(key);
         const result = store.get(key);
         try testing.expect(result != null);
-        try testing.expectEqualStrings("value", result.?.value.short_string.asSlice());
+        try testing.expectEqualStrings("value", result.?.value.short_string.as_slice());
     }
 }
 
@@ -1291,7 +1291,7 @@ test "Store maintenance() resets deletion counter" {
     try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
 }
 
-test "Store maybeMaintenance() respects rate limiting" {
+test "Store maybe_maintenance() respects rate limiting" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -1315,12 +1315,12 @@ test "Store maybeMaintenance() respects rate limiting" {
     const capacity_before = store.map.capacity();
 
     // Reset last_maintenance_check to ensure our explicit call isn't rate-limited
-    // (delete() calls maybeMaintenance() automatically, which may have updated it recently)
+    // (delete() calls maybe_maintenance() automatically, which may have updated it recently)
     store.last_maintenance_check = 0;
     const last_check_before = store.last_maintenance_check;
 
-    // Call maybeMaintenance multiple times in quick succession
-    store.maybeMaintenance();
+    // Call maybe_maintenance multiple times in quick succession
+    store.maybe_maintenance();
     const capacity_after_first = store.map.capacity();
     const last_check_after_first = store.last_maintenance_check;
 
@@ -1329,7 +1329,7 @@ test "Store maybeMaintenance() respects rate limiting" {
     try testing.expect(last_check_after_first > last_check_before);
 
     // Immediately call again (within 50ms)
-    store.maybeMaintenance();
+    store.maybe_maintenance();
     const capacity_after_second = store.map.capacity();
     const last_check_after_second = store.last_maintenance_check;
 
@@ -1338,7 +1338,7 @@ test "Store maybeMaintenance() respects rate limiting" {
     try testing.expectEqual(last_check_after_first, last_check_after_second);
 }
 
-test "Store maybeMaintenance() triggers on 50% waste threshold" {
+test "Store maybe_maintenance() triggers on 50% waste threshold" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -1367,13 +1367,13 @@ test "Store maybeMaintenance() triggers on 50% waste threshold" {
     store.last_maintenance_check = 0;
 
     // This should trigger maintenance due to waste threshold
-    store.maybeMaintenance();
+    store.maybe_maintenance();
 
     // Deletion counter should be reset after maintenance
     try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
 }
 
-test "Store maybeMaintenance() triggers on 25% deletions threshold" {
+test "Store maybe_maintenance() triggers on 25% deletions threshold" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -1390,7 +1390,7 @@ test "Store maybeMaintenance() triggers on 25% deletions threshold" {
     const threshold = capacity / 4;
 
     // Block the implicit maintenance calls inside delete() so this test can
-    // deterministically verify the explicit maybeMaintenance() invocation.
+    // deterministically verify the explicit maybe_maintenance() invocation.
     store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
 
     // Delete exactly threshold + 1 keys to trigger maintenance
@@ -1407,7 +1407,7 @@ test "Store maybeMaintenance() triggers on 25% deletions threshold" {
     store.last_maintenance_check = 0;
 
     // This should trigger maintenance due to deletion threshold
-    store.maybeMaintenance();
+    store.maybe_maintenance();
 
     // Deletion counter should be reset after maintenance
     try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
@@ -1445,7 +1445,7 @@ test "Store deletion tracking increments counter" {
     try testing.expectEqual(before_failed_delete, store.deletions_since_rehash);
 }
 
-test "Store evictOne allkeys_lru evicts least recently used key" {
+test "Store evict_one allkeys_lru evicts least recently used key" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{
         .initial_capacity = 16,
@@ -1460,13 +1460,13 @@ test "Store evictOne allkeys_lru evicts least recently used key" {
 
     _ = store.get("key1");
 
-    try testing.expect(store.evictOne(.allkeys_lru));
+    try testing.expect(store.evict_one(.allkeys_lru));
     try testing.expect(store.get("key2") == null);
     try testing.expect(store.get("key1") != null);
     try testing.expect(store.get("key3") != null);
 }
 
-test "Store evictOne volatile_lru only evicts volatile keys" {
+test "Store evict_one volatile_lru only evicts volatile keys" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{
         .initial_capacity = 16,
@@ -1485,13 +1485,13 @@ test "Store evictOne volatile_lru only evicts volatile keys" {
 
     _ = store.get("ttl1");
 
-    try testing.expect(store.evictOne(.volatile_lru));
+    try testing.expect(store.evict_one(.volatile_lru));
     try testing.expect(store.get("ttl2") == null);
     try testing.expect(store.get("ttl1") != null);
     try testing.expect(store.get("persistent") != null);
 }
 
-test "Store evictOne prefers expired ttl entries before LRU tail" {
+test "Store evict_one prefers expired ttl entries before LRU tail" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{
         .initial_capacity = 16,
@@ -1507,7 +1507,7 @@ test "Store evictOne prefers expired ttl entries before LRU tail" {
     _ = try store.expire("expired", 1);
     _ = store.get("fresh2");
 
-    try testing.expect(store.evictOne(.allkeys_lru));
+    try testing.expect(store.evict_one(.allkeys_lru));
     try testing.expect(store.get("expired") == null);
     try testing.expect(store.get("fresh1") != null);
     try testing.expect(store.get("fresh2") != null);

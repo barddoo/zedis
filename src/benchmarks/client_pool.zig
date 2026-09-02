@@ -44,7 +44,7 @@ pub const ClientConnection = struct {
         self.connected.store(false, .monotonic);
     }
 
-    pub fn sendCommand(self: *ClientConnection, command: []const u8) !void {
+    pub fn send_command(self: *ClientConnection, command: []const u8) !void {
         var buffer: [4096]u8 = undefined;
         var w = self.stream.writer(self.io, &buffer);
         try w.interface.writeAll(command);
@@ -52,7 +52,7 @@ pub const ClientConnection = struct {
         _ = self.request_count.fetchAdd(1, .monotonic);
     }
 
-    pub fn readResponse(self: *ClientConnection, buffer: []u8) !usize {
+    pub fn read_response(self: *ClientConnection, buffer: []u8) !usize {
         var read_buf: [4096]u8 = undefined;
         var r = self.stream.reader(self.io, &read_buf);
         const bytes_read = try r.interface.readSliceShort(buffer);
@@ -62,7 +62,7 @@ pub const ClientConnection = struct {
         return bytes_read;
     }
 
-    pub fn isConnected(self: *ClientConnection) bool {
+    pub fn is_connected(self: *ClientConnection) bool {
         return self.connected.load(.monotonic);
     }
 };
@@ -97,11 +97,11 @@ pub const ClientPool = struct {
         self.allocator.free(self.clients);
     }
 
-    pub fn getClient(self: *ClientPool, index: usize) *ClientConnection {
+    pub fn get_client(self: *ClientPool, index: usize) *ClientConnection {
         return &self.clients[index % self.clients.len];
     }
 
-    pub fn totalRequests(self: *ClientPool) usize {
+    pub fn total_requests(self: *ClientPool) usize {
         var total: usize = 0;
         for (self.clients) |*client| {
             total += client.request_count.load(.monotonic);
@@ -128,7 +128,7 @@ pub const WorkloadContext = struct {
     start_time: std.time.Instant,
 };
 
-pub fn workerThreadFn(ctx: *WorkerContext) void {
+pub fn worker_thread_fn(ctx: *WorkerContext) void {
     while (!ctx.should_stop.load(.monotonic)) {
         const iter = ctx.workload_ctx.current_iteration.fetchAdd(1, .monotonic);
         if (iter >= ctx.workload_ctx.iterations) break;
@@ -149,7 +149,7 @@ pub fn workerThreadFn(ctx: *WorkerContext) void {
 }
 
 /// Run a workload across multiple clients
-pub fn runWorkload(
+pub fn run_workload(
     allocator: Allocator,
     pool: *ClientPool,
     workload_fn: *const fn (client: *ClientConnection, workload_ctx: *WorkloadContext, buffer: []u8) anyerror!void,
@@ -220,7 +220,7 @@ pub fn runWorkload(
     const start_time = try std.time.Instant.now();
 
     for (threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, workerThreadFn, .{&worker_contexts[i]});
+        thread.* = try std.Thread.spawn(.{}, worker_thread_fn, .{&worker_contexts[i]});
     }
 
     // Wait for all threads to complete

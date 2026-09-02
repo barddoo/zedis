@@ -11,9 +11,9 @@ pub fn save(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
     _ = args;
 
     // SAVE command persists the single store
-    var zdb = try ZDB.Writer.init(client.allocator, client.getCurrentStore(), client.server.config.dbfilename, client.server.config, client.server.io);
+    var zdb = try ZDB.Writer.init(client.allocator, client.get_current_store(), client.server.config.dbfilename, client.server.config, client.server.io);
     defer zdb.deinit();
-    try zdb.writeFile();
+    try zdb.write_file();
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }

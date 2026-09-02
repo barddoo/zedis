@@ -13,14 +13,14 @@ const Clock = @import("../clock.zig");
 
 /// Helper function to normalize a list index (handles negative indices).
 /// Returns null if the index is out of bounds.
-inline fn normalizeListIndex(index: i64, list_len: usize) ?usize {
-    return ZedisList.normalizeIndex(index, list_len);
+inline fn normalize_list_index(index: i64, list_len: usize) ?usize {
+    return ZedisList.normalize_index(index, list_len);
 }
 
 /// Helper function to normalize a range index with clamping behavior.
 /// Used by LRANGE which clamps out-of-bounds indices instead of returning errors.
 /// Returns null only when the start index is beyond the list length (should return empty list).
-inline fn normalizeRangeIndex(index: i64, list_len: usize, comptime is_start: bool) ?usize {
+inline fn normalize_range_index(index: i64, list_len: usize, comptime is_start: bool) ?usize {
     if (index < 0) {
         const neg_offset = @as(usize, @intCast(-index));
         if (neg_offset > list_len) {
@@ -41,190 +41,190 @@ inline fn normalizeRangeIndex(index: i64, list_len: usize, comptime is_start: bo
 }
 
 pub fn lpush(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
-    const list = try store.getSetList(key);
+    const list = try store.get_set_list(key);
 
     for (args[2..]) |arg| {
-        const pv = try PrimitiveValue.fromSlice(arg.asSlice(), store.allocator);
+        const pv = try PrimitiveValue.from_slice(arg.as_slice(), store.allocator);
         try list.prepend(pv);
     }
 
-    try resp.writeInt(writer, list.len());
+    try resp.write_int(writer, list.len());
 }
 
 pub fn rpush(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
+    const key = args[1].as_slice();
 
-    const list = try store.getSetList(key);
+    const list = try store.get_set_list(key);
 
     for (args[2..]) |arg| {
-        const pv = try PrimitiveValue.fromSlice(arg.asSlice(), store.allocator);
+        const pv = try PrimitiveValue.from_slice(arg.as_slice(), store.allocator);
         try list.append(pv);
     }
 
-    try resp.writeInt(writer, list.len());
+    try resp.write_int(writer, list.len());
 }
 
 pub fn lpop(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const list = try store.getList(key) orelse {
-        try resp.writeNull(writer);
+    const key = args[1].as_slice();
+    const list = try store.get_list(key) orelse {
+        try resp.write_null(writer);
         return;
     };
 
     var count: usize = 1;
 
     if (args.len == 3) {
-        count = try args[2].asUsize();
+        count = try args[2].as_usize();
     }
 
     const list_len = list.len();
     const actual_count = @min(count, list_len);
 
     if (actual_count == 0) {
-        try resp.writeNull(writer);
+        try resp.write_null(writer);
         return;
     }
 
     if (actual_count == 1) {
-        const item = list.popFirst().?;
-        try resp.writePrimitiveValue(writer, item);
+        const item = list.pop_first().?;
+        try resp.write_primitive_value(writer, item);
         return;
     }
     if (actual_count > 1) {
-        try resp.writeListLen(writer, actual_count);
+        try resp.write_list_len(writer, actual_count);
         for (0..actual_count) |_| {
-            const item = list.popFirst().?;
-            try resp.writePrimitiveValue(writer, item);
+            const item = list.pop_first().?;
+            try resp.write_primitive_value(writer, item);
         }
         return;
     }
 }
 
 pub fn rpop(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const list = try store.getList(key) orelse {
-        try resp.writeNull(writer);
+    const key = args[1].as_slice();
+    const list = try store.get_list(key) orelse {
+        try resp.write_null(writer);
         return;
     };
 
     var count: usize = 1;
 
     if (args.len == 3) {
-        count = try args[2].asUsize();
+        count = try args[2].as_usize();
     }
 
     const list_len = list.len();
     const actual_count = @min(count, list_len);
 
     if (actual_count == 0) {
-        try resp.writeNull(writer);
+        try resp.write_null(writer);
         return;
     }
 
     if (actual_count == 1) {
         const item = list.pop().?;
-        try resp.writePrimitiveValue(writer, item);
+        try resp.write_primitive_value(writer, item);
         return;
     }
     if (actual_count > 1) {
-        try resp.writeListLen(writer, actual_count);
+        try resp.write_list_len(writer, actual_count);
         for (0..actual_count) |_| {
             const item = list.pop().?;
-            try resp.writePrimitiveValue(writer, item);
+            try resp.write_primitive_value(writer, item);
         }
         return;
     }
 }
 
 pub fn llen(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const list = try store.getList(key);
+    const key = args[1].as_slice();
+    const list = try store.get_list(key);
 
     if (list) |l| {
-        try resp.writeInt(writer, l.len());
+        try resp.write_int(writer, l.len());
     } else {
-        try resp.writeInt(writer, 0);
+        try resp.write_int(writer, 0);
     }
 }
 
 pub fn lindex(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const index = try args[2].asInt();
-    const list = try store.getList(key) orelse {
-        try resp.writeNull(writer);
+    const key = args[1].as_slice();
+    const index = try args[2].as_int();
+    const list = try store.get_list(key) orelse {
+        try resp.write_null(writer);
         return;
     };
 
-    const actual_index = normalizeListIndex(index, list.len()) orelse {
-        try resp.writeNull(writer);
+    const actual_index = normalize_list_index(index, list.len()) orelse {
+        try resp.write_null(writer);
         return;
     };
 
-    const item = list.getByIndex(actual_index) orelse {
-        try resp.writeNull(writer);
+    const item = list.get_by_index(actual_index) orelse {
+        try resp.write_null(writer);
         return;
     };
 
-    try resp.writePrimitiveValue(writer, item);
+    try resp.write_primitive_value(writer, item);
 }
 
 pub fn lset(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const index = try args[2].asInt();
-    const value = args[3].asSlice();
+    const key = args[1].as_slice();
+    const index = try args[2].as_int();
+    const value = args[3].as_slice();
 
-    const list = try store.getList(key) orelse {
+    const list = try store.get_list(key) orelse {
         return error.NoSuchKey;
     };
 
-    const actual_index = normalizeListIndex(index, list.len()) orelse {
+    const actual_index = normalize_list_index(index, list.len()) orelse {
         return error.KeyNotFound;
     };
 
     // Set value inline if small enough, otherwise duplicate via KV allocator
-    const pv = try PrimitiveValue.fromSlice(value, store.allocator);
-    try list.setByIndex(actual_index, pv);
+    const pv = try PrimitiveValue.from_slice(value, store.allocator);
+    try list.set_by_index(actual_index, pv);
 
-    try resp.writeOK(writer);
+    try resp.write_ok(writer);
 }
 
 pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].asSlice();
-    const start = try args[2].asInt();
-    const stop = try args[3].asInt();
+    const key = args[1].as_slice();
+    const start = try args[2].as_int();
+    const stop = try args[3].as_int();
 
-    const list = try store.getList(key) orelse {
-        try resp.writeListLen(writer, 0);
+    const list = try store.get_list(key) orelse {
+        try resp.write_list_len(writer, 0);
         return;
     };
 
     const list_len = list.len();
     if (list_len == 0) {
-        try resp.writeListLen(writer, 0);
+        try resp.write_list_len(writer, 0);
         return;
     }
 
     // Normalize indices with clamping behavior
-    const actual_start = normalizeRangeIndex(start, list_len, true) orelse {
-        try resp.writeListLen(writer, 0);
+    const actual_start = normalize_range_index(start, list_len, true) orelse {
+        try resp.write_list_len(writer, 0);
         return;
     };
 
-    const actual_stop = normalizeRangeIndex(stop, list_len, false) orelse {
-        try resp.writeListLen(writer, 0);
+    const actual_stop = normalize_range_index(stop, list_len, false) orelse {
+        try resp.write_list_len(writer, 0);
         return;
     };
 
     // Handle invalid range
     if (actual_start > actual_stop) {
-        try resp.writeListLen(writer, 0);
+        try resp.write_list_len(writer, 0);
         return;
     }
 
     const count = actual_stop - actual_start + 1;
-    try resp.writeListLen(writer, count);
+    try resp.write_list_len(writer, count);
 
     // Stream items directly without intermediate allocation
     var current = list.list.first;
@@ -232,7 +232,7 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
     while (current) |node| : (i += 1) {
         if (i >= actual_start and i <= actual_stop) {
             const list_node: *ZedisListNode = @fieldParentPtr("node", node);
-            try resp.writePrimitiveValue(writer, list_node.data);
+            try resp.write_primitive_value(writer, list_node.data);
         }
         if (i > actual_stop) break;
         current = node.next;
@@ -263,7 +263,7 @@ test "LPUSH single element to new list" {
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
     // Verify the list was created and contains the element
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 1), list.?.len());
 }
@@ -293,7 +293,7 @@ test "LPUSH multiple elements to new list" {
     try testing.expectEqualStrings(":3\r\n", writer.buffered());
 
     // Verify the list has 3 elements
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 3), list.?.len());
 }
@@ -330,7 +330,7 @@ test "LPUSH to existing list" {
 
     try testing.expectEqualStrings(":3\r\n", writer.buffered());
 
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 3), list.?.len());
 }
@@ -358,7 +358,7 @@ test "RPUSH single element to new list" {
 
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 1), list.?.len());
 }
@@ -387,7 +387,7 @@ test "RPUSH multiple elements to new list" {
 
     try testing.expectEqualStrings(":3\r\n", writer.buffered());
 
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 3), list.?.len());
 }
@@ -424,7 +424,7 @@ test "LPOP from list with single element" {
     try testing.expectEqualStrings("$5\r\nhello\r\n", writer.buffered());
 
     // List should be empty now
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list == null or list.?.len() == 0);
 }
 
@@ -485,7 +485,7 @@ test "LPOP with count from list with multiple elements" {
     try testing.expectEqualStrings("*2\r\n$3\r\none\r\n$3\r\ntwo\r\n", writer.buffered());
 
     // List should have 1 element left
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 1), list.?.len());
 }
@@ -589,7 +589,7 @@ test "RPOP with count from list with multiple elements" {
     try testing.expectEqualStrings("*2\r\n$5\r\nthree\r\n$3\r\ntwo\r\n", writer.buffered());
 
     // List should have 1 element left
-    const list = try store.getList("mylist");
+    const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 1), list.?.len());
 }

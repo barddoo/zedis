@@ -9,7 +9,7 @@ const ClientPool = client_pool.ClientPool;
 const WorkloadContext = client_pool.WorkloadContext;
 
 /// RESP protocol helper to build commands
-pub fn buildRespCommand(buffer: []u8, parts: []const []const u8) ![]const u8 {
+pub fn build_resp_command(buffer: []u8, parts: []const []const u8) ![]const u8 {
     var pos: usize = 0;
 
     // Write array length
@@ -24,7 +24,7 @@ pub fn buildRespCommand(buffer: []u8, parts: []const []const u8) ![]const u8 {
 }
 
 /// Workload: Write-heavy (90% SET, 10% GET)
-fn workloadWriteHeavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
+fn workload_write_heavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
     const iter = ctx.current_iteration.load(.monotonic);
     const is_write = (@mod(iter, 10) < 9);
 
@@ -36,22 +36,22 @@ fn workloadWriteHeavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: 
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{iter});
         const value = try std.fmt.bufPrint(&val_buf, "value:{d}:data", .{iter});
 
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "SET", key, value });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "SET", key, value });
+        try client.send_command(cmd);
     } else {
         // GET operation
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{iter -| 10});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "GET", key });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "GET", key });
+        try client.send_command(cmd);
     }
 
     // Read response
     var response_buf: [1024]u8 = undefined;
-    _ = try client.readResponse(&response_buf);
+    _ = try client.read_response(&response_buf);
 }
 
 /// Workload: Read-heavy (90% GET, 10% SET)
-fn workloadReadHeavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
+fn workload_read_heavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
     const iter = ctx.current_iteration.load(.monotonic);
     const is_read = (@mod(iter, 10) < 9);
 
@@ -61,23 +61,23 @@ fn workloadReadHeavy(client: *ClientConnection, ctx: *WorkloadContext, buffer: [
     if (is_read) {
         // GET operation
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{@mod(iter, 10000)});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "GET", key });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "GET", key });
+        try client.send_command(cmd);
     } else {
         // SET operation
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{iter});
         const value = try std.fmt.bufPrint(&val_buf, "value:{d}:data", .{iter});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "SET", key, value });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "SET", key, value });
+        try client.send_command(cmd);
     }
 
     // Read response
     var response_buf: [1024]u8 = undefined;
-    _ = try client.readResponse(&response_buf);
+    _ = try client.read_response(&response_buf);
 }
 
 /// Workload: Mixed (70% GET, 30% SET)
-fn workloadMixed(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
+fn workload_mixed(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
     const iter = ctx.current_iteration.load(.monotonic);
     const is_read = (@mod(iter, 10) < 7);
 
@@ -87,23 +87,23 @@ fn workloadMixed(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8)
     if (is_read) {
         // GET operation
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{@mod(iter, 10000)});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "GET", key });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "GET", key });
+        try client.send_command(cmd);
     } else {
         // SET operation
         const key = try std.fmt.bufPrint(&key_buf, "key:{d}", .{iter});
         const value = try std.fmt.bufPrint(&val_buf, "value:{d}:data", .{iter});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "SET", key, value });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "SET", key, value });
+        try client.send_command(cmd);
     }
 
     // Read response
     var response_buf: [1024]u8 = undefined;
-    _ = try client.readResponse(&response_buf);
+    _ = try client.read_response(&response_buf);
 }
 
 /// Workload: List operations (LPUSH/LRANGE)
-fn workloadLists(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
+fn workload_lists(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
     const iter = ctx.current_iteration.load(.monotonic);
     const is_push = (@mod(iter, 10) < 7);
 
@@ -114,32 +114,32 @@ fn workloadLists(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8)
         // LPUSH operation
         const key = try std.fmt.bufPrint(&key_buf, "list:{d}", .{@mod(iter, 100)});
         const value = try std.fmt.bufPrint(&val_buf, "item:{d}", .{iter});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "LPUSH", key, value });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "LPUSH", key, value });
+        try client.send_command(cmd);
     } else {
         // LRANGE operation
         const key = try std.fmt.bufPrint(&key_buf, "list:{d}", .{@mod(iter, 100)});
-        const cmd = try buildRespCommand(buffer, &[_][]const u8{ "LRANGE", key, "0", "10" });
-        try client.sendCommand(cmd);
+        const cmd = try build_resp_command(buffer, &[_][]const u8{ "LRANGE", key, "0", "10" });
+        try client.send_command(cmd);
     }
 
     // Read response
     var response_buf: [4096]u8 = undefined;
-    _ = try client.readResponse(&response_buf);
+    _ = try client.read_response(&response_buf);
 }
 
 /// Workload: Counter increments (INCR)
-fn workloadCounters(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
+fn workload_counters(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8) !void {
     const iter = ctx.current_iteration.load(.monotonic);
     var key_buf: [32]u8 = undefined;
     const key = try std.fmt.bufPrint(&key_buf, "counter:{d}", .{@mod(iter, 100)});
 
-    const cmd = try buildRespCommand(buffer, &[_][]const u8{ "INCR", key });
-    try client.sendCommand(cmd);
+    const cmd = try build_resp_command(buffer, &[_][]const u8{ "INCR", key });
+    try client.send_command(cmd);
 
     // Read response
     var response_buf: [1024]u8 = undefined;
-    _ = try client.readResponse(&response_buf);
+    _ = try client.read_response(&response_buf);
 }
 
 pub const LoadTestConfig = struct {
@@ -149,7 +149,7 @@ pub const LoadTestConfig = struct {
     operations: usize = 10_000,
 };
 
-pub fn runLoadTest(
+pub fn run_load_test(
     allocator: Allocator,
     io: std.Io,
     config: LoadTestConfig,
@@ -171,7 +171,7 @@ pub fn runLoadTest(
 
     // Run workload
     const start_time = try std.time.Instant.now();
-    const result = try client_pool.runWorkload(allocator, &pool, workload_fn, config.operations);
+    const result = try client_pool.run_workload(allocator, &pool, workload_fn, config.operations);
     const end_time = try std.time.Instant.now();
 
     const duration_ns = end_time.since(start_time);
@@ -181,10 +181,10 @@ pub fn runLoadTest(
     try stdout.print("Duration: {d:.2}s\n", .{duration_s});
     try stdout.print("Throughput: {d:.0} ops/sec\n", .{result.throughput});
     try stdout.print("Latency: {any}\n", .{result.latency_stats});
-    try stdout.print("Total requests: {d}\n\n", .{pool.totalRequests()});
+    try stdout.print("Total requests: {d}\n\n", .{pool.total_requests()});
 }
 
-pub fn runAllLoadTests(allocator: Allocator, io: std.Io) !void {
+pub fn run_all_load_tests(allocator: Allocator, io: std.Io) !void {
     var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
@@ -224,11 +224,11 @@ pub fn runAllLoadTests(allocator: Allocator, io: std.Io) !void {
     for (configs) |config| {
         try stdout.print("\n### Configuration: {d} clients, {d} operations ###\n", .{ config.num_clients, config.operations });
 
-        try runLoadTest(allocator, io, config, "Write-Heavy (90W/10R)", workloadWriteHeavy);
-        try runLoadTest(allocator, io, config, "Read-Heavy (90R/10W)", workloadReadHeavy);
-        try runLoadTest(allocator, io, config, "Mixed (70R/30W)", workloadMixed);
-        try runLoadTest(allocator, io, config, "List Operations", workloadLists);
-        try runLoadTest(allocator, io, config, "Counter Increments", workloadCounters);
+        try run_load_test(allocator, io, config, "Write-Heavy (90W/10R)", workload_write_heavy);
+        try run_load_test(allocator, io, config, "Read-Heavy (90R/10W)", workload_read_heavy);
+        try run_load_test(allocator, io, config, "Mixed (70R/30W)", workload_mixed);
+        try run_load_test(allocator, io, config, "List Operations", workload_lists);
+        try run_load_test(allocator, io, config, "Counter Increments", workload_counters);
     }
 
     try stdout.writeAll("\n");

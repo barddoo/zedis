@@ -23,7 +23,7 @@ pub fn init(base_allocator: mem.Allocator, budget: usize, eviction_policy: Confi
     };
 }
 
-pub fn attachStore(self: *KeyValueAllocator, store: *Store) void {
+pub fn attach_store(self: *KeyValueAllocator, store: *Store) void {
     self.store = store;
 }
 
@@ -41,7 +41,7 @@ pub fn allocator(self: *KeyValueAllocator) mem.Allocator {
     };
 }
 
-fn ensureBudget(self: *KeyValueAllocator, additional_bytes: usize) bool {
+fn ensure_budget(self: *KeyValueAllocator, additional_bytes: usize) bool {
     if (additional_bytes > self.memory_budget) return false;
 
     while (self.memory_used.load(.acquire) > self.memory_budget - additional_bytes) {
@@ -51,7 +51,7 @@ fn ensureBudget(self: *KeyValueAllocator, additional_bytes: usize) bool {
             std.debug.assert(false);
             return false;
         };
-        if (!store.evictOne(self.eviction_policy)) return false;
+        if (!store.evict_one(self.eviction_policy)) return false;
     }
 
     return true;
@@ -60,7 +60,7 @@ fn ensureBudget(self: *KeyValueAllocator, additional_bytes: usize) bool {
 fn alloc(ctx: *anyopaque, len: usize, ptr_align: mem.Alignment, ret_addr: usize) ?[*]u8 {
     const self: *KeyValueAllocator = @ptrCast(@alignCast(ctx));
 
-    if (!self.ensureBudget(len)) return null;
+    if (!self.ensure_budget(len)) return null;
 
     const ptr = self.base_allocator.rawAlloc(len, ptr_align, ret_addr) orelse return null;
     _ = self.memory_used.fetchAdd(len, .monotonic);
@@ -71,7 +71,7 @@ fn resize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, 
     const self: *KeyValueAllocator = @ptrCast(@alignCast(ctx));
 
     if (new_len > buf.len) {
-        if (!self.ensureBudget(new_len - buf.len)) return false;
+        if (!self.ensure_budget(new_len - buf.len)) return false;
     }
 
     if (!self.base_allocator.rawResize(buf, buf_align, new_len, ret_addr)) return false;
@@ -91,11 +91,11 @@ fn free(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, ret_addr: usize) v
     _ = self.memory_used.fetchSub(buf.len, .monotonic);
 }
 
-pub fn getMemoryUsage(self: *KeyValueAllocator) usize {
+pub fn get_memory_usage(self: *KeyValueAllocator) usize {
     return self.memory_used.load(.acquire);
 }
 
-pub fn getMemoryBudget(self: *KeyValueAllocator) usize {
+pub fn get_memory_budget(self: *KeyValueAllocator) usize {
     return self.memory_budget;
 }
 
@@ -108,13 +108,13 @@ test "KeyValueAllocator tracks alloc free and resize" {
     var slice = try kv_alloc.alloc(u8, 128);
     defer kv_alloc.free(slice);
 
-    try testing.expectEqual(@as(usize, 128), kv.getMemoryUsage());
+    try testing.expectEqual(@as(usize, 128), kv.get_memory_usage());
 
     slice = try kv_alloc.realloc(slice, 256);
-    try testing.expectEqual(@as(usize, 256), kv.getMemoryUsage());
+    try testing.expectEqual(@as(usize, 256), kv.get_memory_usage());
 
     slice = try kv_alloc.realloc(slice, 64);
-    try testing.expectEqual(@as(usize, 64), kv.getMemoryUsage());
+    try testing.expectEqual(@as(usize, 64), kv.get_memory_usage());
 }
 
 test "KeyValueAllocator returns out of memory without eviction" {
@@ -128,7 +128,7 @@ test "KeyValueAllocator returns out of memory without eviction" {
     });
     defer store.deinit();
 
-    kv.attachStore(&store);
+    kv.attach_store(&store);
 
     var value: [256]u8 = undefined;
     @memset(&value, 'x');
@@ -146,7 +146,7 @@ test "KeyValueAllocator returns out of memory without eviction" {
     }
 
     try testing.expect(saw_oom);
-    try testing.expect(kv.getMemoryUsage() <= kv.getMemoryBudget());
+    try testing.expect(kv.get_memory_usage() <= kv.get_memory_budget());
 }
 
 test "KeyValueAllocator evicts under allkeys_lru pressure" {
@@ -161,7 +161,7 @@ test "KeyValueAllocator evicts under allkeys_lru pressure" {
     });
     defer store.deinit();
 
-    kv.attachStore(&store);
+    kv.attach_store(&store);
 
     var value: [256]u8 = undefined;
     @memset(&value, 'y');
@@ -178,7 +178,7 @@ test "KeyValueAllocator evicts under allkeys_lru pressure" {
         try store.set(key, value[0..]);
     }
 
-    try testing.expect(kv.getMemoryUsage() <= kv.getMemoryBudget());
+    try testing.expect(kv.get_memory_usage() <= kv.get_memory_budget());
     try testing.expect(store.size() < 64);
     try testing.expect(store.get(last_key[0..last_key_len]) != null);
     try testing.expect(store.get("key-0") == null);
@@ -200,7 +200,7 @@ test "KeyValueAllocator survives repeated budgeted overwrite pressure" {
     });
     defer store.deinit();
 
-    kv.attachStore(&store);
+    kv.attach_store(&store);
 
     var keys: [key_count][32]u8 = undefined;
     var values: [key_count][value_len]u8 = undefined;
@@ -226,7 +226,7 @@ test "KeyValueAllocator survives repeated budgeted overwrite pressure" {
         _ = store.get(read_key);
     }
 
-    try testing.expect(kv.getMemoryUsage() <= kv.getMemoryBudget());
+    try testing.expect(kv.get_memory_usage() <= kv.get_memory_budget());
 }
 
 test "KeyValueAllocator works with smp allocator parent" {
@@ -244,7 +244,7 @@ test "KeyValueAllocator works with smp allocator parent" {
     });
     defer store.deinit();
 
-    kv.attachStore(&store);
+    kv.attach_store(&store);
 
     var value: [1024]u8 = undefined;
     @memset(&value, 7);
