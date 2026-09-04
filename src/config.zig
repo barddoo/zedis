@@ -175,7 +175,7 @@ pub fn requires_auth(self: Config) bool {
 }
 
 pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
-    var args_iter = if (builtin.os.tag == .windows) args.iterate() else try std.process.Args.Iterator.initAllocator(args, allocator);
+    var args_iter = if (builtin.os.tag == .windows) try std.process.Args.Iterator.initAllocator(args, allocator) else args.iterate();
 
     _ = args_iter.skip();
 
