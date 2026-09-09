@@ -170,11 +170,11 @@ pub fn run_load_test(
     defer pool.deinit();
 
     // Run workload
-    const start_time = try std.time.Instant.now();
+    const start_time = std.Io.Clock.awake.now(io);
     const result = try client_pool.run_workload(allocator, &pool, workload_fn, config.operations);
-    const end_time = try std.time.Instant.now();
+    const end_time = std.Io.Clock.awake.now(io);
 
-    const duration_ns = end_time.since(start_time);
+    const duration_ns: u64 = @intCast(start_time.durationTo(end_time).toNanoseconds());
     const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
     // Print results

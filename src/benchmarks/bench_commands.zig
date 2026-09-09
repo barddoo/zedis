@@ -93,7 +93,7 @@ fn bench_command_set(ctx: *CommandBenchContext) !void {
         .{ .data = value },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark GET command (with pre-populated data)
@@ -108,7 +108,7 @@ fn bench_command_get(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark INCR command
@@ -123,7 +123,7 @@ fn bench_command_incr(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark DEL command
@@ -141,7 +141,7 @@ fn bench_command_del(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark EXISTS command
@@ -156,7 +156,7 @@ fn bench_command_exists(ctx: *CommandBenchContext) !void {
         .{ .data = key },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark LPUSH command
@@ -174,7 +174,7 @@ fn bench_command_lpush(ctx: *CommandBenchContext) !void {
         .{ .data = value },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark LRANGE command
@@ -191,7 +191,7 @@ fn bench_command_lrange(ctx: *CommandBenchContext) !void {
         .{ .data = "10" },
     };
 
-    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+    try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
 }
 
 /// Benchmark RESP parsing
@@ -374,7 +374,7 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
                     .{ .data = value },
                 };
                 ctx.reset_writer();
-                try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &ctx.aof_writer, &args);
+                try ctx.registry.execute_command(&ctx.discarding.writer, &ctx.client, ctx.store, &args);
             }
         }
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const zio = @import("zio");
 const storeModule = @import("../store.zig");
 const Store = storeModule.Store;
 const Value = @import("../parser.zig").Value;
@@ -329,6 +330,7 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
 
     try resp.write_list_len(writer, results.items.len);
     for (results.items) |r| {
+        try zio.maybeYield();
         try resp.write_bulk_string(writer, r.doc_id);
         if (opts.with_scores) try resp.write_double_bulk_string(writer, r.score);
         if (opts.no_content) continue;

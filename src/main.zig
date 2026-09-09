@@ -8,9 +8,19 @@ const log = std.log.scoped(.main);
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
-    const rt = try zio.Runtime.init(allocator, .{
+    // Runtime tuning keys must be known before the runtime exists; read them
+    // from the config file with blocking I/O (the async parse runs later).
+    const runtime_prefs = Config.read_runtime_prefs(allocator, init.minimal.args);
+
+    var rt_options: zio.RuntimeOptions = .{
         .executors = .auto,
-    });
+    };
+    if (runtime_prefs.metrics_log_interval_seconds > 0) {
+        rt_options.metrics_log_interval = zio.Duration.fromSeconds(runtime_prefs.metrics_log_interval_seconds);
+    }
+    rt_options.stack_pool.prewarm = runtime_prefs.stack_pool_prewarm;
+
+    const rt = try zio.Runtime.init(allocator, rt_options);
     defer rt.deinit();
     const io = rt.io();
 
@@ -20,10 +30,11 @@ pub fn main(init: std.process.Init) !void {
     };
 
     // Create and start the server with configuration
-    var redis_server = Server.init_with_config(allocator, cfg.bind, cfg.port, cfg, io) catch |err| {
+    const redis_server = Server.init_with_config(allocator, cfg.bind, cfg.port, cfg, io) catch |err| {
         log.err("Failed to initialize server: {s}", .{@errorName(err)});
         return err;
     };
+    defer allocator.destroy(redis_server);
     defer redis_server.deinit();
 
     log.info("Zedis server listening on {s}:{d}", .{ cfg.bind, cfg.port });
