@@ -64,8 +64,8 @@ pub const Writer = struct {
     }
 
     /// Encode command args as RESP and write to the AOF file.
-    /// Called outside the store_mutex critical section — zio makes file I/O async,
-    /// suspending the coroutine instead of blocking the OS thread.
+    /// Runs on the store thread (a plain OS thread); zio performs the file I/O
+    /// and blocks only that thread while it completes.
     pub fn write_command(self: *Writer, args: []const Value) void {
         if (!self.enabled) return;
         resp.write_list_len(self.writer(), args.len) catch return;

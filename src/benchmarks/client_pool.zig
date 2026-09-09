@@ -53,9 +53,14 @@ pub const ClientConnection = struct {
     }
 
     pub fn read_response(self: *ClientConnection, buffer: []u8) !usize {
-        var read_buf: [4096]u8 = undefined;
-        var r = self.stream.reader(self.io, &read_buf);
-        const bytes_read = try r.interface.readSliceShort(buffer);
+        // Raw blocking read on the socket. Using std.Io's buffered Reader here
+        // failed deterministically with error.ReadFailed when multiple worker
+        // threads shared the single-threaded Threaded Io, so stay on plain
+        // posix for the hot path.
+        const bytes_read = std.posix.read(self.stream.socket.handle, buffer) catch |err| switch (err) {
+            error.WouldBlock => return error.ReadFailed,
+            else => return error.ReadFailed,
+        };
         if (bytes_read == 0) {
             return error.ConnectionClosed;
         }
@@ -71,6 +76,7 @@ pub const ClientPool = struct {
     clients: []ClientConnection,
     allocator: Allocator,
     address: Io.net.IpAddress,
+    io: Io,
 
     pub fn init(allocator: Allocator, num_clients: usize, host: []const u8, port: u16) !ClientPool {
         const address = try Io.net.IpAddress.parse(host, port);
@@ -87,6 +93,7 @@ pub const ClientPool = struct {
             .clients = clients,
             .allocator = allocator,
             .address = address,
+            .io = io,
         };
     }
 
@@ -125,7 +132,6 @@ pub const WorkerContext = struct {
 pub const WorkloadContext = struct {
     iterations: usize,
     current_iteration: std.atomic.Value(usize),
-    start_time: std.time.Instant,
 };
 
 pub fn worker_thread_fn(ctx: *WorkerContext) void {
@@ -133,15 +139,15 @@ pub fn worker_thread_fn(ctx: *WorkerContext) void {
         const iter = ctx.workload_ctx.current_iteration.fetchAdd(1, .monotonic);
         if (iter >= ctx.workload_ctx.iterations) break;
 
-        const start = std.time.Instant.now() catch unreachable;
+        const start = Io.Clock.awake.now(ctx.client.io);
 
         ctx.workload_fn(ctx.client, ctx.workload_ctx, ctx.buffer) catch |err| {
             std.log.err("Worker {} error: {}", .{ ctx.client_id, err });
             continue;
         };
 
-        const end = std.time.Instant.now() catch unreachable;
-        const duration: u64 = end.since(start);
+        const end = Io.Clock.awake.now(ctx.client.io);
+        const duration: u64 = @intCast(start.durationTo(end).toNanoseconds());
 
         ctx.latency_tracker.record(duration) catch {};
         _ = ctx.ops_completed.fetchAdd(1, .monotonic);
@@ -165,7 +171,6 @@ pub fn run_workload(
     var workload_ctx = WorkloadContext{
         .iterations = iterations,
         .current_iteration = std.atomic.Value(usize).init(0),
-        .start_time = try std.time.Instant.now(),
     };
 
     // Allocate per-worker buffers to avoid race conditions
@@ -217,7 +222,7 @@ pub fn run_workload(
     const threads = try allocator.alloc(std.Thread, num_clients);
     defer allocator.free(threads);
 
-    const start_time = try std.time.Instant.now();
+    const start_time = Io.Clock.awake.now(pool.io);
 
     for (threads, 0..) |*thread, i| {
         thread.* = try std.Thread.spawn(.{}, worker_thread_fn, .{&worker_contexts[i]});
@@ -228,8 +233,8 @@ pub fn run_workload(
         thread.join();
     }
 
-    const end_time = try std.time.Instant.now();
-    const duration_ns = end_time.since(start_time);
+    const end_time = Io.Clock.awake.now(pool.io);
+    const duration_ns: u64 = @intCast(start_time.durationTo(end_time).toNanoseconds());
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
     // Merge all latency stats

@@ -104,7 +104,10 @@ pub fn echo(writer: *std.Io.Writer, args: []const Value) !void {
 pub fn quit(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     _ = args; // Unused parameter
     try resp.write_ok(writer);
-    client.connection.close(client.io);
+    // Don't close the socket here: commands run on the store thread, but the
+    // client task owns the connection. Mark it for shutdown and let the
+    // client task close it after flushing the "+OK" reply.
+    client.disconnect_requested.store(true, .release);
 }
 
 pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {

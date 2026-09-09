@@ -174,17 +174,65 @@ pub fn requires_auth(self: Config) bool {
     return self.requirepass != null;
 }
 
-pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
-    var args_iter = if (builtin.os.tag == .windows) args.iterate() else try std.process.Args.Iterator.initAllocator(args, allocator);
+/// Runtime options that must be known before the zio runtime is initialized.
+/// Read from the config file with blocking I/O at startup; the main async
+/// config parse happens afterwards against the already-running runtime.
+pub const RuntimePrefs = struct {
+    /// zio RuntimeOptions.metrics_log_interval in seconds. 0 disables the
+    /// scheduler metrics monitor thread.
+    metrics_log_interval_seconds: u32 = 0,
+    /// zio RuntimeOptions.stack_pool.prewarm: number of coroutine stack slots
+    /// to carve and commit at runtime init. 0 disables prewarming.
+    stack_pool_prewarm: u32 = 0,
+};
+
+/// Path of the config file passed on the command line, if any.
+pub fn find_config_file(allocator: std.mem.Allocator, args: std.process.Args) ?[]const u8 {
+    var args_iter = if (builtin.os.tag == .windows) args.iterate() else (std.process.Args.Iterator.initAllocator(args, allocator) catch return null);
 
     _ = args_iter.skip();
 
-    if (args_iter.next()) |file_name| {
-        return try read_file(allocator, io, file_name);
+    return args_iter.next();
+}
+
+pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
+    const file_name = find_config_file(allocator, args) orelse return .{};
+    return read_file(allocator, io, file_name);
+}
+
+/// Scans the config file (blocking, pre-runtime) for the runtime tuning keys
+/// the zio runtime needs at init time. Missing file or keys return defaults.
+pub fn read_runtime_prefs(allocator: std.mem.Allocator, args: std.process.Args) RuntimePrefs {
+    const file_name = find_config_file(allocator, args) orelse return .{};
+
+    // Blocking startup read (pre-runtime): the global single-threaded Io does
+    // file I/O synchronously without needing a zio runtime.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var file = Dir.cwd().openFile(io, file_name, .{}) catch return .{};
+    defer file.close(io);
+
+    var buffer: [1024 * 8]u8 = undefined;
+    const n = file.readPositionalAll(io, &buffer, 0) catch return .{};
+    const content = buffer[0..n];
+
+    var prefs: RuntimePrefs = .{};
+    var lines = std.mem.splitScalar(u8, content, '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0 or trimmed[0] == '#') continue;
+
+        var parts = std.mem.tokenizeAny(u8, trimmed, " \t");
+        const key = parts.next() orelse continue;
+        const value = parts.rest();
+
+        if (eql(u8, key, "scheduler-metrics-log-interval")) {
+            prefs.metrics_log_interval_seconds = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
+        } else if (eql(u8, key, "stack-pool-prewarm")) {
+            prefs.stack_pool_prewarm = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
+        }
     }
 
-    // Return default config
-    return .{};
+    return prefs;
 }
 
 fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
