@@ -8,16 +8,21 @@ pub const StackWriter = struct {
     buf: [default_capacity]u8 = undefined,
     overflow: ?std.ArrayListUnmanaged(u8) = null,
     heap_allocator: Allocator,
+    /// Embedded writer interface. `drain` recovers the StackWriter from this
+    /// field's address (it cannot use `w.buffer`, which points at the heap
+    /// overflow list once a response outgrows the inline buffer).
+    interface: Writer = undefined,
 
     pub fn init(heap_allocator: Allocator) StackWriter {
         return .{ .heap_allocator = heap_allocator };
     }
 
-    pub fn writer(self: *StackWriter) Writer {
-        return .{
+    pub fn writer(self: *StackWriter) *Writer {
+        self.interface = .{
             .vtable = &.{ .drain = drain },
             .buffer = &self.buf,
         };
+        return &self.interface;
     }
 
     pub fn deinit(self: *StackWriter) void {
@@ -27,7 +32,7 @@ pub const StackWriter = struct {
     }
 
     fn drain(w: *Writer, data: []const []const u8, splat: usize) Writer.Error!usize {
-        const self: *StackWriter = @ptrCast(@alignCast(w.buffer.ptr));
+        const self: *StackWriter = @alignCast(@fieldParentPtr("interface", w));
 
         const existing = Writer.buffered(w);
         const new_total = Writer.countSplat(data, splat);

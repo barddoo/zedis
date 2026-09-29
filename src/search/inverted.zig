@@ -12,7 +12,7 @@ pub const TermPosting = struct {
 };
 
 pub const TermInfo = struct {
-    ddff: u32 = 0,
+    df: u32 = 0,
     posts: std.ArrayListUnmanaged(TermPosting) = .empty,
 };
 

@@ -8,6 +8,8 @@ const Config = @import("config.zig");
 const string_match = @import("./util/string_match.zig").string_match;
 const ScalableBloomFilter = @import("./bloom/bloom.zig").BloomFilter;
 const SearchIndex = @import("./search/index.zig").SearchIndex;
+pub const ShortString = @import("types.zig").ShortString;
+pub const PrimitiveValue = @import("types.zig").PrimitiveValue;
 
 const assert = std.debug.assert;
 
@@ -15,7 +17,9 @@ const assert = std.debug.assert;
 const optimal_max_load_percentage = 80;
 const expired_eviction_scan_limit = 16;
 
-const EntryMap = std.StringHashMapUnmanaged(*StoreEntry);
+// Keys up to this many bytes are stored inline in the entry (no heap allocation).
+const inline_key_max = 23;
+
 const testing = std.testing;
 
 pub const ValueType = enum(u8) {
@@ -36,9 +40,6 @@ pub const ValueType = enum(u8) {
     }
 };
 
-pub const ShortString = @import("types.zig").ShortString;
-pub const PrimitiveValue = @import("types.zig").PrimitiveValue;
-
 pub const ZedisValue = union(ValueType) {
     string: []const u8,
     int: i64,
@@ -53,8 +54,19 @@ pub const ZedisObject = struct {
     value: ZedisValue,
 };
 
+// Open-addressing hash table slot: stored hash (fast probing) + entry index.
+const empty_slot: u32 = std.math.maxInt(u32);
+const tomb_slot: u32 = std.math.maxInt(u32) - 1;
+const no_entry: u32 = std.math.maxInt(u32);
+
+const Slot = struct {
+    hash: u32,
+    idx: u32,
+};
+
 const StoreEntry = struct {
     key: []const u8,
+    inline_key_data: [inline_key_max]u8,
     object: ZedisObject,
     expires_at: ?i64 = null,
     last_access: u64 = 0,
@@ -62,6 +74,7 @@ const StoreEntry = struct {
     next_lru: ?*StoreEntry = null,
     prev_volatile: ?*StoreEntry = null,
     next_volatile: ?*StoreEntry = null,
+    next_free: u32 = no_entry,
 };
 
 pub const StoreOptions = struct {
@@ -70,9 +83,38 @@ pub const StoreOptions = struct {
     maxmemory_samples: u32 = 5,
 };
 
+pub const EntryView = struct {
+    key: []const u8,
+    object: *const ZedisObject,
+    expires_at: ?i64,
+};
+
+pub const Iterator = struct {
+    store: *const Store,
+    slot_index: usize,
+
+    pub fn next(self: *Iterator) ?EntryView {
+        while (self.slot_index < self.store.slots.len) {
+            const s = self.store.slots[self.slot_index];
+            self.slot_index += 1;
+            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            const entry = self.store.entries[s.idx];
+            return .{
+                .key = entry.key,
+                .object = &entry.object,
+                .expires_at = entry.expires_at,
+            };
+        }
+        return null;
+    }
+};
+
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    map: EntryMap,
+    slots: []Slot,
+    entries: []*StoreEntry,
+    count: usize,
+    free_head: u32,
 
     io: Io,
     clock: *Clock,
@@ -91,27 +133,97 @@ pub const Store = struct {
     eviction_policy: Config.EvictionPolicy,
     maxmemory_samples: usize,
 
+    inline fn keyHash(key: []const u8) u32 {
+        return @truncate(std.hash.Wyhash.hash(0, key));
+    }
+
+    fn findSlot(self: *const Store, h32: u32, key: []const u8) ?usize {
+        if (self.slots.len == 0) return null;
+        const mask = self.slots.len - 1;
+        var i: usize = @as(usize, h32) & mask;
+        var remaining: usize = self.slots.len;
+        while (remaining > 0) : (remaining -= 1) {
+            const s = self.slots[i];
+            if (s.idx == empty_slot) return null;
+            if (s.idx != tomb_slot and s.hash == h32) {
+                const entry = self.entries[s.idx];
+                if (std.mem.eql(u8, entry.key, key)) return i;
+            }
+            i = (i + 1) & mask;
+        }
+        return null;
+    }
+
+    fn findInsertSlot(self: *const Store, h32: u32) usize {
+        const mask = self.slots.len - 1;
+        var i: usize = @as(usize, h32) & mask;
+        while (self.slots[i].idx != empty_slot and self.slots[i].idx != tomb_slot) {
+            i = (i + 1) & mask;
+        }
+        return i;
+    }
+
+    fn rebuildSlots(self: *Store, min_capacity: usize) !void {
+        var cap: usize = 16;
+        while (cap < min_capacity) cap *= 2;
+        const new_slots = try self.allocator.alloc(Slot, cap);
+        for (new_slots) |*s| s.* = .{ .hash = 0, .idx = empty_slot };
+        if (self.slots.len > 0) {
+            const mask = cap - 1;
+            for (self.slots) |s| {
+                if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+                var i: usize = @as(usize, s.hash) & mask;
+                while (new_slots[i].idx != empty_slot and new_slots[i].idx != tomb_slot) i = (i + 1) & mask;
+                new_slots[i] = s;
+            }
+            self.allocator.free(self.slots);
+        }
+        self.slots = new_slots;
+    }
+
+    fn allocEntry(self: *Store) !struct { idx: u32, entry: *StoreEntry } {
+        if (self.free_head != no_entry) {
+            const idx = self.free_head;
+            const entry = self.entries[idx];
+            self.free_head = entry.next_free;
+            return .{ .idx = idx, .entry = entry };
+        }
+        const entry = try self.allocator.create(StoreEntry);
+        const new_len = self.entries.len + 1;
+        self.entries = self.allocator.realloc(self.entries, new_len) catch |err| {
+            self.allocator.destroy(entry);
+            return err;
+        };
+        self.entries[new_len - 1] = entry;
+        return .{ .idx = @intCast(new_len - 1), .entry = entry };
+    }
+
+    fn setEntryKey(self: *Store, entry: *StoreEntry, key: []const u8) !void {
+        if (key.len <= inline_key_max) {
+            @memcpy(entry.inline_key_data[0..key.len], key);
+            entry.key = entry.inline_key_data[0..key.len];
+        } else {
+            entry.key = try self.allocator.dupe(u8, key);
+        }
+    }
+
     inline fn maybe_resize(self: *Store) !void {
-        const capacity = self.map.capacity();
-        if (capacity == 0) {
-            try self.map.ensureTotalCapacity(self.allocator, 1);
+        if (self.slots.len == 0) {
+            try self.rebuildSlots(16);
             return;
         }
-
-        const current_load = (self.map.count() * 100) / capacity;
-        if (current_load > optimal_max_load_percentage) {
-            const new_capacity = capacity * 2;
-            try self.map.ensureTotalCapacity(self.allocator, new_capacity);
+        if ((self.count + 1) * 100 >= self.slots.len * optimal_max_load_percentage) {
+            try self.rebuildSlots(self.slots.len * 2);
         }
     }
 
     pub fn init(allocator: std.mem.Allocator, io: Io, clock: *Clock, options: StoreOptions) !Store {
-        var map: EntryMap = .empty;
-        try map.ensureTotalCapacity(allocator, options.initial_capacity);
-
-        return .{
+        var store = Store{
             .allocator = allocator,
-            .map = map,
+            .slots = &.{},
+            .entries = &.{},
+            .count = 0,
+            .free_head = no_entry,
             .lru_clock = .init(0),
             .lru_head = null,
             .lru_tail = null,
@@ -126,15 +238,22 @@ pub const Store = struct {
             .io = io,
             .clock = clock,
         };
+        try store.rebuildSlots(options.initial_capacity);
+        return store;
     }
 
     pub fn deinit(self: *Store) void {
-        var map_it = self.map.iterator();
-        while (map_it.next()) |entry| {
-            self.free_entry(entry.value_ptr.*);
+        for (self.slots) |s| {
+            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            self.free_entry_contents(self.entries[s.idx]);
         }
-
-        self.map.deinit(self.allocator);
+        for (self.entries) |entry| {
+            self.allocator.destroy(entry);
+        }
+        if (self.slots.len > 0) self.allocator.free(self.slots);
+        if (self.entries.len > 0) self.allocator.free(self.entries);
+        self.slots = &.{};
+        self.entries = &.{};
         self.lru_head = null;
         self.lru_tail = null;
         self.volatile_lru_head = null;
@@ -143,14 +262,26 @@ pub const Store = struct {
         self.volatile_sample_cursor = null;
     }
 
-    pub inline fn size(self: Store) u32 {
-        return @intCast(self.map.count());
+    pub fn iterator(self: *const Store) Iterator {
+        return .{ .store = self, .slot_index = 0 };
     }
 
-    fn delete_map_entry(self: *Store, map_entry: EntryMap.Entry) void {
-        const entry = map_entry.value_ptr.*;
-        self.map.removeByPtr(map_entry.key_ptr);
-        self.free_entry(entry);
+    pub inline fn size(self: Store) u32 {
+        return @intCast(self.count);
+    }
+
+    pub inline fn capacity(self: *const Store) usize {
+        return self.slots.len;
+    }
+
+    fn delete_at_slot(self: *Store, slot: usize) void {
+        const idx = self.slots[slot].idx;
+        const entry = self.entries[idx];
+        self.slots[slot] = .{ .hash = 0, .idx = tomb_slot };
+        self.count -= 1;
+        self.free_entry_contents(entry);
+        entry.next_free = self.free_head;
+        self.free_head = idx;
         self.deletions_since_rehash += 1;
         self.maybe_maintenance();
     }
@@ -295,22 +426,21 @@ pub const Store = struct {
         self.record_access(entry);
     }
 
-    fn free_entry(self: *Store, entry: *StoreEntry) void {
+    fn free_entry_contents(self: *Store, entry: *StoreEntry) void {
         self.detach_lru(entry);
         self.detach_volatile(entry);
         self.free_object_value(entry.object);
-        if (entry.key.len > 0) self.allocator.free(entry.key);
-        self.allocator.destroy(entry);
+        if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
     }
 
     fn resolve_entry(self: *Store, key: []const u8, touch: bool) ?*StoreEntry {
-        const map_entry = self.map.getEntry(key) orelse return null;
-        const entry = map_entry.value_ptr.*;
+        const slot = self.findSlot(keyHash(key), key) orelse return null;
+        const entry = self.entries[self.slots[slot].idx];
 
         if (entry.expires_at) |expiration_time| {
             const now = self.clock.now().toMilliseconds();
             if (now > expiration_time) {
-                self.delete_map_entry(map_entry);
+                self.delete_at_slot(slot);
                 return null;
             }
         }
@@ -338,7 +468,9 @@ pub const Store = struct {
     pub inline fn put_object(self: *Store, key: []const u8, object: ZedisObject) !void {
         assert(key.len > 0);
 
-        if (self.map.get(key)) |entry| {
+        const h32 = keyHash(key);
+        if (self.findSlot(h32, key)) |slot| {
+            const entry = self.entries[self.slots[slot].idx];
             if (std.meta.activeTag(entry.object.value) == .time_series) {
                 return error.AlreadyExists;
             }
@@ -357,22 +489,25 @@ pub const Store = struct {
 
         try self.maybe_resize();
 
-        const owned_key = try self.allocator.dupe(u8, key);
-        errdefer self.allocator.free(owned_key);
-
         const new_object = try self.clone_owned_object(object);
         errdefer self.free_object_value(new_object);
 
-        const entry = try self.allocator.create(StoreEntry);
-        errdefer self.allocator.destroy(entry);
+        const alloc = try self.allocEntry();
+        const entry = alloc.entry;
+        const idx = alloc.idx;
 
         entry.* = .{
-            .key = owned_key,
+            .key = undefined,
+            .inline_key_data = undefined,
             .object = new_object,
             .last_access = if (self.tracks_access_time()) self.next_access_stamp() else 0,
         };
 
-        try self.map.put(self.allocator, entry.key, entry);
+        try self.setEntryKey(entry, key);
+
+        const slot = self.findInsertSlot(h32);
+        self.slots[slot] = .{ .hash = h32, .idx = idx };
+        self.count += 1;
         if (self.uses_global_lru()) {
             self.attach_lru_head(entry);
         }
@@ -381,8 +516,8 @@ pub const Store = struct {
     pub fn delete(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
 
-        const map_entry = self.map.getEntry(key) orelse return false;
-        self.delete_map_entry(map_entry);
+        const slot = self.findSlot(keyHash(key), key) orelse return false;
+        self.delete_at_slot(slot);
         return true;
     }
 
@@ -406,9 +541,9 @@ pub const Store = struct {
     pub fn keys(self: Store, allocator: std.mem.Allocator, pattern: []const u8) ![][]const u8 {
         var result: std.ArrayList([]const u8) = .empty;
 
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            const key = entry.value_ptr.*.key;
+        for (self.slots) |s| {
+            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            const key = self.entries[s.idx].key;
             if (pattern.len == 0 or string_match(pattern, key)) {
                 try result.append(allocator, key);
             }
@@ -498,7 +633,8 @@ pub const Store = struct {
         assert(key.len > 0);
         assert(time > 0);
 
-        const entry = self.map.get(key) orelse return false;
+        const slot = self.findSlot(keyHash(key), key) orelse return false;
+        const entry = self.entries[self.slots[slot].idx];
         entry.expires_at = time;
         self.touch_entry(entry);
         if (self.tracks_volatile_entries()) {
@@ -514,20 +650,22 @@ pub const Store = struct {
 
     pub inline fn is_expired(self: Store, key: []const u8) bool {
         assert(key.len > 0);
-        const entry = self.map.get(key) orelse return false;
+        const slot = self.findSlot(keyHash(key), key) orelse return false;
+        const entry = self.entries[self.slots[slot].idx];
         const expiration_time = entry.expires_at orelse return false;
         return self.clock.now().toMilliseconds() > expiration_time;
     }
 
     pub inline fn get_ttl(self: Store, key: []const u8) ?i64 {
         assert(key.len > 0);
-        const entry = self.map.get(key) orelse return null;
-        return entry.expires_at;
+        const slot = self.findSlot(keyHash(key), key) orelse return null;
+        return self.entries[self.slots[slot].idx].expires_at;
     }
 
     pub inline fn persist(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
-        const entry = self.map.get(key) orelse return false;
+        const slot = self.findSlot(keyHash(key), key) orelse return false;
+        const entry = self.entries[self.slots[slot].idx];
         if (entry.expires_at == null) return false;
 
         entry.expires_at = null;
@@ -539,16 +677,16 @@ pub const Store = struct {
     }
 
     pub inline fn random_key(self: *Store, random: std.Random) ?[]const u8 {
-        const total_keys = self.map.count();
+        const total_keys = self.count;
         if (total_keys == 0) return null;
 
         const random_idx = random.intRangeAtMost(usize, 0, total_keys - 1);
 
-        var it = self.map.iterator();
         var current_idx: usize = 0;
-        while (it.next()) |entry| {
+        for (self.slots) |s| {
+            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
             if (current_idx == random_idx) {
-                return entry.value_ptr.*.key;
+                return self.entries[s.idx].key;
             }
             current_idx += 1;
         }
@@ -557,12 +695,18 @@ pub const Store = struct {
     }
 
     pub inline fn flush_db(self: *Store) void {
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            self.free_entry(entry.value_ptr.*);
+        for (self.slots) |s| {
+            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            self.free_entry_contents(self.entries[s.idx]);
         }
-
-        self.map.clearRetainingCapacity();
+        for (self.slots) |*s| s.* = .{ .hash = 0, .idx = empty_slot };
+        for (self.entries) |entry| {
+            self.allocator.destroy(entry);
+        }
+        if (self.entries.len > 0) self.allocator.free(self.entries);
+        self.entries = &.{};
+        self.free_head = no_entry;
+        self.count = 0;
         self.lru_head = null;
         self.lru_tail = null;
         self.volatile_lru_head = null;
@@ -673,25 +817,30 @@ pub const Store = struct {
 
         const entry = self.resolve_entry(old_key, false) orelse return false;
 
-        if (self.map.get(new_key)) |_| {
+        if (self.findSlot(keyHash(new_key), new_key) != null) {
             _ = self.delete(new_key);
         }
 
-        const new_owned_key = try self.allocator.dupe(u8, new_key);
-        errdefer self.allocator.free(new_owned_key);
+        if (new_key.len > inline_key_max) {
+            const new_heap = try self.allocator.dupe(u8, new_key);
+            if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
+            entry.key = new_heap;
+        } else {
+            if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
+            @memcpy(entry.inline_key_data[0..new_key.len], new_key);
+            entry.key = entry.inline_key_data[0..new_key.len];
+        }
 
-        const old_owned_key = entry.key;
-        const removed = self.map.remove(old_key);
-        assert(removed);
+        const old_slot = self.findSlot(keyHash(old_key), old_key) orelse unreachable;
+        const idx = self.slots[old_slot].idx;
+        self.slots[old_slot] = .{ .hash = 0, .idx = tomb_slot };
+        self.count -= 1;
 
-        entry.key = new_owned_key;
-        self.map.put(self.allocator, entry.key, entry) catch |err| {
-            entry.key = old_owned_key;
-            self.map.put(self.allocator, old_owned_key, entry) catch unreachable;
-            return err;
-        };
+        const new_h32 = keyHash(new_key);
+        const slot = self.findInsertSlot(new_h32);
+        self.slots[slot] = .{ .hash = new_h32, .idx = idx };
+        self.count += 1;
 
-        self.allocator.free(old_owned_key);
         self.touch_entry(entry);
         return true;
     }
@@ -710,43 +859,42 @@ pub const Store = struct {
         if (now - self.last_maintenance_check < 50) return;
         self.last_maintenance_check = now;
 
-        const capacity = self.map.capacity();
-        if (capacity == 0) return;
+        const cap = self.slots.len;
+        if (cap == 0) return;
 
-        const entry_count = self.map.count();
-        const waste = capacity - entry_count;
+        const entry_count = self.count;
+        const waste = cap - entry_count;
 
-        if ((waste > capacity / 2) or (self.deletions_since_rehash > capacity / 4)) {
+        if ((waste > cap / 2) or (self.deletions_since_rehash > cap / 4)) {
             self.maintenance();
         }
     }
 
     pub fn maintenance(self: *Store) void {
-        const capacity = self.map.capacity();
-        const entry_count = self.map.count();
+        const cap = self.slots.len;
+        const entry_count = self.count;
 
-        if (entry_count == 0 or capacity == 0) {
+        if (cap == 0) {
             self.deletions_since_rehash = 0;
             return;
         }
 
-        const estimated_waste_ratio = @as(f64, @floatFromInt(capacity - entry_count)) /
-            @as(f64, @floatFromInt(capacity));
+        if (entry_count == 0) {
+            if (self.deletions_since_rehash > 0) {
+                self.rebuildSlots(16) catch return;
+            }
+            self.deletions_since_rehash = 0;
+            return;
+        }
+
+        const estimated_waste_ratio = @as(f64, @floatFromInt(cap - entry_count)) /
+            @as(f64, @floatFromInt(cap));
 
         const should_rehash = (estimated_waste_ratio > 0.5) or
-            (self.deletions_since_rehash > capacity / 4);
+            (self.deletions_since_rehash > cap / 4);
 
         if (should_rehash) {
-            var new_map: EntryMap = .empty;
-            new_map.ensureTotalCapacity(self.allocator, entry_count) catch return;
-
-            var it = self.map.iterator();
-            while (it.next()) |entry| {
-                new_map.putAssumeCapacity(entry.value_ptr.*.key, entry.value_ptr.*);
-            }
-
-            self.map.deinit(self.allocator);
-            self.map = new_map;
+            self.rebuildSlots(entry_count * 2) catch return;
             self.deletions_since_rehash = 0;
         }
     }
@@ -791,7 +939,7 @@ test "Store setObject with ZedisObject" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    const obj = ZedisObject{ .value = .{ .string = try testing.testing.allocator.dupe(u8, "test") } };
+    const obj = ZedisObject{ .value = .{ .string = try testing.allocator.dupe(u8, "test") } };
     defer testing.allocator.free(obj.value.string);
     try store.put_object("key1", obj);
 
@@ -1010,15 +1158,15 @@ test "Store list append and insert operations" {
 
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "first") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "first") });
     try testing.expectEqual(@as(usize, 1), list.len());
     try testing.expectEqualStrings("first", list.get_by_index(0).?.string);
 
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "second") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "second") });
     try testing.expectEqual(@as(usize, 2), list.len());
     try testing.expectEqualStrings("second", list.get_by_index(1).?.string);
 
-    try list.prepend(.{ .string = try testing.testing.allocator.dupe(u8, "zero") });
+    try list.prepend(.{ .string = try testing.allocator.dupe(u8, "zero") });
     try testing.expectEqual(@as(usize, 3), list.len());
     try testing.expectEqualStrings("zero", list.get_by_index(0).?.string);
     try testing.expectEqualStrings("first", list.get_by_index(1).?.string);
@@ -1032,9 +1180,9 @@ test "Store list with mixed value types" {
 
     const list = try store.create_list("test_mixed_values");
 
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "hello") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "hello") });
     try list.append(.{ .int = 42 });
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "world") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "world") });
 
     try testing.expectEqual(@as(usize, 3), list.len());
     try testing.expectEqualStrings("hello", list.get_by_index(0).?.string);
@@ -1084,7 +1232,7 @@ test "Store overwrite list with string" {
     defer store.deinit();
 
     const list = try store.create_list("key1");
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "item") });
     try testing.expectEqual(ValueType.list, store.get_type("key1").?);
 
     try store.set("key1", "hello");
@@ -1101,8 +1249,8 @@ test "Store delete list key" {
     defer store.deinit();
 
     const list = try store.create_list("mylist");
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "item2") });
 
     try testing.expect(store.exists("mylist"));
     try testing.expectEqual(@as(u32, 1), store.size());
@@ -1122,7 +1270,7 @@ test "Store empty list operations" {
     const list = try store.create_list("test_empty_ops");
     try testing.expectEqual(@as(usize, 0), list.len());
 
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "") });
     try testing.expectEqual(@as(usize, 1), list.len());
     try testing.expectEqualStrings("", list.get_by_index(0).?.string);
 
@@ -1143,8 +1291,8 @@ test "Store flush_db removes all keys" {
     try store.set_int("int2", -100);
 
     const list = try store.create_list("mylist");
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item1") });
-    try list.append(.{ .string = try testing.testing.allocator.dupe(u8, "item2") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "item1") });
+    try list.append(.{ .string = try testing.allocator.dupe(u8, "item2") });
 
     // Verify all keys exist
     try testing.expectEqual(@as(u32, 5), store.size());
@@ -1225,8 +1373,8 @@ test "Store maintenance() rehashes and reduces capacity" {
         try store.set(key, "value");
     }
 
-    const capacity_before = store.map.capacity();
-    const size_before = store.map.count();
+    const capacity_before = store.capacity();
+    const size_before = @as(usize, store.size());
     try testing.expect(capacity_before > 0);
     try testing.expectEqual(@as(usize, 1000), size_before);
 
@@ -1239,17 +1387,17 @@ test "Store maintenance() rehashes and reduces capacity" {
         try testing.expect(deleted);
     }
 
-    const size_after_delete = store.map.count();
+    const size_after_delete = @as(usize, store.size());
     try testing.expectEqual(@as(usize, 500), size_after_delete);
 
     // Deletes may trigger automatic maintenance, but capacity should never grow here.
-    try testing.expect(store.map.capacity() <= capacity_before);
+    try testing.expect(store.capacity() <= capacity_before);
 
     // Run maintenance to clean up tombstones
     store.maintenance();
 
-    const capacity_after = store.map.capacity();
-    const size_after = store.map.count();
+    const capacity_after = store.capacity();
+    const size_after = @as(usize, store.size());
 
     // Size should remain the same
     try testing.expectEqual(@as(usize, 500), size_after);
@@ -1312,7 +1460,7 @@ test "Store maybe_maintenance() respects rate limiting" {
         _ = store.delete(key);
     }
 
-    const capacity_before = store.map.capacity();
+    const capacity_before = store.capacity();
 
     // Reset last_maintenance_check to ensure our explicit call isn't rate-limited
     // (delete() calls maybe_maintenance() automatically, which may have updated it recently)
@@ -1321,7 +1469,7 @@ test "Store maybe_maintenance() respects rate limiting" {
 
     // Call maybe_maintenance multiple times in quick succession
     store.maybe_maintenance();
-    const capacity_after_first = store.map.capacity();
+    const capacity_after_first = store.capacity();
     const last_check_after_first = store.last_maintenance_check;
 
     // First call should trigger maintenance
@@ -1330,7 +1478,7 @@ test "Store maybe_maintenance() respects rate limiting" {
 
     // Immediately call again (within 50ms)
     store.maybe_maintenance();
-    const capacity_after_second = store.map.capacity();
+    const capacity_after_second = store.capacity();
     const last_check_after_second = store.last_maintenance_check;
 
     // Second call should be rate-limited (no maintenance)
@@ -1351,7 +1499,7 @@ test "Store maybe_maintenance() triggers on 50% waste threshold" {
         try store.set(key, "value");
     }
 
-    const capacity_before = store.map.capacity();
+    const capacity_before = store.capacity();
 
     // Delete more than 50% of capacity to trigger waste threshold
     // (capacity - count) > capacity / 2
@@ -1386,7 +1534,7 @@ test "Store maybe_maintenance() triggers on 25% deletions threshold" {
         try store.set(key, "value");
     }
 
-    const capacity = store.map.capacity();
+    const capacity = store.capacity();
     const threshold = capacity / 4;
 
     // Block the implicit maintenance calls inside delete() so this test can

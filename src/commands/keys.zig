@@ -1,4 +1,5 @@
 const std = @import("std");
+const zio = @import("zio");
 const storeModule = @import("../store.zig");
 const Store = storeModule.Store;
 const Client = @import("../client.zig").Client;
@@ -18,6 +19,7 @@ pub fn keys(writer: *Writer, store: *Store, args: []const Value) !void {
     defer store.allocator.free(all_keys);
     try resp.write_list_len(writer, all_keys.len);
     for (all_keys) |key| {
+        try zio.maybeYield();
         try resp.write_bulk_string(writer, key);
     }
 }

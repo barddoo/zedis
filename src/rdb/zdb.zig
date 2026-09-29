@@ -168,21 +168,21 @@ pub const Writer = struct {
     }
 
     fn write_cache(self: *Writer) !void {
-        var it = self.store.map.iterator();
+        var it = self.store.iterator();
         while (it.next()) |entry| {
-            if (self.store.get_ttl(entry.key_ptr.*)) |expiry| {
+            if (entry.expires_at) |expiry| {
                 try self.write_byte(OPCODE_EXPIRE_TIME_MS);
                 try self.write_int(i64, expiry, .little);
             }
 
-            const value = entry.value_ptr.*.object.value;
+            const value = entry.object.value;
 
             const op_code = Writer.map_to_op_code(value);
             try self.write_byte(op_code);
 
-            try self.write_string(entry.value_ptr.*.key);
+            try self.write_string(entry.key);
 
-            switch (entry.value_ptr.*.object.value) {
+            switch (entry.object.value) {
                 .int => |i| try self.write_int_value(i),
                 .string => |s| try self.write_string(s),
                 .short_string => |ss| try self.write_string(ss.as_slice()),

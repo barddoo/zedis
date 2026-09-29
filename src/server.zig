@@ -1,4 +1,5 @@
 const std = @import("std");
+const zio = @import("zio");
 const Allocator = std.mem.Allocator;
 const Client = @import("client.zig").Client;
 const ClientMailbox = @import("client_mailbox.zig").ClientMailbox;
@@ -16,7 +17,6 @@ const aof = @import("./aof/aof.zig");
 const Clock = @import("clock.zig");
 const ClientHandle = @import("types.zig").ClientHandle;
 const invalid_client_slot_index = @import("types.zig").invalid_client_slot_index;
-const StackWriter = @import("stack_writer.zig").StackWriter;
 const Io = std.Io;
 const Stream = Io.net.Stream;
 
@@ -26,49 +26,6 @@ const Server = @This();
 const mailbox_capacity = 256;
 
 const Value = @import("parser.zig").Value;
-
-pub const CommandNode = struct {
-    args: []Value,
-    arg_data: []u8, // owned heap buffer for all Value.data slices
-    client: *Client,
-    done: std.Io.Event = .unset,
-    next: ?*CommandNode = null,
-};
-
-pub const CommandQueue = struct {
-    head: ?*CommandNode = null,
-    tail: ?*CommandNode = null,
-    mutex: std.atomic.Mutex = .unlocked,
-
-    fn lock_mutex(m: *std.atomic.Mutex) void {
-        while (!m.tryLock()) {
-            std.atomic.spinLoopHint();
-        }
-    }
-
-    pub fn push(self: *CommandQueue, node: *CommandNode) void {
-        lock_mutex(&self.mutex);
-        defer self.mutex.unlock();
-
-        node.next = null;
-        if (self.tail) |t| {
-            t.next = node;
-        } else {
-            self.head = node;
-        }
-        self.tail = node;
-    }
-
-    pub fn pop_all(self: *CommandQueue) ?*CommandNode {
-        lock_mutex(&self.mutex);
-        defer self.mutex.unlock();
-
-        const h = self.head;
-        self.head = null;
-        self.tail = null;
-        return h;
-    }
-};
 
 const ClientSlotState = enum(u8) {
     free,
@@ -104,14 +61,15 @@ free_list_head: std.atomic.Value(u64),
 pubsub_map: std.StringHashMap([]ClientHandle),
 pubsub_mutex: std.atomic.Mutex = .unlocked,
 
-// Command queue: client threads push, store thread pops
-command_queue: CommandQueue,
-command_queue_event: std.Io.Event = .unset,
-store_thread: ?std.Thread = null,
-store_thread_stop: std.atomic.Value(bool) = .init(false),
+// Serializes command execution against the shared store. Client coroutines run
+// concurrently on zio's executor threads (executors = .auto, see main.zig), and
+// each command executes inline on its own client's executor thread — no store
+// thread / cross-thread hand-off. A cooperative (parking) lock is used rather
+// than a raw spinlock: command handlers may suspend (AOF file I/O, SAVE), and a
+// spinlock held across a suspension would deadlock once every executor thread
+// is spinning on it. Uncontended acquisition is a single atomic CAS.
+store_lock: zio.Mutex = .init,
 
-// Mutex for direct client-thread store access (bypasses store thread)
-store_mutex: std.atomic.Mutex = .unlocked,
 // Custom allocator for key-value store with eviction
 kv_allocator: KeyValueAllocator,
 clock: Clock,
@@ -158,28 +116,51 @@ pub fn init_with_config(
     port: u16,
     config: Config,
     io: Io,
-) !Server {
-    const address = try Io.net.IpAddress.parse(host, port);
+) !*Server {
+    // The server owns self-referencing state (clock updater task, kv store
+    // back-pointer, pubsub context), so it must live at a stable address
+    // rather than being returned by value from this frame.
+    const server = try base_allocator.create(Server);
+    errdefer base_allocator.destroy(server);
 
-    const listener = try address.listen(io, .{ .kernel_backlog = 128 * 10 });
+    server.* = .{
+        .config = config,
+        .base_allocator = base_allocator,
+        .address = try Io.net.IpAddress.parse(host, port),
+        .listener = undefined,
+        .io = io,
+        .client_slots = &.{},
+        .free_list_head = .init(0),
+        .pubsub_map = .init(base_allocator),
+        .kv_allocator = undefined,
+        .clock = undefined,
+        .store = undefined,
+        .registry = undefined,
+        .pubsub_context = undefined,
+        .redisVersion = undefined,
+        .createdTime = 0,
+        .aof_writer = undefined,
+    };
+
+    server.listener = try server.address.listen(io, .{ .kernel_backlog = 128 * 10, .reuse_address = true });
 
     // Initialize the KV allocator with eviction support
-    var kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
+    server.kv_allocator = try KeyValueAllocator.init(base_allocator, config.kv_memory_budget, config.eviction_policy);
 
     // Initialize shared clock for the store
-    var clock = Clock.init(io, config.clock_update_ms);
-    try clock.start();
-    errdefer clock.deinit();
+    server.clock = Clock.init(io, config.clock_update_ms);
+    try server.clock.start();
+    errdefer server.clock.deinit();
 
     // Initialize the single shared store with the KV allocator
-    const store = try Store.init(kv_allocator.allocator(), io, &clock, .{
+    server.store = try Store.init(server.kv_allocator.allocator(), io, &server.clock, .{
         .initial_capacity = config.initial_capacity,
         .eviction_policy = config.eviction_policy,
         .maxmemory_samples = config.maxmemory_samples,
     });
 
     // Initialize command registry with base allocator (lives for server lifetime)
-    const registry = try command_init.init_registry(base_allocator);
+    server.registry = try command_init.init_registry(base_allocator);
 
     // Allocate fixed memory pools on heap
     const client_slots = try base_allocator.alloc(ClientSlot, config.max_clients);
@@ -188,60 +169,34 @@ pub fn init_with_config(
         const next_index: u32 = if (index + 1 < client_slots.len) @intCast(index + 1) else invalid_client_slot_index;
         slot.next_free.store(next_index, .release);
     }
+    server.client_slots = client_slots;
+    server.free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0));
 
     // Use shared clock for timestamp
-    const ts = clock.now();
-    const now = ts.toMilliseconds();
+    const now = server.clock.now().toMilliseconds();
+    server.createdTime = now;
 
-    var server = Server{
-        .config = config,
-        .base_allocator = base_allocator,
-        .address = address,
-        .listener = listener,
-        .pubsub_map = .init(base_allocator),
-        .pubsub_mutex = .unlocked,
-        .command_queue = .{},
-        .command_queue_event = .unset,
-        .io = io,
+    // AOF
+    server.aof_writer = try aof.Writer.init(
+        base_allocator,
+        io,
+        config.appendonly,
+        config.appendfilename,
+        config.dir,
+        config.aof_write_buffer_size,
+        std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
+    );
 
-        // Fixed allocations - heap allocated
-        .client_slots = client_slots,
-        .free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
-
-        // KV allocator and store
-        .kv_allocator = kv_allocator,
-        .clock = clock,
-        .store = store,
-        .registry = registry,
-        .pubsub_context = undefined, // Will be initialized after server creation
-
-        // Metadata
-        .redisVersion = undefined,
-        .createdTime = now,
-
-        // AOF
-        .aof_writer = try aof.Writer.init(
-            base_allocator,
-            io,
-            config.appendonly,
-            config.appendfilename,
-            config.dir,
-            config.aof_write_buffer_size,
-            std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
-        ),
-    };
-
-    // Rebind self-references after the final Server value is in place.
+    // Rebind self-references against the stable, final location.
     server.store.clock = &server.clock;
     server.kv_allocator.attach_store(&server.store);
+    server.pubsub_context = PubSubContext.init(server);
 
     if (config.requires_auth()) {
         log.info("Authentication required", .{});
     } else {
         log.debug("No authentication required", .{});
     }
-
-    server.pubsub_context = PubSubContext.init(&server);
 
     // Prefer AOF to RDB
     // Load AOF file if it exists
@@ -284,21 +239,6 @@ pub fn init_with_config(
 }
 
 pub fn deinit(self: *Server) void {
-    // Stop store thread and drain queue
-    self.store_thread_stop.store(true, .release);
-    self.command_queue_event.set(self.io);
-    if (self.store_thread) |t| {
-        t.join();
-    }
-    // Drain remaining commands (client threads may have enqueued before stop signal)
-    while (self.command_queue.pop_all()) |head| {
-        var node: ?*CommandNode = head;
-        while (node) |n| {
-            n.done.set(self.io);
-            node = n.next;
-        }
-    }
-
     // Network cleanup
     self.listener.deinit(self.io);
 
@@ -333,65 +273,25 @@ pub fn deinit(self: *Server) void {
     log.info("Server deinitialized - all memory freed", .{});
 }
 
-fn store_thread_loop(server: *Server) void {
-    while (!server.store_thread_stop.load(.acquire)) {
-        if (server.command_queue.pop_all()) |head| {
-            var node: ?*CommandNode = head;
-            while (node) |n| {
-                const next = n.next;
-                server.process_command(n);
-                n.done.set(server.io);
-                node = next;
-            }
-        } else {
-            server.command_queue_event.waitUncancelable(server.io);
-            server.command_queue_event.reset();
-        }
+fn execute_locked(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
+    // Append to the AOF before replying, like Redis. Runs under the store lock
+    // (the single writer to the store), so file I/O is serialized with
+    // commands in execution order.
+    if (args.len > 0) {
+        self.write_aof(args[0].as_slice(), args);
     }
+
+    self.process_command_direct(client, args, response_writer);
 }
 
-fn process_command(self: *Server, node: *CommandNode) void {
-    var sw = StackWriter.init(self.base_allocator);
-    defer sw.deinit();
-    var response_writer = sw.writer();
-    self.process_command_direct(node.client, node.args, &response_writer);
+/// Run one parsed command inline on the calling client coroutine, serialized
+/// against other clients by the store lock. The RESP response is written into
+/// `response_writer`. Returns after the handler (and any AOF work) finished.
+pub fn execute_command(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
+    self.store_lock.lock() catch return;
+    defer self.store_lock.unlock();
 
-    const response = sw.slice(&response_writer);
-    if (response.len == 0) return;
-
-    const client = node.client;
-    const client_slot = client.slot_handle;
-    if (client_slot.slot_index >= self.client_slots.len) return;
-    const slot = &self.client_slots[client_slot.slot_index];
-
-    const owned = self.base_allocator.dupe(u8, response) catch return;
-    const msg_node = slot.mailbox.acquire_node(self.base_allocator, owned) catch {
-        self.base_allocator.free(owned);
-        return;
-    };
-
-    slot.mailbox.lock_atomic();
-    defer slot.mailbox.unlock_atomic();
-
-    const is_active = slot.state.load(.acquire) == .active and
-        slot.generation.load(.acquire) == client.slot_handle.generation and
-        !slot.mailbox.closed.load(.acquire);
-    if (!is_active) {
-        slot.mailbox.release_node(self.base_allocator, msg_node);
-        return;
-    }
-    if (slot.mailbox.pending_count >= slot.mailbox.capacity) {
-        slot.mailbox.release_node(self.base_allocator, msg_node);
-        return;
-    }
-
-    if (slot.mailbox.tail) |tail| {
-        tail.next = msg_node;
-    } else {
-        slot.mailbox.head = msg_node;
-    }
-    slot.mailbox.tail = msg_node;
-    slot.mailbox.pending_count += 1;
+    self.execute_locked(client, args, response_writer);
 }
 
 pub fn process_command_direct(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
@@ -405,8 +305,9 @@ pub fn process_command_direct(self: *Server, client: *Client, args: []const Valu
     };
 }
 
-/// Write a command to the AOF file. Called after store_mutex is released,
-/// so the file write (which zio makes async) does not serialize other commands.
+/// Write a command to the AOF file. Runs inline with command execution on the
+/// single event-loop thread; the file I/O is async and parks only the running
+/// coroutine while it completes.
 pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) void {
     if (!self.aof_writer.enabled) return;
     if (!self.registry.should_write_to_aof(command_name)) return;
@@ -414,16 +315,8 @@ pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) v
 }
 
 // The main server loop. It waits for incoming connections and
-// handles each client (one thread per connection).
+// handles each client (one coroutine per connection).
 pub fn listen(self: *Server) !void {
-    // Spawn store thread AFTER server is in final location
-    self.store_thread = try std.Thread.spawn(.{}, store_thread_loop, .{self});
-    defer {
-        self.store_thread_stop.store(true, .release);
-        self.command_queue_event.set(self.io);
-        self.store_thread.?.join();
-    }
-
     var connection_group: Io.Group = .init;
     defer connection_group.wait(self.io); // Wait for all clients to finish
 
@@ -433,7 +326,7 @@ pub fn listen(self: *Server) !void {
             continue;
         };
 
-        // Handle this client on its own thread
+        // Handle this client on its own coroutine
         connection_group.async(self.io, handle_connection_async, .{ self, conn });
     }
 }
@@ -827,11 +720,6 @@ fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
         .free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
         .pubsub_map = .init(allocator),
         .pubsub_mutex = .unlocked,
-        .command_queue = .{},
-        .command_queue_event = .unset,
-        .store_thread = null,
-        .store_thread_stop = .init(false),
-        .store_mutex = .unlocked,
         .kv_allocator = undefined,
         .clock = Clock.init(testing.io, 0),
         .store = undefined,

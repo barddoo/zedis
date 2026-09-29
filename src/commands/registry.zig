@@ -191,7 +191,7 @@ pub const CommandRegistry = struct {
                 },
             }
         } else {
-            resp.write_error(writer, "ERR unknown command") catch {};
+            resp.write_error(writer, "unknown command") catch {};
         }
     }
 };
