@@ -80,6 +80,20 @@ pub fn build(b: *std.Build) void {
     const bench_micro_step = b.step("bench:micro", "Run micro-benchmarks");
     bench_micro_step.dependOn(&run_bench_micro.step);
 
+    const bench_inline_exe = b.addExecutable(.{
+        .name = "bench-inline",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bench_inline.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    bench_inline_exe.root_module.addImport("zio", zio_mod);
+
+    const run_bench_inline = b.addRunArtifact(bench_inline_exe);
+    const bench_inline_step = b.step("bench:inline", "Measure inline command execution (no store thread)");
+    bench_inline_step.dependOn(&run_bench_inline.step);
+
     const bench_load_exe = b.addExecutable(.{
         .name = "benchmark-load",
         .root_module = b.createModule(.{

@@ -64,8 +64,9 @@ pub const Writer = struct {
     }
 
     /// Encode command args as RESP and write to the AOF file.
-    /// Runs on the store thread (a plain OS thread); zio performs the file I/O
-    /// and blocks only that thread while it completes.
+    /// Runs under the store lock on the executing client coroutine; zio
+    /// performs the file I/O and parks only that coroutine while it completes
+    /// (other clients wait on the store lock instead of spinning).
     pub fn write_command(self: *Writer, args: []const Value) void {
         if (!self.enabled) return;
         resp.write_list_len(self.writer(), args.len) catch return;

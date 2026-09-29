@@ -13,6 +13,10 @@ pub fn main(init: std.process.Init) !void {
     const runtime_prefs = Config.read_runtime_prefs(allocator, init.minimal.args);
 
     var rt_options: zio.RuntimeOptions = .{
+        // Multi-threaded executor: client I/O and parsing fan out across
+        // cores; command execution against the single logical store is
+        // serialized by the store lock (server.zig). This measured ~2x faster
+        // than running every client on one executor thread.
         .executors = .auto,
     };
     if (runtime_prefs.metrics_log_interval_seconds > 0) {
