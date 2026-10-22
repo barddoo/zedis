@@ -6,6 +6,9 @@ const Allocator = std.mem.Allocator;
 
 const Parser = @This();
 
+/// Largest bulk string accepted, matching Redis' default proto-max-bulk-len.
+const max_bulk_len = 512 * 1024 * 1024;
+
 // Represents a value in the RESP protocol, which is a bulk string.
 pub const Value = struct {
     data: []const u8,
@@ -45,6 +48,8 @@ pub const Command = struct {
     // Large args storage: only allocated when > 6 args
     large_args: ?std.ArrayList(Value) = null,
     allocator: Allocator,
+    // False when arg data borrows the reader's buffer instead of `allocator`.
+    owns_args: bool = true,
 
     pub fn init(allocator: Allocator) Command {
         return .{
@@ -57,9 +62,10 @@ pub const Command = struct {
 
     pub fn deinit(self: *Command) void {
         // Free all argument data
-        const args = self.get_args();
-        for (args) |arg| {
-            self.allocator.free(arg.data);
+        if (self.owns_args) {
+            for (self.get_args()) |arg| {
+                self.allocator.free(arg.data);
+            }
         }
         // Free ArrayList if it was allocated
         if (self.large_args) |*list| {
@@ -138,9 +144,21 @@ pub const Command = struct {
 };
 
 allocator: Allocator,
+/// When set, argument data is sliced from the reader's buffer instead of
+/// copied. Only valid when the whole command is already buffered (so no refill
+/// can move the bytes) and the args are not used after the next read.
+borrow_args: bool = false,
 
 pub fn init(allocator: Allocator) Parser {
     return .{ .allocator = allocator };
+}
+
+/// Parses a command whose bytes are all in `reader`'s buffer, returning args
+/// that borrow that buffer. See `borrow_args`.
+pub fn parse_borrowed(self: *Parser, reader: *Reader) !Command {
+    self.borrow_args = true;
+    defer self.borrow_args = false;
+    return self.parse(reader);
 }
 
 // Main parsing function. Supports both RESP array commands and inline commands:
@@ -174,6 +192,7 @@ fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
     // from allocating huge arrays (e.g., "*999999999\r\n")
     const initial_capacity = @min(count, 1024);
     var command = Command.init(self.allocator);
+    command.owns_args = !self.borrow_args;
     errdefer command.deinit(); // Clean up on error to prevent memory leaks
 
     try command.ensure_capacity(initial_capacity);
@@ -193,6 +212,7 @@ fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
 
 fn parse_inline_command(self: *Parser, line: []const u8) !Command {
     var command = Command.init(self.allocator);
+    command.owns_args = !self.borrow_args;
     errdefer command.deinit();
 
     // Split line by spaces (skip empty segments from multiple spaces)
@@ -207,7 +227,7 @@ fn parse_inline_command(self: *Parser, line: []const u8) !Command {
         while (end < line.len and line[end] != ' ') : (end += 1) {}
 
         const arg = line[start..end];
-        const data = try self.allocator.dupe(u8, arg);
+        const data = if (self.borrow_args) arg else try self.allocator.dupe(u8, arg);
         try command.add_arg(.{ .data = data });
 
         start = end;
@@ -224,16 +244,20 @@ fn parse_inline_command(self: *Parser, line: []const u8) !Command {
 fn read_bulk_data(self: *Parser, reader: *Reader, bulk_line: []const u8) ![]const u8 {
     const len = fmt.parseInt(i64, bulk_line[1..], 10) catch return error.InvalidProtocol;
 
-    if (len < 0) {
+    if (len < 0 or len > max_bulk_len) {
         return error.InvalidProtocol; // Null bulk strings not supported in this example
     }
 
     const ulen: usize = @intCast(len);
-    const data = try self.allocator.alloc(u8, ulen);
-    errdefer self.allocator.free(data);
+    const data = if (self.borrow_args) try reader.take(ulen) else blk: {
+        const owned = try self.allocator.alloc(u8, ulen);
+        errdefer self.allocator.free(owned);
 
-    // Read exact number of bytes (uses buffered reading)
-    try reader.readSliceAll(data);
+        // Read exact number of bytes (uses buffered reading)
+        try reader.readSliceAll(owned);
+        break :blk owned;
+    };
+    errdefer if (!self.borrow_args) self.allocator.free(data);
 
     // Expect trailing CRLF after the bulk string payload
     const cr = try reader.takeByte();
@@ -683,4 +707,61 @@ test "Command ensure_capacity pre-allocation" {
     }
 
     try testing.expectEqual(@as(usize, 10), command.arg_count());
+}
+
+test "parser parse_borrowed slices args from the reader buffer" {
+    const test_data = "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n*1\r\n$4\r\nPING\r\n";
+    var reader: Reader = .fixed(test_data);
+    var parser = Parser.init(testing.allocator);
+
+    var command = try parser.parse_borrowed(&reader);
+    defer command.deinit();
+
+    try testing.expect(!command.owns_args);
+    try testing.expectEqualStrings("value", command.get_args()[2].data);
+    const value_ptr = @intFromPtr(command.get_args()[2].data.ptr);
+    try testing.expect(value_ptr >= @intFromPtr(test_data.ptr) and value_ptr < @intFromPtr(test_data.ptr) + test_data.len);
+
+    // The parser stops after one command and goes back to copying afterwards.
+    try testing.expectEqualStrings("*1\r\n$4\r\nPING\r\n", reader.buffered());
+    var owned = try parser.parse(&reader);
+    defer owned.deinit();
+    try testing.expect(owned.owns_args);
+    try testing.expectEqualStrings("PING", owned.get_args()[0].data);
+}
+
+test "parser parse_borrowed inline command" {
+    var reader: Reader = .fixed("SET key value\r\n");
+    var parser = Parser.init(testing.allocator);
+
+    var command = try parser.parse_borrowed(&reader);
+    defer command.deinit();
+
+    try testing.expectEqual(@as(usize, 3), command.arg_count());
+    try testing.expectEqualStrings("value", command.get_args()[2].data);
+}
+
+test "parser parse bulk string larger than 64KB" {
+    const value_len = 100 * 1024;
+    const header = "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$102400\r\n";
+    const test_data = try testing.allocator.alloc(u8, header.len + value_len + 2);
+    defer testing.allocator.free(test_data);
+    @memcpy(test_data[0..header.len], header);
+    @memset(test_data[header.len..][0..value_len], 'v');
+    @memcpy(test_data[header.len + value_len ..], "\r\n");
+
+    var reader: Reader = .fixed(test_data);
+    var parser = Parser.init(testing.allocator);
+
+    var command = try parser.parse(&reader);
+    defer command.deinit();
+
+    try testing.expectEqual(@as(usize, value_len), command.get_args()[2].data.len);
+}
+
+test "parser rejects bulk length above max_bulk_len" {
+    var reader: Reader = .fixed("*1\r\n$536870913\r\n");
+    var parser = Parser.init(testing.allocator);
+
+    try testing.expectError(error.InvalidProtocol, parser.parse(&reader));
 }

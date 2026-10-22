@@ -27,6 +27,10 @@ const log = std.log.scoped(.client);
 /// per-connection memory for very long pipelines or large replies.
 const max_batch_bytes = 64 * 1024;
 
+/// Parse arena memory kept across commands; anything above is released after
+/// a command with large arguments.
+const parse_arena_retain_bytes = 64 * 1024;
+
 var next_client_id: std.atomic.Value(u64) = .init(1);
 
 /// Returns true if `buffered` begins with at least one complete RESP command.
@@ -85,7 +89,6 @@ pub const Client = struct {
     disconnect_requested: *std.atomic.Value(bool),
     server: *Server,
     io: std.Io,
-    parse_buffer: [65536]u8 = undefined,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -145,10 +148,10 @@ pub const Client = struct {
         var sr = self.connection.reader(self.io, &reader_buffer);
         const reader = &sr.interface;
 
-        // Per-command arena for parsing.
-        // Uses a fixed buffer in the Client struct to avoid page_allocator syscalls.
-        var fba = std.heap.FixedBufferAllocator.init(self.parse_buffer[0..]);
-        var arena = std.heap.ArenaAllocator.init(fba.allocator());
+        // Per-command arena for args that don't fit in the reader buffer (and
+        // for >6-arg lists). Commands that are fully buffered borrow their args
+        // from the reader buffer and never touch it.
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
         while (true) {
@@ -196,7 +199,7 @@ pub const Client = struct {
                 // Execute the command inline on this coroutine. The store lock
                 // serializes it against other clients; there is no store thread.
                 self.server.execute_command(self, command.get_args(), response_writer);
-                _ = arena.reset(.retain_capacity);
+                _ = arena.reset(.{ .retain_with_limit = parse_arena_retain_bytes });
 
                 // Keep batching only while another complete command is already
                 // buffered (so parsing it won't block) and the reply is bounded.
@@ -242,6 +245,22 @@ pub const Client = struct {
     /// Parse one command, enforcing the configured idle `timeout` (in seconds)
     /// on how long the client may take to deliver it. 0 disables the deadline.
     fn read_command(self: *Client, parser: *Parser, reader: *std.Io.Reader) CommandReadError!Command {
+        // Zero-copy fast path: the whole command is buffered, so parse it from
+        // a non-refilling view and hand out slices of the reader buffer. They
+        // stay valid until the next read, which happens only after execution.
+        const buffered = std.Io.Reader.buffered(reader);
+        if (has_complete_command(buffered)) {
+            var view: std.Io.Reader = .fixed(buffered);
+            const command = parser.parse_borrowed(&view) catch |err| switch (err) {
+                // has_complete_command saw the full command, so running out of
+                // bytes means the framing is inconsistent.
+                error.EndOfStream => return error.InvalidProtocol,
+                else => |e| return e,
+            };
+            reader.toss(view.seek);
+            return command;
+        }
+
         const idle_timeout = self.server.config.timeout;
         if (idle_timeout == 0) return parse_command(parser, reader);
         return zio.withTimeout(.fromSeconds(idle_timeout), parse_command, .{ parser, reader });
