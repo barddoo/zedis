@@ -33,48 +33,6 @@ const parse_arena_retain_bytes = 64 * 1024;
 
 var next_client_id: std.atomic.Value(u64) = .init(1);
 
-/// Returns true if `buffered` begins with at least one complete RESP command.
-///
-/// The parser consumes exactly one command and leaves the rest in the reader,
-/// so this lets the client keep executing pipelined commands that are already
-/// buffered without re-entering the event loop (and flushing) between them.
-/// It only decides "can I parse again without blocking"; malformed input is
-/// left for the parser to report.
-fn has_complete_command(buffered: []const u8) bool {
-    if (buffered.len == 0) return false;
-
-    // Inline command: complete once its line terminator is buffered.
-    if (buffered[0] != '*') {
-        return std.mem.indexOfScalar(u8, buffered, '\n') != null;
-    }
-
-    // RESP array: *<count>\r\n followed by <count> bulk strings.
-    const header_end = std.mem.indexOfScalar(u8, buffered, '\n') orelse return false;
-    const count_text = std.mem.trimEnd(u8, buffered[1..header_end], "\r");
-    const count = std.fmt.parseInt(usize, count_text, 10) catch return true;
-
-    var pos = header_end + 1;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const bulk_header_end = std.mem.indexOfScalarPos(u8, buffered, pos, '\n') orelse return false;
-        const bulk_header = buffered[pos..bulk_header_end];
-        if (bulk_header.len == 0 or bulk_header[0] != '$') return true;
-
-        const len_text = std.mem.trimEnd(u8, bulk_header[1..], "\r");
-        const len = std.fmt.parseInt(usize, len_text, 10) catch return true;
-
-        const data_start = bulk_header_end + 1;
-        const data_end = std.math.add(usize, data_start, len) catch return true;
-        if (data_end > buffered.len) return false;
-        if (data_end + 2 > buffered.len) return false;
-        if (buffered[data_end] != '\r' or buffered[data_end + 1] != '\n') return true;
-
-        pos = data_end + 2;
-    }
-
-    return true;
-}
-
 pub const Client = struct {
     allocator: std.mem.Allocator,
     authenticated: bool,
@@ -170,10 +128,14 @@ pub const Client = struct {
             defer sw.deinit();
             const response_writer = sw.writer();
 
+            // Only the first command of a batch may wait for the socket; the rest
+            // must already be buffered, so the batch never blocks with replies
+            // pending.
+            var may_block = true;
             batch: while (true) {
                 var parser = Parser.init(arena_allocator);
 
-                const command = self.read_command(&parser, reader) catch |err| {
+                const maybe_command = self.next_command(&parser, reader, may_block) catch |err| {
                     switch (err) {
                         error.Timeout => {
                             log.debug("Client {d} idle timeout", .{self.client_id});
@@ -195,18 +157,17 @@ pub const Client = struct {
                         },
                     }
                 };
+                const command = maybe_command orelse break :batch;
+                may_block = false;
 
                 // Execute the command inline on this coroutine. The store lock
                 // serializes it against other clients; there is no store thread.
                 self.server.execute_command(self, command.get_args(), response_writer);
                 _ = arena.reset(.{ .retain_with_limit = parse_arena_retain_bytes });
 
-                // Keep batching only while another complete command is already
-                // buffered (so parsing it won't block) and the reply is bounded.
-                const buffered = std.Io.Reader.buffered(reader);
-                if (buffered.len == 0) break :batch;
+                // Bound the reply batch; next_command ends it once no complete
+                // command is buffered.
                 if (sw.slice(response_writer).len >= max_batch_bytes) break :batch;
-                if (!has_complete_command(buffered)) break :batch;
             }
 
             self.write_batch(sw.slice(response_writer)) catch return;
@@ -242,25 +203,23 @@ pub const Client = struct {
         try socket_writer.interface.flush();
     }
 
+    /// Next command for this batch. A command that is already fully buffered is
+    /// parsed zero-copy in one pass: its args slice the reader buffer and stay
+    /// valid until the next read, which only happens after execution. Otherwise,
+    /// with `may_block`, waits for it on the socket (copying parse); without it,
+    /// returns null so the batch can be flushed.
+    fn next_command(self: *Client, parser: *Parser, reader: *std.Io.Reader, may_block: bool) CommandReadError!?Command {
+        if (try parser.parse_buffered(std.Io.Reader.buffered(reader))) |parsed| {
+            reader.toss(parsed.consumed);
+            return parsed.command;
+        }
+        if (!may_block) return null;
+        return try self.read_command(parser, reader);
+    }
+
     /// Parse one command, enforcing the configured idle `timeout` (in seconds)
     /// on how long the client may take to deliver it. 0 disables the deadline.
     fn read_command(self: *Client, parser: *Parser, reader: *std.Io.Reader) CommandReadError!Command {
-        // Zero-copy fast path: the whole command is buffered, so parse it from
-        // a non-refilling view and hand out slices of the reader buffer. They
-        // stay valid until the next read, which happens only after execution.
-        const buffered = std.Io.Reader.buffered(reader);
-        if (has_complete_command(buffered)) {
-            var view: std.Io.Reader = .fixed(buffered);
-            const command = parser.parse_borrowed(&view) catch |err| switch (err) {
-                // has_complete_command saw the full command, so running out of
-                // bytes means the framing is inconsistent.
-                error.EndOfStream => return error.InvalidProtocol,
-                else => |e| return e,
-            };
-            reader.toss(view.seek);
-            return command;
-        }
-
         const idle_timeout = self.server.config.timeout;
         if (idle_timeout == 0) return parse_command(parser, reader);
         return zio.withTimeout(.fromSeconds(idle_timeout), parse_command, .{ parser, reader });

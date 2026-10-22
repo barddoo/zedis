@@ -144,21 +144,87 @@ pub const Command = struct {
 };
 
 allocator: Allocator,
-/// When set, argument data is sliced from the reader's buffer instead of
-/// copied. Only valid when the whole command is already buffered (so no refill
-/// can move the bytes) and the args are not used after the next read.
-borrow_args: bool = false,
 
 pub fn init(allocator: Allocator) Parser {
     return .{ .allocator = allocator };
 }
 
-/// Parses a command whose bytes are all in `reader`'s buffer, returning args
-/// that borrow that buffer. See `borrow_args`.
-pub fn parse_borrowed(self: *Parser, reader: *Reader) !Command {
-    self.borrow_args = true;
-    defer self.borrow_args = false;
-    return self.parse(reader);
+/// Parses a RESP length (array count or bulk length): ASCII digits only, no
+/// sign, prefix or separators. Returns null on anything else or overflow.
+/// Hand-rolled because std.fmt.parseInt's generality (base detection, '_')
+/// showed up as a large share of pipelined parse time.
+fn parse_length(text: []const u8) ?usize {
+    // 18 digits always fit in a u64 without overflow checks.
+    if (text.len == 0 or text.len > 18) return null;
+    var value: usize = 0;
+    for (text) |c| {
+        const digit = c -% '0';
+        if (digit > 9) return null;
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+pub const BufferedCommand = struct {
+    command: Command,
+    /// Bytes of `buffered` the command occupied, including its final CRLF.
+    consumed: usize,
+};
+
+/// Parses one command from bytes that are already buffered, in a single pass.
+/// Returns null if `buffered` does not yet hold a complete command (nothing is
+/// consumed), and error.InvalidProtocol on malformed input.
+///
+/// Args borrow `buffered` (`Command.owns_args` is false): they stay valid only
+/// while those bytes do, i.e. until the reader is refilled.
+pub fn parse_buffered(self: *Parser, buffered: []const u8) !?BufferedCommand {
+    const header_end = std.mem.indexOfScalar(u8, buffered, '\n') orelse return null;
+    const line = try strip_crlf(buffered[0 .. header_end + 1]);
+    if (line.len == 0) return error.InvalidProtocol;
+
+    if (line[0] != '*') {
+        if (line[0] == '$' or line[0] == '+' or line[0] == '-' or line[0] == ':') {
+            return error.InvalidProtocol;
+        }
+        return .{ .command = try self.parse_inline_command(line, true), .consumed = header_end + 1 };
+    }
+
+    const count = parse_length(line[1..]) orelse return error.InvalidProtocol;
+    var command = Command.init(self.allocator);
+    command.owns_args = false;
+    errdefer command.deinit();
+    try command.ensure_capacity(@min(count, 1024));
+
+    var pos = header_end + 1;
+    for (0..count) |_| {
+        const bulk_end = std.mem.indexOfScalarPos(u8, buffered, pos, '\n') orelse {
+            command.deinit();
+            return null;
+        };
+        const bulk_line = try strip_crlf(buffered[pos .. bulk_end + 1]);
+        if (bulk_line.len == 0 or bulk_line[0] != '$') return error.InvalidProtocol;
+        const len = parse_length(bulk_line[1..]) orelse return error.InvalidProtocol;
+        if (len > max_bulk_len) return error.InvalidProtocol;
+
+        const data_start = bulk_end + 1;
+        if (buffered.len - data_start < len + 2) {
+            command.deinit();
+            return null;
+        }
+        const data_end = data_start + len;
+        if (buffered[data_end] != '\r' or buffered[data_end + 1] != '\n') return error.InvalidProtocol;
+
+        try command.add_arg(.{ .data = buffered[data_start..data_end] });
+        pos = data_end + 2;
+    }
+
+    return .{ .command = command, .consumed = pos };
+}
+
+/// Returns `line_with_lf` without its trailing CRLF; RESP requires the CR.
+fn strip_crlf(line_with_lf: []const u8) error{InvalidProtocol}![]const u8 {
+    if (line_with_lf.len < 2 or line_with_lf[line_with_lf.len - 2] != '\r') return error.InvalidProtocol;
+    return line_with_lf[0 .. line_with_lf.len - 2];
 }
 
 // Main parsing function. Supports both RESP array commands and inline commands:
@@ -179,20 +245,19 @@ pub fn parse(self: *Parser, reader: *Reader) !Command {
 
     // Inline command: any line that doesn't start with a RESP type indicator
     if (line[0] != '$' and line[0] != '+' and line[0] != '-' and line[0] != ':') {
-        return self.parse_inline_command(line);
+        return self.parse_inline_command(line, false);
     }
 
     return error.InvalidProtocol;
 }
 
 fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
-    const count = fmt.parseInt(usize, line[1..], 10) catch return error.InvalidProtocol;
+    const count = parse_length(line[1..]) orelse return error.InvalidProtocol;
 
     // Redis-style: pre-allocate with safety cap at 1024 to prevent malicious requests
     // from allocating huge arrays (e.g., "*999999999\r\n")
     const initial_capacity = @min(count, 1024);
     var command = Command.init(self.allocator);
-    command.owns_args = !self.borrow_args;
     errdefer command.deinit(); // Clean up on error to prevent memory leaks
 
     try command.ensure_capacity(initial_capacity);
@@ -210,9 +275,11 @@ fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
     return command;
 }
 
-fn parse_inline_command(self: *Parser, line: []const u8) !Command {
+/// Splits an inline command line on spaces. With `borrow`, args slice `line`
+/// instead of being copied.
+fn parse_inline_command(self: *Parser, line: []const u8, borrow: bool) !Command {
     var command = Command.init(self.allocator);
-    command.owns_args = !self.borrow_args;
+    command.owns_args = !borrow;
     errdefer command.deinit();
 
     // Split line by spaces (skip empty segments from multiple spaces)
@@ -227,7 +294,7 @@ fn parse_inline_command(self: *Parser, line: []const u8) !Command {
         while (end < line.len and line[end] != ' ') : (end += 1) {}
 
         const arg = line[start..end];
-        const data = if (self.borrow_args) arg else try self.allocator.dupe(u8, arg);
+        const data = if (borrow) arg else try self.allocator.dupe(u8, arg);
         try command.add_arg(.{ .data = data });
 
         start = end;
@@ -242,22 +309,15 @@ fn parse_inline_command(self: *Parser, line: []const u8) !Command {
 
 // Reads bulk string data based on the length specified in the bulk_line.
 fn read_bulk_data(self: *Parser, reader: *Reader, bulk_line: []const u8) ![]const u8 {
-    const len = fmt.parseInt(i64, bulk_line[1..], 10) catch return error.InvalidProtocol;
+    // Null bulk strings ("$-1") are rejected along with other non-digit lengths.
+    const len = parse_length(bulk_line[1..]) orelse return error.InvalidProtocol;
+    if (len > max_bulk_len) return error.InvalidProtocol;
 
-    if (len < 0 or len > max_bulk_len) {
-        return error.InvalidProtocol; // Null bulk strings not supported in this example
-    }
+    const data = try self.allocator.alloc(u8, len);
+    errdefer self.allocator.free(data);
 
-    const ulen: usize = @intCast(len);
-    const data = if (self.borrow_args) try reader.take(ulen) else blk: {
-        const owned = try self.allocator.alloc(u8, ulen);
-        errdefer self.allocator.free(owned);
-
-        // Read exact number of bytes (uses buffered reading)
-        try reader.readSliceAll(owned);
-        break :blk owned;
-    };
-    errdefer if (!self.borrow_args) self.allocator.free(data);
+    // Read exact number of bytes (uses buffered reading)
+    try reader.readSliceAll(data);
 
     // Expect trailing CRLF after the bulk string payload
     const cr = try reader.takeByte();
@@ -709,36 +769,79 @@ test "Command ensure_capacity pre-allocation" {
     try testing.expectEqual(@as(usize, 10), command.arg_count());
 }
 
-test "parser parse_borrowed slices args from the reader buffer" {
-    const test_data = "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n*1\r\n$4\r\nPING\r\n";
-    var reader: Reader = .fixed(test_data);
+test "parser parse_buffered slices args and reports consumed bytes" {
+    const first = "*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n";
+    const test_data = first ++ "*1\r\n$4\r\nPING\r\n";
     var parser = Parser.init(testing.allocator);
 
-    var command = try parser.parse_borrowed(&reader);
-    defer command.deinit();
+    var parsed = (try parser.parse_buffered(test_data)).?;
+    defer parsed.command.deinit();
 
-    try testing.expect(!command.owns_args);
-    try testing.expectEqualStrings("value", command.get_args()[2].data);
-    const value_ptr = @intFromPtr(command.get_args()[2].data.ptr);
+    try testing.expect(!parsed.command.owns_args);
+    try testing.expectEqual(first.len, parsed.consumed);
+    try testing.expectEqualStrings("value", parsed.command.get_args()[2].data);
+    const value_ptr = @intFromPtr(parsed.command.get_args()[2].data.ptr);
     try testing.expect(value_ptr >= @intFromPtr(test_data.ptr) and value_ptr < @intFromPtr(test_data.ptr) + test_data.len);
 
-    // The parser stops after one command and goes back to copying afterwards.
-    try testing.expectEqualStrings("*1\r\n$4\r\nPING\r\n", reader.buffered());
-    var owned = try parser.parse(&reader);
-    defer owned.deinit();
-    try testing.expect(owned.owns_args);
-    try testing.expectEqualStrings("PING", owned.get_args()[0].data);
+    var next = (try parser.parse_buffered(test_data[parsed.consumed..])).?;
+    defer next.command.deinit();
+    try testing.expectEqualStrings("PING", next.command.get_args()[0].data);
 }
 
-test "parser parse_borrowed inline command" {
-    var reader: Reader = .fixed("SET key value\r\n");
+test "parser parse_buffered inline command" {
     var parser = Parser.init(testing.allocator);
 
-    var command = try parser.parse_borrowed(&reader);
-    defer command.deinit();
+    var parsed = (try parser.parse_buffered("SET key value\r\nGET key\r\n")).?;
+    defer parsed.command.deinit();
 
-    try testing.expectEqual(@as(usize, 3), command.arg_count());
-    try testing.expectEqualStrings("value", command.get_args()[2].data);
+    try testing.expectEqual(@as(usize, 3), parsed.command.arg_count());
+    try testing.expectEqualStrings("value", parsed.command.get_args()[2].data);
+    try testing.expectEqual(@as(usize, "SET key value\r\n".len), parsed.consumed);
+}
+
+test "parser parse_buffered returns null for every incomplete prefix" {
+    // Includes >6 args so the large-args list is allocated (and freed) on the null path.
+    const full = "*7\r\n$4\r\nMSET\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$1\r\n2\r\n$1\r\nc\r\n$2\r\n33\r\n";
+    var parser = Parser.init(testing.allocator);
+
+    for (0..full.len) |n| {
+        try testing.expectEqual(@as(?BufferedCommand, null), try parser.parse_buffered(full[0..n]));
+    }
+    var parsed = (try parser.parse_buffered(full)).?;
+    defer parsed.command.deinit();
+    try testing.expectEqual(@as(usize, 7), parsed.command.arg_count());
+    try testing.expectEqual(full.len, parsed.consumed);
+}
+
+test "parser parse_buffered rejects malformed framing" {
+    const cases = [_][]const u8{
+        "\r\n", // empty line
+        "*1\n$4\r\nPING\r\n", // header without CR
+        "*x\r\n", // non-numeric count
+        "*-1\r\n", // negative count
+        "*1\r\n+4\r\nPING\r\n", // bulk header not '$'
+        "*1\r\n$-1\r\n", // null bulk string
+        "*1\r\n$+4\r\nPING\r\n", // signed length
+        "*1\r\n$4\r\nPINGXX", // missing CRLF after data
+        "*1\r\n$536870913\r\n", // above max_bulk_len
+        "$4\r\nPING\r\n", // RESP type that isn't an array
+    };
+    var parser = Parser.init(testing.allocator);
+    for (cases) |case| {
+        try testing.expectError(error.InvalidProtocol, parser.parse_buffered(case));
+    }
+}
+
+test "parse_length accepts plain decimal only" {
+    try testing.expectEqual(@as(?usize, 0), parse_length("0"));
+    try testing.expectEqual(@as(?usize, 102400), parse_length("102400"));
+    try testing.expectEqual(@as(?usize, 999_999_999_999_999_999), parse_length("999999999999999999"));
+    try testing.expectEqual(@as(?usize, null), parse_length(""));
+    try testing.expectEqual(@as(?usize, null), parse_length("1_000"));
+    try testing.expectEqual(@as(?usize, null), parse_length("0x10"));
+    try testing.expectEqual(@as(?usize, null), parse_length("-1"));
+    try testing.expectEqual(@as(?usize, null), parse_length("+1"));
+    try testing.expectEqual(@as(?usize, null), parse_length("1234567890123456789"));
 }
 
 test "parser parse bulk string larger than 64KB" {
