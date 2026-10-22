@@ -1491,7 +1491,9 @@ test "TS.RANGE command with COUNT parameter" {
         buffer = mem.zeroes([4096]u8);
         writer = Writer.fixed(&buffer);
         const timestamp_str = try testing.allocator.print("{d}", .{1000 + i * 100});
+        defer testing.allocator.free(timestamp_str);
         const value_str = try testing.allocator.print("{d}.0", .{i * 10});
+        defer testing.allocator.free(value_str);
         const add_args = [_]Value{
             .{ .data = "TS.ADD" },
             .{ .data = "myts" },

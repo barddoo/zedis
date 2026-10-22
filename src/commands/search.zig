@@ -553,7 +553,7 @@ test "FT.DROPINDEX removes index" {
     const drop_args = [_]Value{ .{ .data = "FT.DROPINDEX" }, .{ .data = "idx1" } };
     try ft_dropindex(&writer2, &store, &drop_args);
     try testing.expectEqualStrings("+OK\r\n", writer2.buffered());
-    try testing.expect(store.get_search_index("idx1") == null);
+    try testing.expect((try store.get_search_index("idx1")) == null);
 }
 
 fn vec_f32_blob(values: []const f32) []const u8 {
@@ -601,10 +601,10 @@ test "FT.ADD under kv allocator does not OOM" {
     var buf2: [8192]u8 = undefined;
     var writer2 = Writer.fixed(&buf2);
     const add = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },           .{ .data = "doc1" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "4" },              .{ .data = "title" }, .{ .data = "the quick brown fox jumps over the lazy dog, repeatedly, with many words to grow the posting arrays well beyond any initial capacity" },
-        .{ .data = "price" },  .{ .data = "9.99" },           .{ .data = "color" }, .{ .data = "red,blue" },
-        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 0, 0 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },                        .{ .data = "doc1" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "4" },                           .{ .data = "title" }, .{ .data = "the quick brown fox jumps over the lazy dog, repeatedly, with many words to grow the posting arrays well beyond any initial capacity" },
+        .{ .data = "price" },  .{ .data = "9.99" },                        .{ .data = "color" }, .{ .data = "red,blue" },
+        .{ .data = "v" },      .{ .data = vec_f32_blob(&[_]f32{ 0, 0 }) },
     };
     try ft_add(&writer2, &store, &add);
     try testing.expectEqualStrings("+OK\r\n", writer2.buffered());
@@ -770,18 +770,18 @@ test "FT.SEARCH vector KNN returns nearest doc" {
     try ft_create(&writer, &store, &create_args);
 
     const add = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },           .{ .data = "doc1" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "2" },              .{ .data = "title" }, .{ .data = "first" },
-        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 0, 0 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },                        .{ .data = "doc1" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "2" },                           .{ .data = "title" }, .{ .data = "first" },
+        .{ .data = "v" },      .{ .data = vec_f32_blob(&[_]f32{ 0, 0 }) },
     };
     var buf2: [8192]u8 = undefined;
     var writer2 = Writer.fixed(&buf2);
     try ft_add(&writer2, &store, &add);
 
     const add2 = [_]Value{
-        .{ .data = "FT.ADD" }, .{ .data = "vidx" },             .{ .data = "doc2" },  .{ .data = "1.0" },
-        .{ .data = "FIELDS" }, .{ .data = "2" },                .{ .data = "title" }, .{ .data = "second" },
-        .{ .data = "v" },      vec_f32_blob(&[_]f32{ 10, 10 }),
+        .{ .data = "FT.ADD" }, .{ .data = "vidx" },                          .{ .data = "doc2" },  .{ .data = "1.0" },
+        .{ .data = "FIELDS" }, .{ .data = "2" },                             .{ .data = "title" }, .{ .data = "second" },
+        .{ .data = "v" },      .{ .data = vec_f32_blob(&[_]f32{ 10, 10 }) },
     };
     var buf3: [8192]u8 = undefined;
     var writer3 = Writer.fixed(&buf3);
@@ -796,7 +796,7 @@ test "FT.SEARCH vector KNN returns nearest doc" {
         .{ .data = "PARAMS" },
         .{ .data = "2" },
         .{ .data = "B" },
-        vec_f32_blob(&[_]f32{ 0, 0 }),
+        .{ .data = vec_f32_blob(&[_]f32{ 0, 0 }) },
         .{ .data = "DIALECT" },
         .{ .data = "2" },
     };
