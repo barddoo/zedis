@@ -43,8 +43,11 @@ pub fn ttl(writer: *Writer, store: *Store, args: []const Value) !void {
         try resp.write_int(writer, -2);
         return;
     }
-    const ttl_int = store.get_ttl(key) orelse -1;
-    try resp.write_int(writer, ttl_int);
+    // get_ttl is the absolute expiry in Unix ms; reply with the seconds left,
+    // rounded to the nearest second like Redis.
+    const expires_at = store.get_ttl(key) orelse return resp.write_int(writer, -1);
+    const remaining_ms = @max(expires_at - store.clock.now().toMilliseconds(), 0);
+    try resp.write_int(writer, @divTrunc(remaining_ms + 500, 1000));
 }
 
 pub fn persist(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -213,9 +216,8 @@ test "TTL command with key with expiration" {
 
     try ttl(&writer, &store, &args);
 
-    const output = writer.buffered();
-    // Should return the expiration timestamp
-    try testing.expect(mem.startsWith(u8, output, ":"));
+    // 10s left, in seconds (not the absolute expiry timestamp).
+    try testing.expectEqualStrings(":10\r\n", writer.buffered());
 }
 
 test "PERSIST command with key having expiration" {
