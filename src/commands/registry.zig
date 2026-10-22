@@ -191,7 +191,19 @@ pub const CommandRegistry = struct {
                 },
             }
         } else {
-            resp.write_error(writer, "unknown command") catch {};
+            resp.write_error(writer, "ERR unknown command") catch {};
         }
     }
 };
+
+test "handle_command_error writes a single error code prefix" {
+    var buffer: [256]u8 = undefined;
+
+    var writer: std.Io.Writer = .fixed(&buffer);
+    CommandRegistry.handle_command_error(&writer, "INCR", error.Overflow);
+    try std.testing.expectEqualStrings("-ERR increment or decrement would overflow\r\n", writer.buffered());
+
+    writer = .fixed(&buffer);
+    CommandRegistry.handle_command_error(&writer, "LPUSH", error.WrongType);
+    try std.testing.expectEqualStrings("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", writer.buffered());
+}

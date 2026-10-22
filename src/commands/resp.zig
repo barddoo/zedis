@@ -11,8 +11,10 @@ const Writer = Io.Writer;
 
 // --- RESP Writing Helpers ---
 
+/// Writes `msg` as a RESP error. `msg` must start with its error code
+/// (e.g. "ERR ...", "WRONGTYPE ...", "NOAUTH ...").
 pub fn write_error(writer: *Writer, msg: []const u8) !void {
-    try writer.print("-ERR {s}\r\n", .{msg});
+    try writer.print("-{s}\r\n", .{msg});
 }
 
 pub fn write_simple_string(writer: *Writer, str: []const u8) !void {
