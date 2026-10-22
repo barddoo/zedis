@@ -167,7 +167,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Prepend one or multiple values to a list",
         // TODO: test
-        .write_to_aof = false,
+        .write_to_aof = true,
     });
 
     try registry.register(.{
@@ -177,7 +177,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Append one or multiple values to a list",
         // TODO: test
-        .write_to_aof = false,
+        .write_to_aof = true,
     });
 
     try registry.register(.{
@@ -187,7 +187,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Remove and return the first element of a list",
         // TODO: test
-        .write_to_aof = false,
+        .write_to_aof = true,
     });
 
     try registry.register(.{
@@ -197,7 +197,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = 3,
         .description = "Remove and return the last element of a list",
         // TODO: test
-        .write_to_aof = false,
+        .write_to_aof = true,
     });
 
     try registry.register(.{
@@ -227,7 +227,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = 4,
         .description = "Set the value of an element in a list by its index",
         // TODO: test
-        .write_to_aof = false,
+        .write_to_aof = true,
     });
 
     try registry.register(.{

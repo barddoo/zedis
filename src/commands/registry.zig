@@ -207,3 +207,16 @@ test "handle_command_error writes a single error code prefix" {
     CommandRegistry.handle_command_error(&writer, "LPUSH", error.WrongType);
     try std.testing.expectEqualStrings("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", writer.buffered());
 }
+
+test "write commands are logged to the AOF and reads are not" {
+    const init_registry = @import("init_registry.zig").init_registry;
+    var registry = try init_registry(std.testing.allocator);
+    defer registry.deinit();
+
+    for ([_][]const u8{ "SET", "DEL", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET" }) |name| {
+        try std.testing.expect(registry.should_write_to_aof(name));
+    }
+    for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS" }) |name| {
+        try std.testing.expect(!registry.should_write_to_aof(name));
+    }
+}
