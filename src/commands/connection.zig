@@ -131,7 +131,7 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
 
     if (std.ascii.eqlIgnoreCase(subcommand, "GET")) {
         if (args.len != 3) {
-            try resp.write_error(writer, "wrong number of arguments for CONFIG GET");
+            try resp.write_error(writer, "ERR wrong number of arguments for CONFIG GET");
             return;
         }
         try config_get(client, args[2].as_slice(), writer);
@@ -140,7 +140,7 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
 
     if (std.ascii.eqlIgnoreCase(subcommand, "SET")) {
         if (args.len < 4 or @mod(args.len, 2) != 0) {
-            try resp.write_error(writer, "wrong number of arguments for CONFIG SET");
+            try resp.write_error(writer, "ERR wrong number of arguments for CONFIG SET");
             return;
         }
         try config_set(client, args[2..], writer);
@@ -149,7 +149,7 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
 
     if (std.ascii.eqlIgnoreCase(subcommand, "RESETSTAT")) {
         if (args.len != 2) {
-            try resp.write_error(writer, "wrong number of arguments for CONFIG RESETSTAT");
+            try resp.write_error(writer, "ERR wrong number of arguments for CONFIG RESETSTAT");
             return;
         }
         try resp.write_ok(writer);
@@ -158,14 +158,14 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
 
     if (std.ascii.eqlIgnoreCase(subcommand, "HELP")) {
         if (args.len != 2) {
-            try resp.write_error(writer, "wrong number of arguments for CONFIG HELP");
+            try resp.write_error(writer, "ERR wrong number of arguments for CONFIG HELP");
             return;
         }
         try config_help(writer);
         return;
     }
 
-    try resp.write_error(writer, "Unknown subcommand or wrong number of arguments for CONFIG");
+    try resp.write_error(writer, "ERR Unknown subcommand or wrong number of arguments for CONFIG");
 }
 
 fn config_get(client: *Client, pattern: []const u8, writer: *Writer) !void {
