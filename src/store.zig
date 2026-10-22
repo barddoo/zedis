@@ -113,6 +113,8 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
     slots: []Slot,
     entries: []*StoreEntry,
+    // Allocated length of `entries.ptr`; grown geometrically so inserts stay amortized O(1).
+    entries_capacity: usize,
     count: usize,
     free_head: u32,
 
@@ -189,13 +191,25 @@ pub const Store = struct {
             return .{ .idx = idx, .entry = entry };
         }
         const entry = try self.allocator.create(StoreEntry);
+        errdefer self.allocator.destroy(entry);
         const new_len = self.entries.len + 1;
-        self.entries = self.allocator.realloc(self.entries, new_len) catch |err| {
-            self.allocator.destroy(entry);
-            return err;
-        };
+        if (new_len > self.entries_capacity) {
+            const new_capacity = @max(16, self.entries_capacity * 2);
+            const new_entries = try self.allocator.alloc(*StoreEntry, new_capacity);
+            @memcpy(new_entries[0..self.entries.len], self.entries);
+            self.free_entries_array();
+            self.entries = new_entries[0..self.entries.len];
+            self.entries_capacity = new_capacity;
+        }
+        self.entries.len = new_len;
         self.entries[new_len - 1] = entry;
         return .{ .idx = @intCast(new_len - 1), .entry = entry };
+    }
+
+    fn free_entries_array(self: *Store) void {
+        if (self.entries_capacity > 0) self.allocator.free(self.entries.ptr[0..self.entries_capacity]);
+        self.entries = &.{};
+        self.entries_capacity = 0;
     }
 
     fn setEntryKey(self: *Store, entry: *StoreEntry, key: []const u8) !void {
@@ -222,6 +236,7 @@ pub const Store = struct {
             .allocator = allocator,
             .slots = &.{},
             .entries = &.{},
+            .entries_capacity = 0,
             .count = 0,
             .free_head = no_entry,
             .lru_clock = .init(0),
@@ -251,9 +266,8 @@ pub const Store = struct {
             self.allocator.destroy(entry);
         }
         if (self.slots.len > 0) self.allocator.free(self.slots);
-        if (self.entries.len > 0) self.allocator.free(self.entries);
+        self.free_entries_array();
         self.slots = &.{};
-        self.entries = &.{};
         self.lru_head = null;
         self.lru_tail = null;
         self.volatile_lru_head = null;
@@ -703,8 +717,7 @@ pub const Store = struct {
         for (self.entries) |entry| {
             self.allocator.destroy(entry);
         }
-        if (self.entries.len > 0) self.allocator.free(self.entries);
-        self.entries = &.{};
+        self.free_entries_array();
         self.free_head = no_entry;
         self.count = 0;
         self.lru_head = null;
