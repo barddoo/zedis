@@ -11,7 +11,7 @@ Three distinct allocation domains:
 | ---------------------- | --------------------------------------------- | --------------- | -------- |
 | `base_allocator`       | `GeneralPurposeAllocator` (OS-provided)       | Server lifetime | No       |
 | `kv_allocator`         | `KeyValueAllocator` wrapping `base_allocator` | Server lifetime | Yes      |
-| Per-client parse arena | `FixedBufferAllocator` on 64KB inline buffer  | Per-command     | No       |
+| Per-client parse arena | `ArenaAllocator` on the base allocator (keeps ≤64KB) | Per-command | No       |
 
 ## Base Allocator
 
@@ -51,27 +51,26 @@ All store-owned data allocates through `kv_allocator.allocator()`:
 
 ## Per-Client Parse Arena
 
-Each `Client` struct embeds `parse_buffer: [65536]u8` (64 KB). Before each command
-parse cycle:
+Commands that are already fully buffered in the client's 16 KB socket read buffer are
+parsed zero-copy: argument slices point into the read buffer and stay valid until the
+next read, which only happens after the command executed.
 
-```
-fba = FixedBufferAllocator.init(parse_buffer)
-arena = ArenaAllocator.init(fba.allocator())
-parser = Parser.init(arena.allocator())
-```
-
-RESP protocol parsing (argument buffers, bulk data reads) allocates into this arena.
-After each command, `arena.reset(.retain_capacity)` frees all parser allocations.
-
-Using a fixed inline buffer avoids `page_allocator` syscalls and does not charge
-parser allocations to the KV budget.
+Other commands (arguments that don't fit in the read buffer, or are still arriving)
+are parsed into a per-client `ArenaAllocator` backed by the base allocator. After each
+command, `arena.reset(.{ .retain_with_limit = 64 KB })` frees parser allocations while
+keeping up to 64 KB for reuse, so one huge argument does not pin memory per
+connection. Bulk strings are capped at 512 MB (Redis' `proto-max-bulk-len`). Parser
+allocations are not charged to the KV budget.
 
 ## Command Execution Flow
 
 Client I/O and command execution run in the same domain: client connections run as
 zio coroutines on the runtime's executor threads (parsing, command execution, response
 writes), and the shared store is protected by a single cooperative store lock rather
-than being owned by a dedicated thread. There is no cross-thread command hand-off:
+than being owned by a dedicated thread. The runtime uses one executor by default
+(`executors` in the config file raises it); execution is serialized either way, and a
+single executor avoids handing the lock between threads on every command. There is no
+cross-thread command hand-off:
 
 1. Client coroutine parses the command in its per-client arena
 2. Client coroutine acquires the store lock (`server.store_lock`, a parking
@@ -118,7 +117,7 @@ Structures allocated once at startup and reused for server lifetime:
 
 - `client_slots: []ClientSlot` — fixed pool of `max_clients` slots (default 10000)
 - Lock-free ABA-protected free list for slot allocation/reuse
-- Each slot embeds: `ClientMailbox`, `Client` struct (with 64KB parse buffer),
+- Each slot embeds: `ClientMailbox`, `Client` struct,
   atomic state/generation/disconnect fields
 - Free list uses tagged pointers (`tag << 32 | index`) to prevent ABA
 
