@@ -42,11 +42,11 @@ Download the binary from the [releases page](https://github.com/barddoo/zedis/re
 git clone https://github.com/barddoo/zedis.git
 cd zedis
 
-# Build the project
-zig build
+# Build the project (optimized, ReleaseFast)
+zig build --release=fast
 
 # Run the server
-zig build run
+zig build run --release=fast
 ```
 
 The server will start on `127.0.0.1:6379` by default.
@@ -122,10 +122,13 @@ See `docs/memory-architecture.md` for the current allocator layout, memory budge
 
 ```bash
 # Build in debug mode (default)
-zig build -Doptimize=Debug
+zig build
 
-# Build optimized release
-zig build -Doptimize=ReleaseFast
+# Build optimized release (ReleaseFast; use this for production and benchmarks)
+zig build --release=fast
+
+# `--release` with no mode also picks ReleaseFast (the preferred mode in build.zig)
+zig build --release
 
 # Run tests (when available)
 zig build test
