@@ -280,8 +280,13 @@ fn execute_locked(self: *Server, client: *Client, args: []const Value, response_
     // Append to the AOF before replying, like Redis. Runs under the store lock
     // (the single writer to the store), so file I/O is serialized with
     // commands in execution order.
-    if (args.len > 0) {
-        if (self.write_aof(args[0].as_slice(), args)) |end| client.aof_end = end;
+    if (args.len > 0 and self.aof_writer.enabled and self.registry.should_write_to_aof(args[0].as_slice())) {
+        // Like Redis' MISCONF: refuse writes the AOF can't persist.
+        if (self.aof_writer.failure()) |failure| {
+            failure.write_error(response_writer) catch {};
+            return;
+        }
+        client.aof_end = self.aof_writer.write_command(args);
     }
 
     self.process_command_direct(client, args, response_writer);
@@ -306,16 +311,6 @@ pub fn process_command_direct(self: *Server, client: *Client, args: []const Valu
     ) catch |err| {
         log.err("Command execution failed: {s}", .{@errorName(err)});
     };
-}
-
-/// Queue a command for the AOF. Runs inline with command execution, under the
-/// store lock, so the AOF order matches execution order; the AOF writer thread
-/// does the file I/O. Returns the AOF offset at the end of the command, or null
-/// if the command is not logged.
-pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) ?u64 {
-    if (!self.aof_writer.enabled) return null;
-    if (!self.registry.should_write_to_aof(command_name)) return null;
-    return self.aof_writer.write_command(args);
 }
 
 // The main server loop. It waits for incoming connections and

@@ -200,13 +200,26 @@ pub const Client = struct {
 
         // appendfsync always: don't acknowledge writes before they are fsynced.
         // The store lock is not held here, so other clients keep running.
-        self.server.aof_writer.wait_durable(self.aof_end);
+        if (!self.server.aof_writer.wait_durable(self.aof_end)) {
+            // The AOF failed before these writes were durable. Send the MISCONF
+            // error instead of the replies and close the connection.
+            var error_buffer: [256]u8 = undefined;
+            var error_writer: std.Io.Writer = .fixed(&error_buffer);
+            if (self.server.aof_writer.failure()) |failure| failure.write_error(&error_writer) catch {};
+            try self.write_socket(error_writer.buffered());
+            return error.AofFailed;
+        }
+        try self.write_socket(response);
+    }
+
+    fn write_socket(self: *Client, bytes: []const u8) !void {
+        if (bytes.len == 0) return;
 
         var writer_buffer: [1024 * 4]u8 = undefined;
         var socket_writer = self.connection.writer(self.io, &writer_buffer);
         // The peer may have gone away while the command ran; a failed write
         // just ends this connection.
-        try socket_writer.interface.writeAll(response);
+        try socket_writer.interface.writeAll(bytes);
         try socket_writer.interface.flush();
     }
 
