@@ -19,7 +19,6 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "aof-load-broken-max-size" },
     .{ .name = "aof-load-truncated" },
     .{ .name = "aof-use-rdb-preamble" },
-    .{ .name = "aof-write-buffer-size", .mutable = true },
     .{ .name = "appenddirname" },
     .{ .name = "appendfilename" },
     .{ .name = "appendfsync" },
@@ -255,8 +254,6 @@ fn write_config_value(client: *Client, writer: *Writer, name: []const u8) !void 
         try resp.write_bulk_string(writer, server_config.appendfilename);
     } else if (std.mem.eql(u8, name, "appendfsync")) {
         try resp.write_bulk_string(writer, server_config.appendfsync);
-    } else if (std.mem.eql(u8, name, "aof-write-buffer-size")) {
-        try write_config_int(writer, server_config.aof_write_buffer_size);
     } else if (std.mem.eql(u8, name, "appendonly")) {
         try write_config_bool(writer, server_config.appendonly);
     } else if (std.mem.eql(u8, name, "bind")) {
@@ -370,10 +367,6 @@ fn apply_config_set(client: *Client, name: []const u8, value: []const u8) Config
     const param = find_config_parameter(name) orelse return error.UnknownParameter;
     if (!param.mutable) return error.ImmutableParameter;
 
-    if (std.mem.eql(u8, param.name, "aof-write-buffer-size")) {
-        client.server.config.aof_write_buffer_size = Config.parse_memory_size(value) catch return error.InvalidValue;
-        return;
-    }
     if (std.mem.eql(u8, param.name, "max-channels")) {
         client.server.config.max_channels = parse_config_int(u32, value) catch return error.InvalidValue;
         return;

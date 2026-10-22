@@ -151,7 +151,6 @@ initial_capacity: u32 = 8192, // Initial hash map capacity for Store (reduces ea
 eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
 requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
 rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
-aof_write_buffer_size: usize = 64 * 1024, // (unused: the AOF writer thread writes its queue directly)
 
 // Computed constants (calculated from other fields)
 pub fn client_pool_size(self: Config) usize {
@@ -394,8 +393,6 @@ fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const
         config.requirepass = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "rdb-write-buffer-size")) {
         config.rdb_write_buffer_size = try parse_memory_size(trimmed_value);
-    } else if (eql(u8, key, "aof-write-buffer-size")) {
-        config.aof_write_buffer_size = try parse_memory_size(trimmed_value);
     } else if (eql(u8, key, "appenddirname")) {
         config.appenddirname = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "no-appendfsync-on-rewrite")) {
