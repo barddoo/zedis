@@ -68,7 +68,7 @@ jobs:
 
       - name: Build
         run: |
-          zig build -Drelease --release=fast -Dtarget=${{ matrix.target }}
+          zig build --release=fast -Dtarget=${{ matrix.target }} -Demit-macos-app=false
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
