@@ -5,7 +5,7 @@
 ##############################################################################
 FROM alpine:3.20 AS builder
 
-ARG ZIG_VERSION=0.16.0
+ARG ZIG_VERSION=0.17.0
 
 RUN apk add --no-cache curl xz
 
