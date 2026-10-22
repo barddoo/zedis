@@ -21,6 +21,7 @@ pub fn init(io: Io, clock_update_ms: u32) Clock {
 
 pub fn start(self: *Clock) !void {
     if (!self.cached) return;
+    ts = .now(self.io, .real);
     self.update_task = self.io.concurrent(update_loop, .{self}) catch |err| switch (err) {
         error.ConcurrencyUnavailable => {
             // io backend does not support coroutines; fall back to OS thread
