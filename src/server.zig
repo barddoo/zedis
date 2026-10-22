@@ -61,13 +61,16 @@ free_list_head: std.atomic.Value(u64),
 pubsub_map: std.StringHashMap([]ClientHandle),
 pubsub_mutex: std.atomic.Mutex = .unlocked,
 
-// Serializes command execution against the shared store. Client coroutines run
-// concurrently on zio's executor threads (executors = .auto, see main.zig), and
-// each command executes inline on its own client's executor thread — no store
-// thread / cross-thread hand-off. A cooperative (parking) lock is used rather
-// than a raw spinlock: command handlers may suspend (AOF file I/O, SAVE), and a
-// spinlock held across a suspension would deadlock once every executor thread
-// is spinning on it. Uncontended acquisition is a single atomic CAS.
+// Serializes command execution against the shared store. Each command executes
+// inline on its own client's coroutine — no store thread / cross-thread
+// hand-off. The lock is required even with a single executor (the default, see
+// main.zig): command handlers may suspend (AOF file I/O, SAVE), letting another
+// client's coroutine run on the same thread, which must not interleave with a
+// half-executed command or reorder the AOF. With several executors it also
+// guards against true parallelism. A cooperative (parking) lock is used rather
+// than a raw spinlock: a spinlock held across a suspension would deadlock once
+// every executor thread is spinning on it. Uncontended acquisition is a single
+// atomic CAS.
 store_lock: zio.Mutex = .init,
 
 // Custom allocator for key-value store with eviction

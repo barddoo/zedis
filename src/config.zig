@@ -184,6 +184,9 @@ pub const RuntimePrefs = struct {
     /// zio RuntimeOptions.stack_pool.prewarm: number of coroutine stack slots
     /// to carve and commit at runtime init. 0 disables prewarming.
     stack_pool_prewarm: u32 = 0,
+    /// zio RuntimeOptions.executors: number of executor threads. 0 means
+    /// auto-detect from the CPU count. Defaults to 1; see main.zig.
+    executors: u8 = 1,
 };
 
 /// Path of the config file passed on the command line, if any.
@@ -229,11 +232,24 @@ pub fn read_runtime_prefs(allocator: std.mem.Allocator, args: std.process.Args) 
             prefs.metrics_log_interval_seconds = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
         } else if (eql(u8, key, "stack-pool-prewarm")) {
             prefs.stack_pool_prewarm = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
+        } else if (eql(u8, key, "executors")) {
+            prefs.executors = parse_executors(std.mem.trim(u8, value, " \t\r")) orelse continue;
         }
     }
 
     return prefs;
 }
+
+/// Parses the `executors` value: "auto" (0) or a count in 1..max_executors.
+fn parse_executors(value: []const u8) ?u8 {
+    if (std.ascii.eqlIgnoreCase(value, "auto")) return 0;
+    const n = parseInt(u8, value, 10) catch return null;
+    if (n == 0 or n > max_executors) return null;
+    return n;
+}
+
+/// zio's executor limit: `Executor.max_executors` (ExecutorId is u6 on 64-bit, u5 on 32-bit).
+const max_executors = @bitSizeOf(usize);
 
 fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
     var file = try Dir.cwd().openFile(io, file_name, .{});
@@ -420,4 +436,18 @@ pub fn parse_memory_size(value: []const u8) !usize {
         // Plain number in bytes
         return try parseInt(usize, value, 10);
     }
+}
+
+test "parse_executors accepts auto and bounded counts" {
+    try std.testing.expectEqual(@as(?u8, 0), parse_executors("auto"));
+    try std.testing.expectEqual(@as(?u8, 0), parse_executors("AUTO"));
+    try std.testing.expectEqual(@as(?u8, 1), parse_executors("1"));
+    try std.testing.expectEqual(@as(?u8, max_executors), parse_executors(std.fmt.comptimePrint("{d}", .{max_executors})));
+    try std.testing.expectEqual(@as(?u8, null), parse_executors("0"));
+    try std.testing.expectEqual(@as(?u8, null), parse_executors(std.fmt.comptimePrint("{d}", .{max_executors + 1})));
+    try std.testing.expectEqual(@as(?u8, null), parse_executors("many"));
+}
+
+test "parse_executors limit matches zio" {
+    try std.testing.expectEqual(@import("zio").Executor.max_executors, max_executors);
 }
