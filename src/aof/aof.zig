@@ -53,8 +53,36 @@ pub const Writer = struct {
 
         /// File offset up to which data is written, and under `always` also fsynced.
         durable_end: std.atomic.Value(u64),
-        /// Futex word bumped whenever `durable_end` advances.
+        /// Futex word bumped whenever `durable_end` advances or a failure is recorded.
         durable_seq: std.atomic.Value(u32) = .init(0),
+
+        /// Set by the writer thread while the AOF is failing; write commands are
+        /// rejected meanwhile (see `failure`). `failure_reason` points at a
+        /// static error name and is published before `failure_kind`.
+        failure_kind: std.atomic.Value(FailureKind) = .init(.none),
+        failure_reason: std.atomic.Value(usize) = .init(0),
+
+        fn set_failure(self: *Shared, kind: FailureKind, reason: [:0]const u8) void {
+            self.failure_reason.store(@intFromPtr(reason.ptr), .release);
+            self.failure_kind.store(kind, .release);
+        }
+    };
+
+    const FailureKind = enum(u8) { none, write, fsync };
+
+    /// Why the AOF can't accept writes, as reported to clients.
+    pub const Failure = struct {
+        /// An fsync failed. Unlike a failed write this does not clear on retry:
+        /// after a failed fsync the kernel may drop the dirty pages and report a
+        /// later fsync as successful, so durability can't be re-established.
+        fsync: bool,
+        reason: []const u8,
+
+        /// Writes the client-facing error, like Redis' MISCONF.
+        pub fn write_error(self: Failure, writer: *Io.Writer) Io.Writer.Error!void {
+            const action = if (self.fsync) "fsyncing" else "writing to";
+            try writer.print("-MISCONF Errors {s} the AOF file: {s}\r\n", .{ action, self.reason });
+        }
     };
 
     pub fn init(alloc: Allocator, io: Io, enabled: bool, filename: []const u8, work_dir: []const u8, fsync_policy: FsyncPolicy) !Writer {
@@ -139,14 +167,32 @@ pub const Writer = struct {
     /// Under `always`, parks the calling coroutine until the AOF is fsynced up
     /// to `end`. A no-op for other policies. Must not be called while holding
     /// the store lock.
-    pub fn wait_durable(self: *Writer, end: u64) void {
-        if (!self.enabled or self.fsync_policy != .always) return;
+    ///
+    /// Returns false if the AOF failed (or the wait was canceled) before `end`
+    /// became durable: the caller must not acknowledge those writes. They may
+    /// still reach the disk if a failed write is later retried successfully.
+    pub fn wait_durable(self: *Writer, end: u64) bool {
+        if (!self.enabled or self.fsync_policy != .always) return true;
         const shared = self.shared.?;
         while (true) {
             const seq = shared.durable_seq.load(.acquire);
-            if (shared.durable_end.load(.acquire) >= end) return;
-            zio.Futex.wait(&shared.durable_seq.raw, seq) catch return;
+            if (shared.durable_end.load(.acquire) >= end) return true;
+            if (self.failure() != null) return false;
+            zio.Futex.wait(&shared.durable_seq.raw, seq) catch return false;
         }
+    }
+
+    /// Non-null while the AOF is failing. Callers reject write commands with
+    /// `Failure.write_error` meanwhile, so nothing is acknowledged that can't be
+    /// persisted. A write failure clears once a retry succeeds; an fsync failure
+    /// lasts until restart.
+    pub fn failure(self: *const Writer) ?Failure {
+        if (!self.enabled) return null;
+        const shared = self.shared.?;
+        const kind = shared.failure_kind.load(.acquire);
+        if (kind == .none) return null;
+        const reason: [*:0]const u8 = @ptrFromInt(shared.failure_reason.load(.acquire));
+        return .{ .fsync = kind == .fsync, .reason = std.mem.span(reason) };
     }
 
     fn encode_command(list: *std.ArrayList(u8), gpa: Allocator, args: []const Value) !void {
@@ -161,64 +207,107 @@ pub const Writer = struct {
     /// Writer thread: drains `queued` to the file and fsyncs per policy.
     fn run(shared: *Shared, start: u64) void {
         const io = shared.threaded.io();
+        // Bytes taken from `queued` but not yet written; kept across a failed
+        // write so the retry rewrites them at the same offset.
         var batch: std.ArrayList(u8) = .empty;
         defer batch.deinit(shared.allocator);
 
         var offset = start;
         var unsynced = false;
+        var fsync_failed = false;
         var last_sync_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
 
         while (true) {
             const seq = shared.wake_seq.load(.acquire);
 
             shared.mutex.lockUncancelable();
-            std.mem.swap(std.ArrayList(u8), &batch, &shared.queued);
+            const file = shared.file;
+            if (batch.items.len == 0) {
+                std.mem.swap(std.ArrayList(u8), &batch, &shared.queued);
+            } else if (batch.appendSlice(shared.allocator, shared.queued.items)) {
+                shared.queued.clearRetainingCapacity();
+            } else |_| {
+                // Out of memory: leave the new bytes queued for the next round.
+            }
             const stopping = shared.stopping;
             shared.mutex.unlock();
 
+            var notify_waiters = false;
+            var write_failed = false;
             const had_data = batch.items.len > 0;
             if (had_data) {
-                shared.file.writePositionalAll(io, batch.items, offset) catch |err| {
-                    log.err("AOF write failed: {s}", .{@errorName(err)});
-                };
-                offset += batch.items.len;
-                batch.clearRetainingCapacity();
-                unsynced = true;
+                if (file.writePositionalAll(io, batch.items, offset)) {
+                    offset += batch.items.len;
+                    batch.clearRetainingCapacity();
+                    unsynced = true;
+                    if (shared.failure_kind.load(.monotonic) == .write) {
+                        log.info("AOF writes recovered", .{});
+                        shared.set_failure(.none, "");
+                    }
+                } else |err| {
+                    write_failed = true;
+                    if (shared.failure_kind.load(.monotonic) == .none) {
+                        log.warn("AOF write failed: {s}; rejecting write commands until it succeeds", .{@errorName(err)});
+                        shared.set_failure(.write, @errorName(err));
+                        notify_waiters = true;
+                    }
+                }
             }
 
             const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
-            const sync_now = unsynced and switch (shared.fsync_policy) {
+            const sync_now = unsynced and !fsync_failed and switch (shared.fsync_policy) {
                 .always => true,
                 .everysec => now_ms - last_sync_ms >= 1000,
                 .no => false,
             };
             if (sync_now) {
-                shared.file.sync(io) catch |err| log.err("AOF fsync failed: {s}", .{@errorName(err)});
-                unsynced = false;
+                if (file.sync(io)) {
+                    unsynced = false;
+                } else |err| {
+                    log.err("AOF fsync failed: {s}; rejecting write commands until restart", .{@errorName(err)});
+                    fsync_failed = true;
+                    shared.set_failure(.fsync, @errorName(err));
+                    notify_waiters = true;
+                }
                 last_sync_ms = now_ms;
             }
 
-            // Under `always` this only advances after the fsync above. On write or
-            // fsync failure it still advances (after logging) so waiters can't hang.
-            if (offset > shared.durable_end.load(.monotonic)) {
-                shared.durable_end.store(offset, .release);
+            // Under `always` the durable offset only covers fsynced data.
+            const durable = if (shared.fsync_policy == .always and (unsynced or fsync_failed))
+                shared.durable_end.load(.monotonic)
+            else
+                offset;
+            if (durable > shared.durable_end.load(.monotonic)) {
+                shared.durable_end.store(durable, .release);
+                notify_waiters = true;
+            }
+            if (notify_waiters) {
                 _ = shared.durable_seq.fetchAdd(1, .release);
                 zio.Futex.wake(&shared.durable_seq.raw, std.math.maxInt(u32));
             }
 
+            if (write_failed) {
+                if (stopping) {
+                    log.err("AOF: dropping {d} unwritten bytes at shutdown", .{batch.items.len});
+                    break;
+                }
+                // Retry the failed write in a second (sooner if woken).
+                zio.Futex.waitTimeout(&shared.wake_seq.raw, seq, .{ .duration = .fromSeconds(1) }) catch {};
+                continue;
+            }
             if (had_data) continue;
             if (stopping) break;
 
             // Sleep until more commands arrive; under `everysec`, also wake for
             // the next due fsync.
-            const timeout: zio.Timeout = if (unsynced and shared.fsync_policy == .everysec)
+            const timeout: zio.Timeout = if (unsynced and !fsync_failed and shared.fsync_policy == .everysec)
                 .{ .duration = .fromMilliseconds(@intCast(@max(1, 1000 - (now_ms - last_sync_ms)))) }
             else
                 .none;
             zio.Futex.waitTimeout(&shared.wake_seq.raw, seq, timeout) catch {};
         }
 
-        if (unsynced and shared.fsync_policy != .no) {
+        if (unsynced and !fsync_failed and shared.fsync_policy != .no) {
             shared.file.sync(io) catch |err| log.err("AOF fsync failed: {s}", .{@errorName(err)});
         }
     }
@@ -344,7 +433,7 @@ test "aof writer appends to an existing file and wait_durable waits for fsync" {
     const end = aof_writer.write_command(&ping);
     try testing.expectEqual(@as(u64, 28), end);
 
-    aof_writer.wait_durable(end);
+    try testing.expect(aof_writer.wait_durable(end));
     try testing.expect(aof_writer.shared.?.durable_end.load(.acquire) >= end);
     var buf: [64]u8 = undefined;
     try testing.expectEqualStrings("*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n", try read_test_aof(dir_name, "test.aof", &buf));
@@ -355,5 +444,80 @@ test "disabled aof writer ignores commands" {
     defer aof_writer.deinit();
     const ping = [_]Value{.{ .data = "PING" }};
     try testing.expectEqual(@as(u64, 0), aof_writer.write_command(&ping));
-    aof_writer.wait_durable(0);
+    try testing.expect(aof_writer.wait_durable(0));
+}
+
+/// Swaps the writer thread's file handle (for tests that simulate failures).
+fn swap_test_file(aof_writer: *Writer, file: Io.File) Io.File {
+    const shared = aof_writer.shared.?;
+    shared.mutex.lockUncancelable();
+    defer shared.mutex.unlock();
+    const previous = shared.file;
+    shared.file = file;
+    return previous;
+}
+
+/// Polls `aof_writer.failure()` until it is (or stops being) set, up to ~5s.
+fn wait_for_failure_state(aof_writer: *Writer, want_failed: bool) !void {
+    for (0..500) |_| {
+        if ((aof_writer.failure() != null) == want_failed) return;
+        try Io.sleep(testing.io, .fromMilliseconds(10), .awake);
+    }
+    return error.Timeout;
+}
+
+test "aof write failure is reported until a retry succeeds" {
+    const dir_name = "aof_failure_test_dir";
+    defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
+
+    var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
+    defer aof_writer.deinit();
+
+    // Point the writer thread at a read-only handle so its next write fails.
+    const dir = try Dir.cwd().openDir(testing.io, dir_name, .{});
+    defer dir.close(testing.io);
+    const read_only = try dir.openFile(testing.io, "test.aof", .{ .mode = .read_only });
+    const writable = swap_test_file(&aof_writer, read_only);
+
+    const ping = [_]Value{.{ .data = "PING" }};
+    _ = aof_writer.write_command(&ping);
+    try wait_for_failure_state(&aof_writer, true);
+    const failure = aof_writer.failure().?;
+    try testing.expect(!failure.fsync);
+
+    var buf: [128]u8 = undefined;
+    var writer: Io.Writer = .fixed(&buf);
+    try failure.write_error(&writer);
+    try testing.expect(std.mem.startsWith(u8, writer.buffered(), "-MISCONF Errors writing to the AOF file: "));
+
+    // Restore the writable handle: the retry writes the kept bytes and clears the failure.
+    read_only.close(testing.io);
+    _ = swap_test_file(&aof_writer, writable);
+    try wait_for_failure_state(&aof_writer, false);
+
+    var contents: [64]u8 = undefined;
+    try testing.expectEqualStrings("*1\r\n$4\r\nPING\r\n", try read_test_aof(dir_name, "test.aof", &contents));
+}
+
+test "aof wait_durable reports failure under appendfsync always" {
+    const dir_name = "aof_always_failure_test_dir";
+    defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
+
+    var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .always);
+    defer aof_writer.deinit();
+
+    const dir = try Dir.cwd().openDir(testing.io, dir_name, .{});
+    defer dir.close(testing.io);
+    const read_only = try dir.openFile(testing.io, "test.aof", .{ .mode = .read_only });
+    const writable = swap_test_file(&aof_writer, read_only);
+
+    const ping = [_]Value{.{ .data = "PING" }};
+    const end = aof_writer.write_command(&ping);
+    try testing.expect(!aof_writer.wait_durable(end));
+    try testing.expect(aof_writer.failure() != null);
+
+    read_only.close(testing.io);
+    _ = swap_test_file(&aof_writer, writable);
+    try wait_for_failure_state(&aof_writer, false);
+    try testing.expect(aof_writer.wait_durable(end));
 }
