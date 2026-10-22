@@ -137,7 +137,18 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .max_args = null,
         .description = "Expire key",
         // TODO: convert to expireat
-        .write_to_aof = false,
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "PEXPIREAT",
+        // Same handler as EXPIREAT, which takes milliseconds here. The AOF logs
+        // EXPIRE and SETEX TTLs as PEXPIREAT (see Server.log_absolute_ttl).
+        .handler = .{ .store_handler = string.expire_at },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Set a key's expiry as a Unix time in milliseconds",
+        .write_to_aof = true,
     });
 
     try registry.register(.{

@@ -213,7 +213,7 @@ test "write commands are logged to the AOF and reads are not" {
     var registry = try init_registry(std.testing.allocator);
     defer registry.deinit();
 
-    for ([_][]const u8{ "SET", "DEL", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET" }) |name| {
+    for ([_][]const u8{ "SET", "DEL", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET", "EXPIRE", "SETEX", "PEXPIREAT" }) |name| {
         try std.testing.expect(registry.should_write_to_aof(name));
     }
     for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS" }) |name| {
