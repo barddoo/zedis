@@ -74,7 +74,7 @@ pub fn write_tuple_as_array(writer: *Writer, items: anytype) !void {
 
     const struct_info = info.@"struct";
 
-    try writer.print("*{d}\r\n", .{struct_info.fields.len});
+    try writer.print("*{d}\r\n", .{struct_info.field_names.len});
 
     // 4. Use 'inline for' to iterate over the tuple's elements at compile time.
     //    This loop is "unrolled" by the compiler, generating specific code

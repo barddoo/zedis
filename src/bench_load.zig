@@ -1,5 +1,6 @@
 const std = @import("std");
 const zio = @import("zio");
+const banner = @import("banner.zig");
 const bench_load = @import("benchmarks/bench_load.zig");
 
 pub fn main(init: std.process.Init) !void {
@@ -12,14 +13,12 @@ pub fn main(init: std.process.Init) !void {
     var stdout_writer = std.Io.File.stdout().writer(io, &.{});
     const stdout = &stdout_writer.interface;
 
-    try stdout.writeAll("\n");
-    try stdout.writeAll("█" ** 100);
-    try stdout.writeAll("\n");
-    try stdout.writeAll("█" ++ " " ** 98 ++ "█\n");
-    try stdout.writeAll("█" ++ " " ** 32 ++ "ZEDIS INTEGRATION LOAD TESTS" ++ " " ** 38 ++ "█\n");
-    try stdout.writeAll("█" ++ " " ** 98 ++ "█\n");
-    try stdout.writeAll("█" ** 100);
-    try stdout.writeAll("\n\n");
+    try stdout.print("\n", .{});
+    try stdout.print("{s}\n", .{&banner.repeat("█", 100)});
+    try stdout.print("█{s}█\n", .{&banner.repeat(" ", 98)});
+    try stdout.print("█{s}ZEDIS INTEGRATION LOAD TESTS{s}█\n", .{ &banner.repeat(" ", 32), &banner.repeat(" ", 38) });
+    try stdout.print("█{s}█\n", .{&banner.repeat(" ", 98)});
+    try stdout.print("{s}\n\n", .{&banner.repeat("█", 100)});
 
     try bench_load.run_all_load_tests(allocator, io);
 }

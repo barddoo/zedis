@@ -1,4 +1,5 @@
 const std = @import("std");
+const banner = @import("banner.zig");
 const Server = @import("server.zig");
 const Client = @import("client.zig").Client;
 const ClientMailbox = @import("client_mailbox.zig").ClientMailbox;
@@ -63,9 +64,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 72 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("=", 72)});
     std.debug.print("          INLINE COMMAND EXECUTION (no store thread)\n", .{});
-    std.debug.print("=" ** 72 ++ "\n\n", .{});
+    std.debug.print("{s}\n\n", .{&banner.repeat("=", 72)});
 
     run(server_io, &client, "PING   ", &ping_args, 5_000_000);
     run(server_io, &client, "GET    ", &get_args, 3_000_000);

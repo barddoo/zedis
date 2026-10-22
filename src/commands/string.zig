@@ -160,7 +160,7 @@ pub fn append(writer: *Writer, store: *Store, args: []const Value) !void {
         };
 
         // Concatenate current value with append value
-        const concatenated = try std.fmt.allocPrint(store.allocator, "{s}{s}", .{ current_str, append_value });
+        const concatenated = try store.allocator.print("{s}{s}", .{ current_str, append_value });
         new_value = concatenated;
         needs_free = true;
     } else {

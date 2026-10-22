@@ -1,4 +1,5 @@
 const std = @import("std");
+const banner = @import("banner.zig");
 const bench_store = @import("benchmarks/bench_store.zig");
 const bench_commands = @import("benchmarks/bench_commands.zig");
 
@@ -6,9 +7,9 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 100 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("=", 100)});
     std.debug.print("                            ZEDIS MICRO-BENCHMARKS\n", .{});
-    std.debug.print("=" ** 100 ++ "\n\n", .{});
+    std.debug.print("{s}\n\n", .{&banner.repeat("=", 100)});
 
     std.debug.print("Running micro-benchmarks to test component-level performance...\n", .{});
     std.debug.print("These benchmarks do NOT require a running server.\n\n", .{});
@@ -20,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
     try bench_commands.run_all_benchmarks(allocator);
 
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 100 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("=", 100)});
     std.debug.print("Micro-benchmarks completed successfully!\n", .{});
-    std.debug.print("=" ** 100 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("=", 100)});
 }

@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const Allocator = std.mem.Allocator;
+const banner = @import("../banner.zig");
 const bench_runner = @import("bench_runner.zig");
 const metrics = @import("metrics.zig");
 const client_pool = @import("client_pool.zig");
@@ -189,14 +190,14 @@ pub fn run_all_load_tests(allocator: Allocator, io: std.Io) !void {
     const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");
-    try stdout.writeAll("=" ** 100);
+    try stdout.writeAll(&banner.repeat("=", 100));
     try stdout.writeAll("\n");
     try stdout.writeAll("INTEGRATION LOAD TESTS\n");
-    try stdout.writeAll("=" ** 100);
+    try stdout.writeAll(&banner.repeat("=", 100));
     try stdout.writeAll("\n");
     try stdout.writeAll("NOTE: These tests require a running Zedis server at 127.0.0.1:6379\n");
     try stdout.writeAll("Start the server with: zig build run\n");
-    try stdout.writeAll("=" ** 100);
+    try stdout.writeAll(&banner.repeat("=", 100));
     try stdout.writeAll("\n\n");
 
     // Check if stdin is a terminal (interactive mode)
@@ -232,8 +233,8 @@ pub fn run_all_load_tests(allocator: Allocator, io: std.Io) !void {
     }
 
     try stdout.writeAll("\n");
-    try stdout.writeAll("=" ** 100);
+    try stdout.writeAll(&banner.repeat("=", 100));
     try stdout.writeAll("\nAll load tests completed!\n");
-    try stdout.writeAll("=" ** 100);
+    try stdout.writeAll(&banner.repeat("=", 100));
     try stdout.writeAll("\n");
 }

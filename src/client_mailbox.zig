@@ -15,7 +15,7 @@ pub const ClientMailbox = struct {
     tail: ?*MessageNode = null,
     pending_count: usize = 0,
     capacity: usize,
-    node_pool: [4]?*MessageNode = .{null} ** 4,
+    node_pool: [4]?*MessageNode = @splat(null),
 
     pub fn init(capacity: usize) ClientMailbox {
         return .{

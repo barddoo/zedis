@@ -1,5 +1,6 @@
 const std = @import("std");
 const metrics = @import("metrics.zig");
+const banner = @import("../banner.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 
@@ -144,13 +145,13 @@ pub fn run_benchmark_advanced(
 /// Print benchmark results in a formatted table
 pub fn print_results(results: []const BenchmarkResult) void {
     std.debug.print("\n", .{});
-    std.debug.print("=" ** 110 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("=", 110)});
     std.debug.print("BENCHMARK SUMMARY\n", .{});
-    std.debug.print("=" ** 110 ++ "\n\n", .{});
+    std.debug.print("{s}\n\n", .{&banner.repeat("=", 110)});
 
     // Header
     std.debug.print("{s:<42} {s:>15} {s:>12} {s:>12} {s:>18}\n", .{ "Benchmark", "Throughput", "p50", "p99", "Memory (net)" });
-    std.debug.print("-" ** 110 ++ "\n", .{});
+    std.debug.print("{s}\n", .{&banner.repeat("-", 110)});
 
     // Results
     for (results) |result| {
@@ -181,7 +182,7 @@ pub fn print_results(results: []const BenchmarkResult) void {
         }
     }
 
-    std.debug.print("\n" ++ "=" ** 110 ++ "\n", .{});
+    std.debug.print("\n{s}\n", .{&banner.repeat("=", 110)});
 }
 
 /// Print a single result immediately (for interactive benchmarks)

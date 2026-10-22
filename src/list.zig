@@ -59,7 +59,7 @@ pub const ZedisList = struct {
     }
 
     pub fn pop(self: *ZedisList) ?PrimitiveValue {
-        const node = self.list.pop() orelse return null;
+        const node = self.list.popLast() orelse return null;
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);
         const value = list_node.data;
         self.allocator.destroy(list_node);

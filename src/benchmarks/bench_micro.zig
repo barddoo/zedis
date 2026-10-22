@@ -1,4 +1,5 @@
 const std = @import("std");
+const banner = @import("../banner.zig");
 const bench_store = @import("bench_store.zig");
 const bench_commands = @import("bench_commands.zig");
 
@@ -11,12 +12,20 @@ pub fn main() !void {
     const stdout = &stdout_writer.interface;
 
     try stdout.writeAll("\n");
-    try stdout.writeAll("█" ** 100);
+    try stdout.writeAll(&banner.repeat("█", 100));
     try stdout.writeAll("\n");
-    try stdout.writeAll("█" ++ " " ** 98 ++ "█\n");
-    try stdout.writeAll("█" ++ " " ** 35 ++ "ZEDIS MICRO-BENCHMARKS" ++ " " ** 41 ++ "█\n");
-    try stdout.writeAll("█" ++ " " ** 98 ++ "█\n");
-    try stdout.writeAll("█" ** 100);
+    try stdout.writeAll("█");
+    try stdout.writeAll(&banner.repeat(" ", 98));
+    try stdout.writeAll("█\n");
+    try stdout.writeAll("█");
+    try stdout.writeAll(&banner.repeat(" ", 35));
+    try stdout.writeAll("ZEDIS MICRO-BENCHMARKS");
+    try stdout.writeAll(&banner.repeat(" ", 41));
+    try stdout.writeAll("█\n");
+    try stdout.writeAll("█");
+    try stdout.writeAll(&banner.repeat(" ", 98));
+    try stdout.writeAll("█\n");
+    try stdout.writeAll(&banner.repeat("█", 100));
     try stdout.writeAll("\n\n");
 
     try stdout.writeAll("Running micro-benchmarks to test component-level performance...\n");
@@ -29,9 +38,9 @@ pub fn main() !void {
     try bench_commands.run_all_benchmarks(allocator);
 
     try stdout.writeAll("\n");
-    try stdout.writeAll("█" ** 100);
+    try stdout.writeAll(&banner.repeat("█", 100));
     try stdout.writeAll("\n");
     try stdout.writeAll("Micro-benchmarks completed successfully!\n");
-    try stdout.writeAll("█" ** 100);
+    try stdout.writeAll(&banner.repeat("█", 100));
     try stdout.writeAll("\n");
 }

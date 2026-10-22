@@ -1490,8 +1490,8 @@ test "TS.RANGE command with COUNT parameter" {
     while (i < 5) : (i += 1) {
         buffer = mem.zeroes([4096]u8);
         writer = Writer.fixed(&buffer);
-        const timestamp_str = try std.fmt.allocPrint(testing.allocator, "{d}", .{1000 + i * 100});
-        const value_str = try std.fmt.allocPrint(testing.allocator, "{d}.0", .{i * 10});
+        const timestamp_str = try testing.allocator.print("{d}", .{1000 + i * 100});
+        const value_str = try testing.allocator.print("{d}.0", .{i * 10});
         const add_args = [_]Value{
             .{ .data = "TS.ADD" },
             .{ .data = "myts" },
@@ -1567,9 +1567,9 @@ test "TS.RANGE with 5000 random samples using compressed encoding" {
     // Test range query with specific start and end timestamps
     const start_ts = 1000000 + 1000 * 1000; // Sample 1000
     const end_ts = 1000000 + 2000 * 1000; // Sample 2000
-    const start_str = try std.fmt.allocPrint(testing.allocator, "{d}", .{start_ts});
+    const start_str = try testing.allocator.print("{d}", .{start_ts});
     defer testing.allocator.free(start_str);
-    const end_str = try std.fmt.allocPrint(testing.allocator, "{d}", .{end_ts});
+    const end_str = try testing.allocator.print("{d}", .{end_ts});
     defer testing.allocator.free(end_str);
 
     var range_samples = try ts.range(start_str, end_str, null, null);

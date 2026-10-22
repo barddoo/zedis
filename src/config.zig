@@ -188,7 +188,7 @@ pub const RuntimePrefs = struct {
 
 /// Path of the config file passed on the command line, if any.
 pub fn find_config_file(allocator: std.mem.Allocator, args: std.process.Args) ?[]const u8 {
-    var args_iter = if (builtin.os.tag == .windows) args.iterate() else (std.process.Args.Iterator.initAllocator(args, allocator) catch return null);
+    var args_iter = if (builtin.target.os.tag == .windows) args.iterate() else (std.process.Args.Iterator.initAllocator(args, allocator) catch return null);
 
     _ = args_iter.skip();
 
