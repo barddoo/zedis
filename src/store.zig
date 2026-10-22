@@ -828,24 +828,35 @@ pub const Store = struct {
             return self.resolve_entry(old_key, false) != null;
         }
 
-        const entry = self.resolve_entry(old_key, false) orelse return false;
+        // Mark the entry recently used before allocating, so LRU eviction
+        // triggered by the allocation doesn't pick the key being renamed.
+        self.touch_entry(self.resolve_entry(old_key, false) orelse return false);
+
+        const new_heap: ?[]u8 = if (new_key.len > inline_key_max) try self.allocator.dupe(u8, new_key) else null;
+        errdefer if (new_heap) |key| self.allocator.free(key);
 
         if (self.findSlot(keyHash(new_key), new_key) != null) {
             _ = self.delete(new_key);
         }
 
-        if (new_key.len > inline_key_max) {
-            const new_heap = try self.allocator.dupe(u8, new_key);
-            if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
-            entry.key = new_heap;
+        // Look the old key up only now: the allocation (eviction) and the delete
+        // (maintenance rehash) above can both move or remove slots. The entry
+        // still carries its old key here, so this finds it unless it was evicted.
+        const old_slot = self.findSlot(keyHash(old_key), old_key) orelse {
+            if (new_heap) |key| self.allocator.free(key);
+            return false;
+        };
+        const idx = self.slots[old_slot].idx;
+        const entry = self.entries[idx];
+
+        if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
+        if (new_heap) |key| {
+            entry.key = key;
         } else {
-            if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
             @memcpy(entry.inline_key_data[0..new_key.len], new_key);
             entry.key = entry.inline_key_data[0..new_key.len];
         }
 
-        const old_slot = self.findSlot(keyHash(old_key), old_key) orelse unreachable;
-        const idx = self.slots[old_slot].idx;
         self.slots[old_slot] = .{ .hash = 0, .idx = tomb_slot };
         self.count -= 1;
 
