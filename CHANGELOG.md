@@ -15,6 +15,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+## [0.2.0] - 2026-10-22
+
+### Added
+
+- AOF writer thread with group commit: file I/O is offloaded to a dedicated OS thread, eliminating blocking fsyncs on the event loop. Under `appendfsync always`, throughput goes from ~450 rps to ~190k rps (420×).
+- `executors` config key: accepts a number or `"auto"`. Defaults to `1`.
+- `PEXPIREAT` command.
+
+### Fixed
+
+- Clock initialisation crash on Linux: the cached timestamp was undefined until the update coroutine ran, causing a panic in `toMilliseconds()` on the epoll backend where scheduler timing did not guarantee the coroutine ran first.
+- `EXPIRE`, `SETEX`, and `PSETEX` are now rewritten to `PEXPIREAT` with an absolute millisecond timestamp before being logged to the AOF, so expiry times survive restart correctly.
+- List write commands (`LPUSH`, `RPUSH`, `LPOP`, `RPOP`, `LSET`) were not logged to the AOF.
+- Write commands are rejected with `-MISCONF` while the AOF writer thread is in a failure state (write error retried every second; fsync failure is permanent until restart), matching Redis behaviour.
+- `TTL` returned the absolute expiry timestamp instead of the seconds remaining.
+- `RENAME` of a key whose destination already existed hit `unreachable`.
+- `INCR`, `DECR`, `INCRBY`, `DECRBY` replied with bulk strings instead of RESP integers.
+- Error replies had the error code doubled (e.g. `-ERR ERR …`).
+- `CONFIG` command was not registered.
+- Unit tests were not executed under Zig 0.17 (the test runner reported success with zero tests run).
+
+### Changed
+
+- Migrated to Zig 0.17 and zio main.
+- Default executor count changed from `auto` (one per CPU core) to `1`. With a single shared store lock, multiple executors add contention and cache pressure with no throughput benefit. On the benchmark workload this raised SET/GET throughput by 1.7× and dropped CPU use from ~450% to ~75%.
+- Commands that are fully buffered in the socket read buffer are now parsed zero-copy in a single pass. Arg slices point directly into the read buffer instead of being copied into the parse arena. Removed the previous 64 KB inline-value limit; the maximum bulk string length is now 512 MB (matching Redis).
+- Hash map entry array now grows geometrically (capacity doubles on each resize), removing the throughput cliff at high key counts. Insert throughput at 1M keys improved from 6.6k rps to 173k rps (26×).
+- `aof_write_buffer_size` config key removed; internal buffer sizing is no longer exposed.
+- Build optimisation mode set to `ReleaseFast` by default.
+
 ## [0.1.3] - 2026-06-14
 
 ### Fixed
@@ -206,7 +236,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/bardoo/zedis/compare/0.1.3...HEAD
+[Unreleased]: https://github.com/bardoo/zedis/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bardoo/zedis/compare/0.1.3...v0.2.0
 [0.1.3]: https://github.com/bardoo/zedis/compare/0.1.2...0.1.3
 [0.1.2]: https://github.com/bardoo/zedis/compare/0.1.1...0.1.2
 [0.1.1]: https://github.com/bardoo/zedis/compare/0.1.0...0.1.1
