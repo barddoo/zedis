@@ -41,6 +41,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "CONFIG",
+        .handler = .{ .client_handler = connection_commands.config },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Get or set server configuration parameters",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
         .name = "SET",
         .handler = .{ .store_handler = string.set },
         .min_args = 3,
