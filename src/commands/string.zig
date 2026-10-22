@@ -41,14 +41,14 @@ pub fn incr(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const new_value = try incr_decr(store, key, 1);
 
-    try resp.write_int_bulk_string(writer, new_value);
+    try resp.write_int(writer, new_value);
 }
 
 pub fn decr(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const new_value = try incr_decr(store, key, -1);
 
-    try resp.write_int_bulk_string(writer, new_value);
+    try resp.write_int(writer, new_value);
 }
 
 fn incr_decr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
@@ -62,7 +62,7 @@ fn incr_decr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                     return error.ValueNotInteger;
                 };
                 new_value = std.math.add(i64, intValue, value) catch {
-                    return error.ValueNotInteger;
+                    return error.Overflow;
                 };
             },
             .short_string => {
@@ -70,12 +70,12 @@ fn incr_decr(store_ptr: *Store, key: []const u8, value: i64) !i64 {
                     return error.ValueNotInteger;
                 };
                 new_value = std.math.add(i64, intValue, value) catch {
-                    return error.ValueNotInteger;
+                    return error.Overflow;
                 };
             },
             .int => {
                 new_value = std.math.add(i64, v.value.int, value) catch {
-                    return error.ValueNotInteger;
+                    return error.Overflow;
                 };
             },
             else => return error.WrongType,
@@ -297,7 +297,7 @@ pub fn incrby(writer: *Writer, store: *Store, args: []const Value) !void {
     };
 
     const new_value = try incr_decr(store, key, increment);
-    try resp.write_int_bulk_string(writer, new_value);
+    try resp.write_int(writer, new_value);
 }
 
 pub fn decrby(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -306,8 +306,9 @@ pub fn decrby(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.ValueNotInteger;
     };
 
-    const new_value = try incr_decr(store, key, -decrement);
-    try resp.write_int_bulk_string(writer, new_value);
+    const negated = std.math.negate(decrement) catch return error.Overflow;
+    const new_value = try incr_decr(store, key, negated);
+    try resp.write_int(writer, new_value);
 }
 
 pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -514,7 +515,7 @@ test "INCR command on non-existing key" {
 
     try incr(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$1\r\n1\r\n", writer.buffered());
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
     const stored_value = store.get("counter");
     try testing.expect(stored_value != null);
@@ -542,7 +543,7 @@ test "INCR command on existing integer" {
 
     try incr(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$1\r\n6\r\n", writer.buffered());
+    try testing.expectEqualStrings(":6\r\n", writer.buffered());
 
     const stored_value = store.get("counter");
     try testing.expect(stored_value != null);
@@ -570,7 +571,7 @@ test "INCR command on string that represents integer" {
 
     try incr(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$2\r\n11\r\n", writer.buffered());
+    try testing.expectEqualStrings(":11\r\n", writer.buffered());
 
     const stored_value = store.get("counter");
     try testing.expect(stored_value != null);
@@ -619,7 +620,7 @@ test "DECR command on non-existing key" {
 
     try decr(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$2\r\n-1\r\n", writer.buffered());
+    try testing.expectEqualStrings(":-1\r\n", writer.buffered());
 
     const stored_value = store.get("counter");
     try testing.expect(stored_value != null);
@@ -647,7 +648,7 @@ test "DECR command on existing integer" {
 
     try decr(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$1\r\n9\r\n", writer.buffered());
+    try testing.expectEqualStrings(":9\r\n", writer.buffered());
 
     const stored_value = store.get("counter");
     try testing.expect(stored_value != null);
@@ -1058,7 +1059,7 @@ test "INCRBY command on non-existing key" {
 
     try incrby(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$1\r\n5\r\n", writer.buffered());
+    try testing.expectEqualStrings(":5\r\n", writer.buffered());
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
@@ -1087,7 +1088,7 @@ test "INCRBY command on existing integer" {
 
     try incrby(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$2\r\n15\r\n", writer.buffered());
+    try testing.expectEqualStrings(":15\r\n", writer.buffered());
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
@@ -1114,7 +1115,7 @@ test "DECRBY command on non-existing key" {
 
     try decrby(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$2\r\n-3\r\n", writer.buffered());
+    try testing.expectEqualStrings(":-3\r\n", writer.buffered());
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
@@ -1143,7 +1144,7 @@ test "DECRBY command on existing integer" {
 
     try decrby(&writer, &store, &args);
 
-    try testing.expectEqualStrings("$1\r\n7\r\n", writer.buffered());
+    try testing.expectEqualStrings(":7\r\n", writer.buffered());
 
     const stored_value = store.get("mykey");
     try testing.expect(stored_value != null);
@@ -1223,4 +1224,72 @@ test "INCRBYFLOAT command with negative increment" {
 
     // Result should be "3" (trailing zeros and decimal point removed)
     try testing.expectEqualStrings("$1\r\n3\r\n", writer.buffered());
+}
+
+test "INCR command overflow returns Overflow" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set_int("counter", std.math.maxInt(i64));
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "INCR" },
+        .{ .data = "counter" },
+    };
+
+    try testing.expectError(error.Overflow, incr(&writer, &store, &args));
+    try testing.expectEqual(@as(i64, std.math.maxInt(i64)), store.get("counter").?.value.int);
+}
+
+test "DECRBY command with minimum i64 decrement returns Overflow" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "DECRBY" },
+        .{ .data = "counter" },
+        .{ .data = "-9223372036854775808" },
+    };
+
+    try testing.expectError(error.Overflow, decrby(&writer, &store, &args));
+}
+
+test "GET command on minimum i64 value" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set_int("counter", std.math.minInt(i64));
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "GET" },
+        .{ .data = "counter" },
+    };
+
+    try get(&writer, &store, &args);
+
+    try testing.expectEqualStrings("$20\r\n-9223372036854775808\r\n", writer.buffered());
 }

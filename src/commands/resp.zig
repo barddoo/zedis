@@ -28,7 +28,8 @@ pub fn write_bulk_string(writer: *Writer, str: []const u8) !void {
 }
 
 pub fn write_int_bulk_string(writer: *Writer, value: i64) !void {
-    var buf: [19]u8 = undefined;
+    // 20 bytes fits minInt(i64) with its sign.
+    var buf: [20]u8 = undefined;
     const len = std.fmt.printInt(&buf, value, 10, .upper, .{});
     try writer.print("${d}\r\n{s}\r\n", .{ len, buf[0..len] });
 }
