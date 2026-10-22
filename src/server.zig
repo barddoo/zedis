@@ -276,20 +276,77 @@ pub fn deinit(self: *Server) void {
     log.info("Server deinitialized - all memory freed", .{});
 }
 
+/// How a command reaches the AOF.
+const AofLogging = enum {
+    none,
+    /// Logged as received, before it executes.
+    verbatim,
+    /// Sets a relative TTL (EXPIRE, SETEX). Logged after it executes as the
+    /// state it produced, with the TTL as an absolute PEXPIREAT like Redis, so
+    /// replaying the AOF later doesn't restart the countdown.
+    absolute_ttl,
+};
+
+fn aof_logging(self: *Server, command_name: []const u8) AofLogging {
+    if (!self.aof_writer.enabled) return .none;
+    if (std.ascii.eqlIgnoreCase(command_name, "EXPIRE") or std.ascii.eqlIgnoreCase(command_name, "SETEX")) {
+        return .absolute_ttl;
+    }
+    return if (self.registry.should_write_to_aof(command_name)) .verbatim else .none;
+}
+
 fn execute_locked(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
-    // Append to the AOF before replying, like Redis. Runs under the store lock
-    // (the single writer to the store), so file I/O is serialized with
-    // commands in execution order.
-    if (args.len > 0 and self.aof_writer.enabled and self.registry.should_write_to_aof(args[0].as_slice())) {
+    // AOF entries are queued under the store lock (the single writer to the
+    // store), so the AOF order matches execution order.
+    const logging: AofLogging = if (args.len > 0) self.aof_logging(args[0].as_slice()) else .none;
+    if (logging != .none) {
         // Like Redis' MISCONF: refuse writes the AOF can't persist.
         if (self.aof_writer.failure()) |failure| {
             failure.write_error(response_writer) catch {};
             return;
         }
-        client.aof_end = self.aof_writer.write_command(args);
     }
+    if (logging == .verbatim) client.aof_end = self.aof_writer.write_command(args);
+
+    // EXPIRE with a non-positive TTL deletes the key; remember whether it
+    // existed so that is logged as a DEL.
+    const existed = logging == .absolute_ttl and args.len > 1 and args[1].as_slice().len > 0 and
+        self.store.exists(args[1].as_slice());
 
     self.process_command_direct(client, args, response_writer);
+
+    if (logging == .absolute_ttl) self.log_absolute_ttl(client, args, existed);
+}
+
+/// Logs the state an EXPIRE or SETEX left behind: `SET key value` for SETEX,
+/// then `PEXPIREAT key <expiry ms>` if the key has a TTL, or `DEL key` if
+/// EXPIRE deleted it.
+fn log_absolute_ttl(self: *Server, client: *Client, args: []const Value, existed: bool) void {
+    if (args.len < 3 or args[1].as_slice().len == 0) return;
+    const key = args[1].as_slice();
+
+    if (std.ascii.eqlIgnoreCase(args[0].as_slice(), "SETEX")) {
+        // Only log a SETEX that took effect, i.e. its value is now stored.
+        if (args.len != 4 or !self.stored_string_equals(key, args[3].as_slice())) return;
+        client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "SET" }, args[1], args[3] });
+    } else if (!self.store.exists(key)) {
+        if (existed) client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "DEL" }, args[1] });
+        return;
+    }
+
+    const expires_at = self.store.get_ttl(key) orelse return;
+    var buf: [20]u8 = undefined;
+    const at = std.fmt.bufPrint(&buf, "{d}", .{expires_at}) catch unreachable;
+    client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "PEXPIREAT" }, args[1], .{ .data = at } });
+}
+
+fn stored_string_equals(self: *Server, key: []const u8, expected: []const u8) bool {
+    const object = self.store.get(key) orelse return false;
+    return switch (object.value) {
+        .string => |s| std.mem.eql(u8, s, expected),
+        .short_string => |ss| std.mem.eql(u8, ss.as_slice(), expected),
+        else => false,
+    };
 }
 
 /// Run one parsed command inline on the calling client coroutine, serialized
