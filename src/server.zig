@@ -64,9 +64,10 @@ pubsub_mutex: std.atomic.Mutex = .unlocked,
 // Serializes command execution against the shared store. Each command executes
 // inline on its own client's coroutine — no store thread / cross-thread
 // hand-off. The lock is required even with a single executor (the default, see
-// main.zig): command handlers may suspend (AOF file I/O, SAVE), letting another
+// main.zig): command handlers may suspend (SAVE does file I/O), letting another
 // client's coroutine run on the same thread, which must not interleave with a
-// half-executed command or reorder the AOF. With several executors it also
+// half-executed command. AOF entries are queued under it, so the AOF order
+// matches execution order (the AOF writer thread does the file I/O). With several executors it also
 // guards against true parallelism. A cooperative (parking) lock is used rather
 // than a raw spinlock: a spinlock held across a suspension would deadlock once
 // every executor thread is spinning on it. Uncontended acquisition is a single
@@ -186,7 +187,6 @@ pub fn init_with_config(
         config.appendonly,
         config.appendfilename,
         config.dir,
-        config.aof_write_buffer_size,
         std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
     );
 
@@ -281,7 +281,7 @@ fn execute_locked(self: *Server, client: *Client, args: []const Value, response_
     // (the single writer to the store), so file I/O is serialized with
     // commands in execution order.
     if (args.len > 0) {
-        self.write_aof(args[0].as_slice(), args);
+        if (self.write_aof(args[0].as_slice(), args)) |end| client.aof_end = end;
     }
 
     self.process_command_direct(client, args, response_writer);
@@ -308,13 +308,14 @@ pub fn process_command_direct(self: *Server, client: *Client, args: []const Valu
     };
 }
 
-/// Write a command to the AOF file. Runs inline with command execution on the
-/// single event-loop thread; the file I/O is async and parks only the running
-/// coroutine while it completes.
-pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) void {
-    if (!self.aof_writer.enabled) return;
-    if (!self.registry.should_write_to_aof(command_name)) return;
-    self.aof_writer.write_command(args);
+/// Queue a command for the AOF. Runs inline with command execution, under the
+/// store lock, so the AOF order matches execution order; the AOF writer thread
+/// does the file I/O. Returns the AOF offset at the end of the command, or null
+/// if the command is not logged.
+pub fn write_aof(self: *Server, command_name: []const u8, args: []const Value) ?u64 {
+    if (!self.aof_writer.enabled) return null;
+    if (!self.registry.should_write_to_aof(command_name)) return null;
+    return self.aof_writer.write_command(args);
 }
 
 // The main server loop. It waits for incoming connections and

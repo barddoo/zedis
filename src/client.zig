@@ -47,6 +47,9 @@ pub const Client = struct {
     disconnect_requested: *std.atomic.Value(bool),
     server: *Server,
     io: std.Io,
+    /// AOF offset just past this client's last logged command; replies wait for
+    /// it to be durable under appendfsync always.
+    aof_end: u64 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -194,6 +197,10 @@ pub const Client = struct {
     /// Write accumulated reply bytes to the socket and flush.
     fn write_batch(self: *Client, response: []const u8) !void {
         if (response.len == 0) return;
+
+        // appendfsync always: don't acknowledge writes before they are fsynced.
+        // The store lock is not held here, so other clients keep running.
+        self.server.aof_writer.wait_durable(self.aof_end);
 
         var writer_buffer: [1024 * 4]u8 = undefined;
         var socket_writer = self.connection.writer(self.io, &writer_buffer);

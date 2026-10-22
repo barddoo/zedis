@@ -23,7 +23,7 @@ allocations not charged against the KV memory budget:
 - Command registry lifetime storage (`StringHashMap` keys/values)
 - Pub/sub channel names and subscriber arrays (dynamic, grow/shrink with subscriptions)
 - AOF/RDB loader allocations during startup
-- AOF writer buffer and file handles
+- AOF write queue (grows with unwritten commands) and file handles
 - Per-command response `StackWriter` overflow allocations (when response exceeds 16KB)
 - Mailbox `MessageNode` allocations (pub/sub delivery)
 - Miscellaneous transient allocations
@@ -75,7 +75,8 @@ cross-thread command hand-off:
 1. Client coroutine parses the command in its per-client arena
 2. Client coroutine acquires the store lock (`server.store_lock`, a parking
    `zio.Mutex`) and executes the command inline on its own executor thread:
-   - writes the command to the AOF (file I/O parks only this coroutine)
+   - queues the command for the AOF (an in-memory append; the AOF writer thread
+     does the file I/O and fsync, see below)
    - executes it via `process_command_direct()` → `registry.execute_command()`,
      building the response in a `StackWriter`
 3. The store lock is released and the client coroutine writes the response to the
@@ -85,10 +86,25 @@ cross-thread command hand-off:
 Commands are serialized by the store lock (one logical writer) rather than by a
 per-command lock in the store data structure.
 
-Why a parking lock and not a raw spinlock: handlers may suspend (AOF file I/O, `SAVE`).
+Why a parking lock and not a raw spinlock: handlers may suspend (`SAVE` file I/O).
 A spinlock held across a suspension deadlocks the runtime once every executor thread is
 spinning on it; `zio.Mutex` queues waiters in the runtime instead, and its uncontended
 fast path is a single atomic CAS.
+
+## AOF Writer Thread
+
+AOF file I/O runs on a dedicated OS thread (`aof.Writer`), never on the event loop or
+under the store lock:
+
+1. Command execution encodes the command into a shared queue under a short
+   `zio.Mutex`, while the store lock is held, so AOF order matches execution order.
+2. The writer thread takes the whole queue, writes it, and fsyncs per `appendfsync`:
+   after every batch (`always`), at most once a second (`everysec`), or never (`no`).
+3. Under `always`, a client waits for its last logged command to be fsynced before its
+   reply is written, after the store lock is released. One fsync covers every command
+   queued while the previous one ran (group commit).
+
+On shutdown the writer drains the queue and fsyncs (unless `no`) before closing.
 
 ## StackWriter
 
@@ -129,7 +145,7 @@ Structures that grow and shrink during operation:
 - Mailbox `MessageNode` allocations (per pub/sub message)
 - Store contents within KV allocator budget
 - `StackWriter` overflow buffers (for large responses)
-- AOF write buffer (configurable, default 64 KB)
+- AOF write queue (unbounded; drained continuously by the AOF writer thread)
 
 ## Memory Budgets and Reporting
 

@@ -151,7 +151,7 @@ initial_capacity: u32 = 8192, // Initial hash map capacity for Store (reduces ea
 eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
 requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
 rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
-aof_write_buffer_size: usize = 64 * 1024, // 64KB buffer for AOF writes
+aof_write_buffer_size: usize = 64 * 1024, // (unused: the AOF writer thread writes its queue directly)
 
 // Computed constants (calculated from other fields)
 pub fn client_pool_size(self: Config) usize {

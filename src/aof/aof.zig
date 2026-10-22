@@ -10,94 +10,222 @@ const Io = std.Io;
 const Dir = Io.Dir;
 const Clock = @import("../clock.zig");
 const Allocator = std.mem.Allocator;
+const zio = @import("zio");
 
+const log = std.log.scoped(.aof);
+
+/// Append-only file writer. Commands are encoded into an in-memory queue while
+/// they execute (under the store lock); a dedicated OS thread writes the queue
+/// to disk and fsyncs according to `fsync_policy`, so file I/O never runs on
+/// the event loop or while the store lock is held.
+///
+/// With `always`, a client must call `wait_durable` with the offset returned by
+/// `write_command` before replying. One fsync covers every command queued while
+/// the previous one ran (group commit).
 pub const Writer = struct {
     enabled: bool,
-    file_writer: ?Io.File.Writer,
-    write_buffer: ?[]u8,
-    io: Io,
-    filename: []const u8,
-    allocator: Allocator,
-    fsync_policy: FsyncPolicy,
-    last_fsync_ms: i64 = 0,
+    fsync_policy: FsyncPolicy = .no,
+    allocator: Allocator = undefined,
+    /// State shared with the writer thread. Heap-allocated so its address stays
+    /// fixed while the thread runs; null when disabled.
+    shared: ?*Shared = null,
 
     pub const FsyncPolicy = enum { always, everysec, no };
 
-    pub fn init(alloc: Allocator, io: Io, enabled: bool, filename: []const u8, work_dir: []const u8, buffer_size: usize, fsync_policy: FsyncPolicy) !Writer {
-        var file_writer: ?Io.File.Writer = null;
-        var write_buffer: ?[]u8 = null;
-        if (enabled) {
-            Dir.cwd().createDir(io, work_dir, .default_dir) catch |err| switch (err) {
-                error.PathAlreadyExists => {},
-                else => return err,
-            };
-            const dir = try Dir.cwd().openDir(io, work_dir, .{});
+    const Shared = struct {
+        allocator: Allocator,
+        file: Io.File,
+        fsync_policy: FsyncPolicy,
+        /// Blocking I/O for the writer thread, independent of the zio runtime.
+        threaded: Io.Threaded,
+        thread: std.Thread = undefined,
 
-            const file = dir.openFile(io, filename, .{ .mode = .write_only }) catch
-                try dir.createFile(io, filename, .{});
-            const buf = try alloc.alloc(u8, buffer_size);
-            errdefer alloc.free(buf);
-            var fw = file.writer(io, buf);
-            const length = try file.length(io);
-            try fw.seekTo(length);
-            file_writer = fw;
-            write_buffer = buf;
-        }
-        return .{
-            .enabled = enabled,
-            .file_writer = file_writer,
-            .write_buffer = write_buffer,
-            .io = io,
-            .filename = filename,
+        /// Guards `queued`, `queued_end` and `stopping`. Held briefly: by command
+        /// execution to append, by the writer thread to take the queue.
+        mutex: zio.Mutex = .init,
+        /// Encoded commands the writer thread has not taken yet.
+        queued: std.ArrayList(u8) = .empty,
+        /// File offset at the end of `queued`.
+        queued_end: u64,
+        stopping: bool = false,
+        /// Futex word bumped on every append and on stop; the writer thread waits on it.
+        wake_seq: std.atomic.Value(u32) = .init(0),
+
+        /// File offset up to which data is written, and under `always` also fsynced.
+        durable_end: std.atomic.Value(u64),
+        /// Futex word bumped whenever `durable_end` advances.
+        durable_seq: std.atomic.Value(u32) = .init(0),
+    };
+
+    pub fn init(alloc: Allocator, io: Io, enabled: bool, filename: []const u8, work_dir: []const u8, fsync_policy: FsyncPolicy) !Writer {
+        if (!enabled) return .{ .enabled = false };
+
+        Dir.cwd().createDir(io, work_dir, .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+        const dir = try Dir.cwd().openDir(io, work_dir, .{});
+        defer dir.close(io);
+
+        const file = dir.openFile(io, filename, .{ .mode = .write_only }) catch
+            try dir.createFile(io, filename, .{});
+        errdefer file.close(io);
+        const start = try file.length(io);
+
+        const shared = try alloc.create(Shared);
+        errdefer alloc.destroy(shared);
+        shared.* = .{
             .allocator = alloc,
+            .file = file,
             .fsync_policy = fsync_policy,
+            .threaded = .init(alloc, .{}),
+            .queued_end = start,
+            .durable_end = .init(start),
+        };
+        errdefer shared.threaded.deinit();
+        shared.thread = try std.Thread.spawn(.{}, run, .{ shared, start });
+
+        return .{
+            .enabled = true,
+            .fsync_policy = fsync_policy,
+            .allocator = alloc,
+            .shared = shared,
         };
     }
 
+    /// Stops the writer thread after it has written (and, unless `no`, fsynced)
+    /// everything queued, then closes the file.
     pub fn deinit(self: *Writer) void {
-        if (self.write_buffer) |buf| {
-            self.allocator.free(buf);
-        }
-        if (self.file_writer) |fw| {
-            fw.file.close(self.io);
+        const shared = self.shared orelse return;
+
+        shared.mutex.lockUncancelable();
+        shared.stopping = true;
+        shared.mutex.unlock();
+        _ = shared.wake_seq.fetchAdd(1, .release);
+        zio.Futex.wake(&shared.wake_seq.raw, 1);
+        shared.thread.join();
+
+        shared.file.close(shared.threaded.io());
+        shared.queued.deinit(shared.allocator);
+        shared.threaded.deinit();
+        self.allocator.destroy(shared);
+        self.shared = null;
+    }
+
+    /// Queue a command for the AOF. Returns the file offset at the end of the
+    /// command, for `wait_durable`, or 0 when the AOF is disabled.
+    pub fn write_command(self: *Writer, args: []const Value) u64 {
+        if (!self.enabled) return 0;
+        const shared = self.shared.?;
+
+        shared.mutex.lockUncancelable();
+        const start_len = shared.queued.items.len;
+        encode_command(&shared.queued, shared.allocator, args) catch {
+            shared.queued.shrinkRetainingCapacity(start_len);
+            const end = shared.queued_end;
+            shared.mutex.unlock();
+            log.err("out of memory queueing command for the AOF; command not logged", .{});
+            return end;
+        };
+        shared.queued_end += shared.queued.items.len - start_len;
+        const end = shared.queued_end;
+        shared.mutex.unlock();
+
+        _ = shared.wake_seq.fetchAdd(1, .release);
+        zio.Futex.wake(&shared.wake_seq.raw, 1);
+        return end;
+    }
+
+    /// Under `always`, parks the calling coroutine until the AOF is fsynced up
+    /// to `end`. A no-op for other policies. Must not be called while holding
+    /// the store lock.
+    pub fn wait_durable(self: *Writer, end: u64) void {
+        if (!self.enabled or self.fsync_policy != .always) return;
+        const shared = self.shared.?;
+        while (true) {
+            const seq = shared.durable_seq.load(.acquire);
+            if (shared.durable_end.load(.acquire) >= end) return;
+            zio.Futex.wait(&shared.durable_seq.raw, seq) catch return;
         }
     }
 
-    /// Encode command args as RESP and write to the AOF file.
-    /// Runs under the store lock on the executing client coroutine; zio
-    /// performs the file I/O and parks only that coroutine while it completes
-    /// (other clients wait on the store lock instead of spinning).
-    pub fn write_command(self: *Writer, args: []const Value) void {
-        if (!self.enabled) return;
-        resp.write_list_len(self.writer(), args.len) catch return;
+    fn encode_command(list: *std.ArrayList(u8), gpa: Allocator, args: []const Value) !void {
+        try list.print(gpa, "*{d}\r\n", .{args.len});
         for (args) |arg| {
-            resp.write_bulk_string(self.writer(), arg.as_slice()) catch return;
-        }
-
-        switch (self.fsync_policy) {
-            .always => {
-                _ = self.file_writer.?.interface.flush() catch {};
-                self.file_writer.?.file.sync(self.io) catch {};
-            },
-            .everysec => {
-                const now_ms = Io.Timestamp.now(self.io, .awake).toMilliseconds();
-                if (now_ms - self.last_fsync_ms >= 1000) {
-                    _ = self.file_writer.?.interface.flush() catch {};
-                    self.file_writer.?.file.sync(self.io) catch {};
-                    self.last_fsync_ms = now_ms;
-                }
-            },
-            .no => {},
+            try list.print(gpa, "${d}\r\n", .{arg.data.len});
+            try list.appendSlice(gpa, arg.data);
+            try list.appendSlice(gpa, "\r\n");
         }
     }
 
-    pub fn writer(self: *Writer) *Io.Writer {
-        return &self.file_writer.?.interface;
+    /// Writer thread: drains `queued` to the file and fsyncs per policy.
+    fn run(shared: *Shared, start: u64) void {
+        const io = shared.threaded.io();
+        var batch: std.ArrayList(u8) = .empty;
+        defer batch.deinit(shared.allocator);
+
+        var offset = start;
+        var unsynced = false;
+        var last_sync_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
+
+        while (true) {
+            const seq = shared.wake_seq.load(.acquire);
+
+            shared.mutex.lockUncancelable();
+            std.mem.swap(std.ArrayList(u8), &batch, &shared.queued);
+            const stopping = shared.stopping;
+            shared.mutex.unlock();
+
+            const had_data = batch.items.len > 0;
+            if (had_data) {
+                shared.file.writePositionalAll(io, batch.items, offset) catch |err| {
+                    log.err("AOF write failed: {s}", .{@errorName(err)});
+                };
+                offset += batch.items.len;
+                batch.clearRetainingCapacity();
+                unsynced = true;
+            }
+
+            const now_ms = Io.Timestamp.now(io, .awake).toMilliseconds();
+            const sync_now = unsynced and switch (shared.fsync_policy) {
+                .always => true,
+                .everysec => now_ms - last_sync_ms >= 1000,
+                .no => false,
+            };
+            if (sync_now) {
+                shared.file.sync(io) catch |err| log.err("AOF fsync failed: {s}", .{@errorName(err)});
+                unsynced = false;
+                last_sync_ms = now_ms;
+            }
+
+            // Under `always` this only advances after the fsync above. On write or
+            // fsync failure it still advances (after logging) so waiters can't hang.
+            if (offset > shared.durable_end.load(.monotonic)) {
+                shared.durable_end.store(offset, .release);
+                _ = shared.durable_seq.fetchAdd(1, .release);
+                zio.Futex.wake(&shared.durable_seq.raw, std.math.maxInt(u32));
+            }
+
+            if (had_data) continue;
+            if (stopping) break;
+
+            // Sleep until more commands arrive; under `everysec`, also wake for
+            // the next due fsync.
+            const timeout: zio.Timeout = if (unsynced and shared.fsync_policy == .everysec)
+                .{ .duration = .fromMilliseconds(@intCast(@max(1, 1000 - (now_ms - last_sync_ms)))) }
+            else
+                .none;
+            zio.Futex.waitTimeout(&shared.wake_seq.raw, seq, timeout) catch {};
+        }
+
+        if (unsynced and shared.fsync_policy != .no) {
+            shared.file.sync(io) catch |err| log.err("AOF fsync failed: {s}", .{@errorName(err)});
+        }
     }
 };
 
 pub const Reader = struct {
-    file_reader: Io.File.Reader,
+    file: Io.File,
     allocator: Allocator,
     store: *Store,
     registry: *Registry,
@@ -106,50 +234,60 @@ pub const Reader = struct {
 
     pub fn init(allocator: Allocator, store: *Store, registry: *Registry, io: Io, work_dir: []const u8, filename: []const u8) !Reader {
         const dir = try Dir.cwd().openDir(io, work_dir, .{});
+        defer dir.close(io);
         const file = try dir.openFile(io, filename, .{ .mode = .read_only });
-        var result = Reader{
-            .file_reader = undefined,
+        return .{
+            .file = file,
             .allocator = allocator,
             .store = store,
             .registry = registry,
             .io = io,
         };
-        result.file_reader = file.reader(io, &result.reader_buffer);
-        return result;
     }
 
+    /// Replays the AOF into the store, one command at a time, then closes the file.
     pub fn read(self: *Reader) !void {
+        defer self.file.close(self.io);
+
+        // Built here rather than in init: the reader points at `reader_buffer`,
+        // so it must not outlive (or be copied away from) `self`.
+        var file_reader = self.file.reader(self.io, &self.reader_buffer);
         var parser = Parser.init(self.allocator);
-        var commands = try std.ArrayList(Command).initCapacity(self.allocator, 128);
-        defer commands.deinit(self.allocator);
 
-        while (parser.parse(&self.file_reader.interface)) |command| {
-            try commands.append(self.allocator, command);
-        } else |_| {}
-
-        for (commands.items) |command| {
+        var replayed: usize = 0;
+        while (true) {
+            var command = parser.parse(&file_reader.interface) catch |err| switch (err) {
+                error.EndOfStream => break,
+                else => {
+                    log.warn("AOF parse failed after {d} commands: {s}; ignoring the rest of the file", .{ replayed, @errorName(err) });
+                    break;
+                },
+            };
+            defer command.deinit();
             try self.registry.execute_command_aof(self.store, command.get_args());
+            replayed += 1;
         }
-
-        for (commands.items) |*command| {
-            command.deinit();
-        }
-
-        self.file_reader.file.close(self.io);
+        log.info("Replayed {d} commands from the AOF", .{replayed});
     }
 };
 
 const testing = std.testing;
-test "aof reading test" {
+test "aof reader replays values larger than its read buffer" {
     const reg_init = @import("../commands/init_registry.zig");
+    const dir_name = "aof_reader_test_dir";
+    defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
-    // Read a command and test that the value is stored as expected
-    const test_file_data = "*3\r\n$3\r\nset\r\n$1\r\nt\r\n$4\r\ntest\r\n";
-    const cwd = Dir.cwd();
-    const test_file = try cwd.createFile(testing.io, "aof_reading_test.aof", .{ .read = true });
-    defer cwd.deleteFile(testing.io, "aof_reading_test.aof") catch {};
-    var test_file_writer = test_file.writer(testing.io, &.{});
-    try test_file_writer.interface.writeAll(test_file_data);
+    // A value larger than the 8 KB read buffer, followed by another command.
+    const big_len = 20 * 1024;
+    {
+        var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
+        defer aof_writer.deinit();
+        const big = try testing.allocator.alloc(u8, big_len);
+        defer testing.allocator.free(big);
+        @memset(big, 'b');
+        _ = aof_writer.write_command(&.{ .{ .data = "set" }, .{ .data = "big" }, .{ .data = big } });
+        _ = aof_writer.write_command(&.{ .{ .data = "set" }, .{ .data = "t" }, .{ .data = "test" } });
+    }
 
     var registry = try reg_init.init_registry(std.testing.allocator);
     defer registry.deinit();
@@ -157,70 +295,65 @@ test "aof reading test" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    var reader_buffer: [8192]u8 = undefined;
-    var aof_reader: Reader = undefined;
-    aof_reader.allocator = testing.allocator;
-    aof_reader.file_reader = test_file.reader(testing.io, &reader_buffer);
-    aof_reader.store = &store;
-    aof_reader.registry = &registry;
-    aof_reader.io = testing.io;
-
+    var aof_reader = try Reader.init(testing.allocator, &store, &registry, testing.io, dir_name, "test.aof");
     try aof_reader.read();
 
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.as_slice(), "test"));
+    try testing.expectEqual(@as(usize, big_len), store.get("big").?.value.string.len);
+    try testing.expectEqualStrings("test", store.get("t").?.value.short_string.as_slice());
 }
-test "aof writing test" {
-    const reg_init = @import("../commands/init_registry.zig");
 
-    // Execute a command and test that it writes it correctly
-    const test_file_name = "aof_writing_test.aof";
-    const cwd = Dir.cwd();
-    const test_file = try cwd.createFile(testing.io, test_file_name, .{ .read = true });
-    defer cwd.deleteFile(testing.io, "aof_writing_test.aof") catch {};
+fn read_test_aof(dir_name: []const u8, file_name: []const u8, buf: []u8) ![]const u8 {
+    const dir = try Dir.cwd().openDir(testing.io, dir_name, .{});
+    defer dir.close(testing.io);
+    const file = try dir.openFile(testing.io, file_name, .{});
+    defer file.close(testing.io);
+    const n = try file.readPositionalAll(testing.io, buf, 0);
+    return buf[0..n];
+}
 
-    const test_file_data = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n";
+test "aof writer thread writes queued commands before deinit returns" {
+    const dir_name = "aof_writer_test_dir";
+    defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
-    var registry = try reg_init.init_registry(std.testing.allocator);
-    var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
-    var parser = Parser.init(testing.allocator);
-    defer registry.deinit();
-    defer store.deinit();
+    var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
+    const set_args = [_]Value{ .{ .data = "SET" }, .{ .data = "t" }, .{ .data = "test" } };
+    const end = aof_writer.write_command(&set_args);
+    const incr_args = [_]Value{ .{ .data = "INCR" }, .{ .data = "n" } };
+    _ = aof_writer.write_command(&incr_args);
+    aof_writer.deinit();
 
-    var reader = Io.Reader.fixed(test_file_data);
-    var cmd = try parser.parse(&reader);
-    defer cmd.deinit();
+    const expected = "*3\r\n$3\r\nSET\r\n$1\r\nt\r\n$4\r\ntest\r\n*2\r\n$4\r\nINCR\r\n$1\r\nn\r\n";
+    try testing.expectEqual(@as(u64, 30), end);
+    var buf: [256]u8 = undefined;
+    try testing.expectEqualStrings(expected, try read_test_aof(dir_name, "test.aof", &buf));
+}
 
-    var discarding = Io.Writer.Discarding.init(&.{});
+test "aof writer appends to an existing file and wait_durable waits for fsync" {
+    const dir_name = "aof_writer_append_test_dir";
+    defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
-    var dummy_client: Client = undefined;
-    dummy_client.authenticated = true;
+    const ping = [_]Value{.{ .data = "PING" }};
+    {
+        var first = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
+        _ = first.write_command(&ping);
+        first.deinit();
+    }
 
-    // Execute command (mutates store, no AOF write)
-    try registry.execute_command(&discarding.writer, &dummy_client, &store, cmd.get_args());
-    try testing.expect(std.mem.eql(u8, store.get("t").?.value.short_string.as_slice(), "test"));
+    var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .always);
+    defer aof_writer.deinit();
+    const end = aof_writer.write_command(&ping);
+    try testing.expectEqual(@as(u64, 28), end);
 
-    // Write AOF separately (simulating what server.write_aof does)
-    var aof_writer: Writer = undefined;
-    aof_writer.enabled = true;
-    aof_writer.file_writer = test_file.writer(testing.io, &.{});
-    aof_writer.io = testing.io;
-    aof_writer.filename = &.{};
-    aof_writer.allocator = testing.allocator;
-    aof_writer.write_buffer = null;
-    aof_writer.write_command(cmd.get_args());
+    aof_writer.wait_durable(end);
+    try testing.expect(aof_writer.shared.?.durable_end.load(.acquire) >= end);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("*1\r\n$4\r\nPING\r\n*1\r\n$4\r\nPING\r\n", try read_test_aof(dir_name, "test.aof", &buf));
+}
 
-    _ = aof_writer.file_writer.?.interface.flush() catch {};
-
-    var file_reader_buffer: [8192]u8 = undefined;
-    var file_reader = test_file.reader(testing.io, &file_reader_buffer);
-
-    const buf = try testing.allocator.alloc(u8, 1024);
-    defer testing.allocator.free(buf);
-    file_reader.interface.readSliceAll(buf) catch |e| {
-        if (e != error.EndOfStream) {
-            return e;
-        }
-    };
-    try testing.expect(std.mem.eql(u8, buf[0..test_file_data.len], test_file_data));
+test "disabled aof writer ignores commands" {
+    var aof_writer = try Writer.init(testing.allocator, testing.io, false, "unused.aof", "unused", .always);
+    defer aof_writer.deinit();
+    const ping = [_]Value{.{ .data = "PING" }};
+    try testing.expectEqual(@as(u64, 0), aof_writer.write_command(&ping));
+    aof_writer.wait_durable(0);
 }
