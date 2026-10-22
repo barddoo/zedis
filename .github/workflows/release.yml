@@ -40,14 +40,6 @@ jobs:
             target: aarch64-linux
             binary: zedis
             ext: ""
-          - platform: macos-x86_64
-            target: x86_64-macos
-            binary: zedis
-            ext: ""
-          - platform: macos-arm64
-            target: aarch64-macos
-            binary: zedis
-            ext: ""
           # - platform: windows-x86_64
           #   target: x86_64-windows
           #   binary: zedis.exe
@@ -113,8 +105,6 @@ jobs:
           files: |
             zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
             zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
-            zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
-            zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
             # zedis-${{ steps.version.outputs.VERSION }}-windows-x86_64.exe
             SHA256SUMS
           body: |
@@ -133,18 +123,6 @@ jobs:
             **Linux (ARM64)**
             ```bash
             curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
-            chmod +x zedis && sudo mv zedis /usr/local/bin/
-            ```
-
-            **macOS (Apple Silicon)**
-            ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
-            chmod +x zedis && sudo mv zedis /usr/local/bin/
-            ```
-
-            **macOS (Intel)**
-            ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
             chmod +x zedis && sudo mv zedis /usr/local/bin/
             ```
 
