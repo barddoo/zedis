@@ -40,11 +40,11 @@ const BenchContext = struct {
         errdefer ctx.store.deinit();
 
         for (ctx.keys, 0..) |*key, i| {
-            key.* = try std.fmt.allocPrint(allocator, "key:{d:0>8}", .{i});
+            key.* = try allocator.print("key:{d:0>8}", .{i});
         }
 
         for (ctx.values, 0..) |*value, i| {
-            value.* = try std.fmt.allocPrint(allocator, "value:{d:0>8}:data", .{i});
+            value.* = try allocator.print("value:{d:0>8}:data", .{i});
         }
 
         return ctx;

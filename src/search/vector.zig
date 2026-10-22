@@ -163,7 +163,7 @@ inline fn load_vec(comptime T: type, blob: []const u8, offset: usize) @Vector(ve
     const bytes = blob[offset * @sizeOf(T) ..][0 .. len * @sizeOf(T)];
     var buf: [len * @sizeOf(T)]u8 align(@alignOf(T)) = undefined;
     @memcpy(buf[0..], bytes);
-    return @bitCast(buf);
+    return std.mem.bytesToValue(@Vector(len, T), &buf);
 }
 
 fn dot(comptime T: type, a: []const u8, b: []const u8, dim: usize) f64 {

@@ -16,7 +16,7 @@ const BitStream = struct {
     /// Initialize a read-only BitStream from existing data (zero-copy, no allocation)
     pub fn init_read_only(data: []const u8) BitStream {
         return .{
-            .buffer = .{ .items = @constCast(data), .capacity = data.len },
+            .buffer = .{ .items = @constCast(data), .capacity = data.len, .pointer_stability = .{} },
             .allocator = null,
         };
     }

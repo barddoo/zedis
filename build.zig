@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .ReleaseSafe });
+    const optimize = b.standardOptimizeOption(.{ .preferred_optimize_mode = .safe });
 
     const zio = b.dependency("zio", .{ .target = target, .optimize = optimize });
     const zio_mod = zio.module("zio");
@@ -21,7 +21,8 @@ pub fn build(b: *std.Build) void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    // Passthru args are no longer visible at configure time in 0.17.
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("run", "Run the server");
     run_step.dependOn(&run_cmd.step);
@@ -37,7 +38,7 @@ pub fn build(b: *std.Build) void {
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = .debug,
     });
     test_mod.addImport("zio", zio_mod);
 
@@ -49,7 +50,6 @@ pub fn build(b: *std.Build) void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     run_unit_tests.setEnvironmentVariable("ZIG_EXE", b.graph.zig_exe);
-    if (b.args != null) run_unit_tests.has_side_effects = true;
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
     test_build_step.dependOn(&b.addInstallArtifact(unit_tests, .{}).step);
 
     const fmt_step = b.step("test:fmt", "Check code formatting");
-    const run_fmt = b.addFmt(.{ .paths = &.{"src"}, .check = true });
+    const run_fmt = b.addFmt(.{ .paths = b.pathList(&.{"src"}), .check = true });
     fmt_step.dependOn(&run_fmt.step);
 
     const test_all_step = b.step("test:all", "Run tests and formatting checks");
@@ -71,7 +71,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/bench_micro.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
         }),
     });
     bench_micro_exe.root_module.addImport("zio", zio_mod);
@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/bench_inline.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
         }),
     });
     bench_inline_exe.root_module.addImport("zio", zio_mod);
@@ -99,7 +99,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/bench_load.zig"),
             .target = target,
-            .optimize = .ReleaseFast,
+            .optimize = .fast,
         }),
     });
     bench_load_exe.root_module.addImport("zio", zio_mod);

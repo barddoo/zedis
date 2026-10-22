@@ -32,11 +32,11 @@ pub const ValueType = enum(u8) {
     search_index,
 
     pub fn to_rdb_opcode(self: ValueType) u8 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     pub fn from_op_code(num: u8) ValueType {
-        return @enumFromInt(num);
+        return @fromBackingInt(@intCast(num));
     }
 };
 
@@ -1368,7 +1368,7 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Add many keys to grow the capacity
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
     }
@@ -1381,7 +1381,7 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Delete half the keys to create tombstones
     i = 0;
     while (i < 500) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         const deleted = store.delete(key);
         try testing.expect(deleted);
@@ -1408,7 +1408,7 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Verify remaining keys are still accessible
     i = 500;
     while (i < 1000) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         const result = store.get(key);
         try testing.expect(result != null);
@@ -1424,7 +1424,7 @@ test "Store maintenance() resets deletion counter" {
     // Add and delete keys to increment deletion counter
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
         _ = store.delete(key);
@@ -1447,7 +1447,7 @@ test "Store maybe_maintenance() respects rate limiting" {
     // Add enough keys to trigger capacity growth
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
     }
@@ -1455,7 +1455,7 @@ test "Store maybe_maintenance() respects rate limiting" {
     // Delete many keys to exceed threshold
     i = 0;
     while (i < 700) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         _ = store.delete(key);
     }
@@ -1494,7 +1494,7 @@ test "Store maybe_maintenance() triggers on 50% waste threshold" {
     // Add many keys
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
     }
@@ -1506,7 +1506,7 @@ test "Store maybe_maintenance() triggers on 50% waste threshold" {
     const target_deletions = (capacity_before / 2) + 10;
     i = 0;
     while (i < target_deletions) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         _ = store.delete(key);
     }
@@ -1529,7 +1529,7 @@ test "Store maybe_maintenance() triggers on 25% deletions threshold" {
     // Add keys to establish capacity
     var i: usize = 0;
     while (i < 500) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
     }
@@ -1544,7 +1544,7 @@ test "Store maybe_maintenance() triggers on 25% deletions threshold" {
     // Delete exactly threshold + 1 keys to trigger maintenance
     i = 0;
     while (i < threshold + 1) : (i += 1) {
-        const key = try std.fmt.allocPrint(testing.allocator, "key{d}", .{i});
+        const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         _ = store.delete(key);
     }

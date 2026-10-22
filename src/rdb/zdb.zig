@@ -13,6 +13,9 @@ const mem = std.mem;
 const eql = mem.eql;
 const Clock = @import("../clock.zig");
 
+/// Redis RDB/AOF checksum (CRC-64/Jones); std ships the exact catalog entry.
+const Crc64 = std.hash.crc.@"CRC-64/REDIS";
+
 const DEFAULT_FILE_NAME = "test.rdb";
 
 const OPCODE_AUX = 0xFA;
@@ -40,7 +43,7 @@ pub const Writer = struct {
     file: Io.File,
     buffered_writer: Io.File.Writer,
     store: *Store,
-    checksum: std.hash.crc.Crc64Redis,
+    checksum: Crc64,
     io: Io,
 
     fn map_to_op_code(val: ZedisValue) u8 {
@@ -59,7 +62,7 @@ pub const Writer = struct {
         try self.buffered_writer.interface.writeByte(byte);
     }
 
-    inline fn write_int(self: *Writer, comptime T: type, value: T, endian: std.builtin.Endian) !void {
+    inline fn write_int(self: *Writer, comptime T: type, value: T, endian: std.lang.Endian) !void {
         var buf: [@sizeOf(T)]u8 = undefined;
         mem.writeInt(T, &buf, value, endian);
         self.checksum.update(&buf);
@@ -99,7 +102,7 @@ pub const Writer = struct {
             .file = file,
             .buffered_writer = buffered_writer,
             .store = store,
-            .checksum = std.hash.crc.Crc64Redis.init(),
+            .checksum = Crc64.init(),
             .io = io,
         };
     }

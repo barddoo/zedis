@@ -42,12 +42,12 @@ an atomic `memory_used` counter.
 - Bound to the store via `attachStore()` for eviction callbacks
 
 All store-owned data allocates through `kv_allocator.allocator()`:
-- `StoreEntry` structs and their heap-allocated keys
+- `StoreEntry` structs (keys ≤ 23 bytes are inline; longer keys heap-allocate)
 - `ZedisValue.string` for strings > 23 bytes (short strings are inline)
 - `ZedisList` nodes and data
 - `TimeSeries` chunks and sample storage
 - `ScalableBloomFilter` chains and bit arrays
-- Hash map internals (`EntryMap` capacity, reallocation)
+- Store hash-table internals (`slots`/`entries` arrays, reallocation)
 
 ## Per-Client Parse Arena
 
@@ -68,18 +68,28 @@ parser allocations to the KV budget.
 
 ## Command Execution Flow
 
-Commands execute inline in the client's zio task, serialized by `store_mutex` (spinlock):
+Client I/O and command execution run in the same domain: client connections run as
+zio coroutines on the runtime's executor threads (parsing, command execution, response
+writes), and the shared store is protected by a single cooperative store lock rather
+than being owned by a dedicated thread. There is no cross-thread command hand-off:
 
-1. Parse command in per-client arena
-2. Acquire `store_mutex`
-3. Execute command via `processCommandDirect()` → `registry.executeCommand()`
-4. Release `store_mutex`
-5. Write AOF (async, outside mutex)
-6. Write response directly to socket via `StackWriter`
-7. Reset parse arena
-8. Flush mailbox (pub/sub messages that arrived during execution)
+1. Client coroutine parses the command in its per-client arena
+2. Client coroutine acquires the store lock (`server.store_lock`, a parking
+   `zio.Mutex`) and executes the command inline on its own executor thread:
+   - writes the command to the AOF (file I/O parks only this coroutine)
+   - executes it via `process_command_direct()` → `registry.execute_command()`,
+     building the response in a `StackWriter`
+3. The store lock is released and the client coroutine writes the response to the
+   socket, resets its arena, and flushes the mailbox (pub/sub messages that arrived
+   during execution)
 
-There is no intermediate command queue or argument duplication for normal commands.
+Commands are serialized by the store lock (one logical writer) rather than by a
+per-command lock in the store data structure.
+
+Why a parking lock and not a raw spinlock: handlers may suspend (AOF file I/O, `SAVE`).
+A spinlock held across a suspension deadlocks the runtime once every executor thread is
+spinning on it; `zio.Mutex` queues waiters in the runtime instead, and its uncontended
+fast path is a single atomic CAS.
 
 ## StackWriter
 
