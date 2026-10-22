@@ -7,7 +7,7 @@ pub const Allocator = std.mem.Allocator;
 const VEC_LEN = std.simd.suggestVectorLength(u8) orelse 16;
 
 /// Widest type that can hold a VEC_LEN-bit separator mask.
-const MaskInt = std.meta.Int(.unsigned, VEC_LEN);
+const MaskInt = @Int(.unsigned, VEC_LEN);
 
 /// Splits text into lowercased tokens, splitting on non-alphanumeric bytes.
 /// UTF-8 bytes (>= 0x80) are treated as token characters so unicode words

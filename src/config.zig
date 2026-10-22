@@ -248,8 +248,8 @@ fn parse_executors(value: []const u8) ?u8 {
     return n;
 }
 
-/// zio's executor limit: `Executor.max_executors` (ExecutorId is u6 on 64-bit, u5 on 32-bit).
-const max_executors = @bitSizeOf(usize);
+/// zio's executor limit (one more than the largest ExecutorId).
+const max_executors = std.math.maxInt(@import("zio").ExecutorId) + 1;
 
 fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
     var file = try Dir.cwd().openFile(io, file_name, .{});
@@ -446,8 +446,4 @@ test "parse_executors accepts auto and bounded counts" {
     try std.testing.expectEqual(@as(?u8, null), parse_executors("0"));
     try std.testing.expectEqual(@as(?u8, null), parse_executors(std.fmt.comptimePrint("{d}", .{max_executors + 1})));
     try std.testing.expectEqual(@as(?u8, null), parse_executors("many"));
-}
-
-test "parse_executors limit matches zio" {
-    try std.testing.expectEqual(@import("zio").Executor.max_executors, max_executors);
 }

@@ -295,7 +295,7 @@ test "ThroughputCounter" {
         counter.record_op();
     }
 
-    std.time.sleep(10 * std.time.ns_per_ms); // Sleep 10ms
+    try std.Io.sleep(std.testing.io, .fromMilliseconds(10), .awake); // Sleep 10ms
     counter.stop();
 
     const ops_per_sec = counter.ops_per_second();

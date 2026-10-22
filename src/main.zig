@@ -64,3 +64,37 @@ pub fn main(init: std.process.Init) !void {
         return err;
     };
 }
+
+// Zig 0.17 only runs tests in files a test block references; list every file
+// with tests so `zig build test` runs them.
+test {
+    _ = @import("aof/aof.zig");
+    _ = @import("benchmarks/bench_runner.zig");
+    _ = @import("benchmarks/metrics.zig");
+    _ = @import("bloom/bloom_filter.zig");
+    _ = @import("bloom/scalable.zig");
+    _ = @import("client_mailbox.zig");
+    _ = @import("commands/bloom.zig");
+    _ = @import("commands/connection.zig");
+    _ = @import("commands/keys.zig");
+    _ = @import("commands/list.zig");
+    _ = @import("commands/registry.zig");
+    _ = @import("commands/search.zig");
+    _ = @import("commands/string.zig");
+    _ = @import("compression/gorilla.zig");
+    _ = @import("config.zig");
+    _ = @import("kv_allocator.zig");
+    _ = @import("parser.zig");
+    _ = @import("rdb/zdb.zig");
+    _ = @import("search/index.zig");
+    _ = @import("search/inverted.zig");
+    _ = @import("search/numeric.zig");
+    _ = @import("search/query.zig");
+    _ = @import("search/tag.zig");
+    _ = @import("search/tokenize.zig");
+    _ = @import("search/vector.zig");
+    _ = @import("server.zig");
+    _ = @import("store.zig");
+    _ = @import("time_series.zig");
+    _ = @import("util/string_match.zig");
+}
