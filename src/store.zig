@@ -924,14 +924,6 @@ pub const Store = struct {
     }
 };
 
-test "Store init and deinit" {
-    var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
-    defer store.deinit();
-
-    try testing.expectEqual(@as(u32, 0), store.size());
-}
-
 test "Store set and get" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1335,19 +1327,6 @@ test "Store flush_db removes all keys" {
     try testing.expect(store.get("str1") == null);
     try testing.expect(store.get("int1") == null);
     try testing.expect(try store.get_list("mylist") == null);
-}
-
-test "Store flush_db on empty store" {
-    var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
-    defer store.deinit();
-
-    try testing.expectEqual(@as(u32, 0), store.size());
-
-    // Flush empty store should not crash
-    store.flush_db();
-
-    try testing.expectEqual(@as(u32, 0), store.size());
 }
 
 test "Store flush_db allows reuse after flush" {

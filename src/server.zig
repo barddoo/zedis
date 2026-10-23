@@ -752,7 +752,7 @@ fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
         slot.next_free.store(next_index, .release);
     }
 
-    var server = Server{
+    const server = Server{
         .config = .{
             .max_clients = max_clients,
             .max_channels = 16,
@@ -775,7 +775,6 @@ fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
         .createdTime = 0,
         .aof_writer = undefined,
     };
-    server.pubsub_context = PubSubContext.init(&server);
     return server;
 }
 
