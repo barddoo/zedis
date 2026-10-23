@@ -31,15 +31,40 @@ allocations not charged against the KV memory budget:
 ## KV Allocator
 
 `KeyValueAllocator` wraps `base_allocator` with a custom vtable to enforce
-`kv_memory_budget` (default 2 GB). Every allocation, resize, and free adjusts
-an atomic `memory_used` counter.
+`kv_memory_budget` (default 2 GB; `0` means unlimited, like `maxmemory 0`).
+Every allocation, resize, and free adjusts an atomic `memory_used` counter.
 
-- When an allocation would exceed budget:
-  - `noeviction` → fails with `error.OutOfMemory`
-  - `allkeys_lru` / `volatile_lru` → calls `Store.evictOne()` to free space first
+The budget is applied the way Redis applies `maxmemory`:
+
+- **Before every command**, `Server.memory_gate()` calls
+  `KeyValueAllocator.enforce_budget()`, which evicts entries until usage is
+  within budget (`allkeys_lru` / `volatile_lru`) or reports that it cannot
+  (`noeviction`, or nothing evictable under `volatile_lru`).
+- When eviction alone cannot get under budget, the store reclaims memory that
+  isn't holding live data: it destroys pooled deleted entries and shrinks the
+  entry/slot arrays to their live size (both keep a high-water mark otherwise).
+  Without this, a server that once held many keys could never satisfy a lower
+  `maxmemory`, because the pool alone counted against the budget.
+- If the budget still can't be met, commands flagged `denyoom` (the Redis
+  `CMD_DENYOOM` set: `SET`, `MSET`, `LPUSH`, `RPUSH`, `LSET`, `APPEND`,
+  `INCR*`, `DECR*`, `RENAME`, `TS.*`, `BF.*`, ...) are rejected **before they
+  execute** with Redis' error:
+  `-OOM command not allowed when used memory > 'maxmemory'.`
+- Commands that only free memory (`DEL`, `LPOP`, `RPOP`, `FLUSHDB`, ...) and
+  reads keep working, so a full instance can be drained.
+- **During command execution the budget is soft**: allocations may overshoot
+  it, and eviction is deferred to the next command boundary. This is the same
+  trade-off Redis makes (memory may exceed `maxmemory` by one command), and it
+  matters for correctness: evicting in the middle of a command would free
+  entries that the running handler still points at.
 - `resize()` correctly tracks grow/shrink delta
 - `free()` subtracts the freed size
 - Bound to the store via `attachStore()` for eviction callbacks
+
+Direct `Store` users that bypass command execution (unit tests, benchmarks,
+AOF/RDB loading) still get the hard, allocation-time budget check.
+
+`CONFIG SET maxmemory <bytes>` updates the limit at runtime, like Redis.
 
 All store-owned data allocates through `kv_allocator.allocator()`:
 - `StoreEntry` structs (keys ≤ 23 bytes are inline; longer keys heap-allocate)
@@ -65,43 +90,47 @@ allocations are not charged to the KV budget.
 ## Command Execution Flow
 
 Client I/O and command execution run in the same domain: client connections run as
-zio coroutines on the runtime's executor threads (parsing, command execution, response
-writes), and the shared store is protected by a single cooperative store lock rather
-than being owned by a dedicated thread. The runtime uses one executor by default
-(`executors` in the config file raises it); execution is serialized either way, and a
-single executor avoids handing the lock between threads on every command. There is no
-cross-thread command hand-off:
+zio coroutines (parsing, command execution, response writes). The zio runtime is
+always configured with **exactly one executor** (`RuntimeOptions.executors = .exact(1)`),
+so commands execute one at a time on one OS thread, and there is **no store lock**
+and no cross-thread command hand-off:
 
 1. Client coroutine parses the command in its per-client arena
-2. Client coroutine acquires the store lock (`server.store_lock`, a parking
-   `zio.Mutex`) and executes the command inline on its own executor thread:
-   - queues the command for the AOF (an in-memory append; the AOF writer thread
-     does the file I/O and fsync, see below)
+2. Client coroutine runs the memory gate (evict to budget, or reject `denyoom`
+   commands with `-OOM`) and executes the command inline:
+   - queues the command for the AOF (an in-memory append under a spinlock; the
+     AOF writer thread does the file I/O and fsync, see below)
    - executes it via `process_command_direct()` → `registry.execute_command()`,
      building the response in a `StackWriter`
-3. The store lock is released and the client coroutine writes the response to the
-   socket, resets its arena, and flushes the mailbox (pub/sub messages that arrived
-   during execution)
+3. The client coroutine writes the response to the socket, resets its arena, and
+   flushes the mailbox (pub/sub messages that arrived during execution)
 
-Commands are serialized by the store lock (one logical writer) rather than by a
-per-command lock in the store data structure.
+This is only safe because command handlers **never suspend**: no yielding to the
+runtime between the start of a command and its last mutation. Two places need care:
 
-Why a parking lock and not a raw spinlock: handlers may suspend (`SAVE` file I/O).
-A spinlock held across a suspension deadlocks the runtime once every executor thread is
-spinning on it; `zio.Mutex` queues waiters in the runtime instead, and its uncontended
-fast path is a single atomic CAS.
+- `SAVE` uses blocking file I/O (`std.Io.Threaded.global_single_threaded`), so the
+  snapshot cannot interleave with another command. It stalls the executor for its
+  duration, like Redis' `SAVE`.
+- AOF queueing uses a spinlock, not `zio.Mutex`, so contention with the writer
+  thread cannot park the coroutine mid-command.
+
+Socket reads/writes and `appendfsync always` durability waits can suspend, but they
+happen outside command execution.
+
+This makes the single executor the serialization boundary: one logical writer for the
+store without any per-store lock.
 
 ## AOF Writer Thread
 
-AOF file I/O runs on a dedicated OS thread (`aof.Writer`), never on the event loop or
-under the store lock:
+AOF file I/O runs on a dedicated OS thread (`aof.Writer`), never on the event loop:
 
-1. Command execution encodes the command into a shared queue under a short
-   `zio.Mutex`, while the store lock is held, so AOF order matches execution order.
+1. Command execution encodes the command into a shared queue under a short spinlock,
+   during command execution, so AOF order matches execution order. The spinlock is
+   never held across I/O and never suspends the coroutine.
 2. The writer thread takes the whole queue, writes it, and fsyncs per `appendfsync`:
    after every batch (`always`), at most once a second (`everysec`), or never (`no`).
 3. Under `always`, a client waits for its last logged command to be fsynced before its
-   reply is written, after the store lock is released. One fsync covers every command
+   reply is written, outside command execution. One fsync covers every command
    queued while the previous one ran (group commit).
 
 On shutdown the writer drains the queue and fsyncs (unless `no`) before closing.
@@ -126,6 +155,12 @@ Per-client message queue used exclusively for pub/sub delivery (not command resp
 - `acquireNode()` checks pool before allocating; `releaseNode()` returns to pool
 - `takeAll()` atomically drains the entire list
 - Messages are written directly to the client socket during `flushMailbox()`
+
+Each client slot also holds a `zio.Event` set by `enqueue_to_handle()`. The first
+`SUBSCRIBE` starts a delivery coroutine that waits on that event and drains the
+mailbox, so messages reach clients that are idle (blocked reading the socket).
+The delivery task and the client coroutine share the socket under a per-client
+write mutex; the store isn't involved.
 
 ## Fixed Allocations
 
