@@ -49,6 +49,19 @@ pub const ZedisList = struct {
         self.cached_len += 1;
     }
 
+    /// Splices an already-allocated node into the list. Used by LPUSH/RPUSH to
+    /// stage every element before touching the list, so a failed push leaves
+    /// the key untouched.
+    pub fn prepend_node(self: *ZedisList, node: *std.DoublyLinkedList.Node) void {
+        self.list.prepend(node);
+        self.cached_len += 1;
+    }
+
+    pub fn append_node(self: *ZedisList, node: *std.DoublyLinkedList.Node) void {
+        self.list.append(node);
+        self.cached_len += 1;
+    }
+
     pub fn pop_first(self: *ZedisList) ?PrimitiveValue {
         const node = self.list.popFirst() orelse return null;
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);

@@ -574,5 +574,24 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = true,
     });
 
+    // Redis' CMD_DENYOOM: commands that may allocate store memory and are
+    // rejected with -OOM when the budget is exhausted. Commands that only free
+    // memory (DEL, LPOP, RPOP, FLUSHDB, ...) and commands that don't touch the
+    // store stay allowed, so a full instance can still be drained.
+    const denyoom_commands = [_][]const u8{
+        "SET",         "INCR",   "DECR",      "APPEND",    "GETSET",
+        "MSET",        "SETEX",  "SETNX",     "INCRBY",    "DECRBY",
+        "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",     "LSET",
+        "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY", "TS.ALTER",
+        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT",
+    };
+    for (denyoom_commands) |name| {
+        const info = registry.commands.getPtr(name) orelse {
+            std.debug.assert(false);
+            continue;
+        };
+        info.denyoom = true;
+    }
+
     return registry;
 }

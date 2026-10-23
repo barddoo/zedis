@@ -146,7 +146,7 @@ host: []const u8 = "127.0.0.1",
 max_clients: u32 = 10000, // Maximum concurrent client connections
 max_channels: u32 = 10000, // Maximum pub/sub channels (production: thousands of channels)
 max_subscribers_per_channel: u32 = 1000, // Max subscribers per channel (production: hundreds per channel)
-kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store (production headroom)
+kv_memory_budget: usize = 2 * 1024 * 1024 * 1024, // 2GB for key-value store; 0 means no limit (like maxmemory 0)
 initial_capacity: u32 = 8192, // Initial hash map capacity for Store (reduces early rehashing)
 eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
 requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
@@ -377,7 +377,7 @@ fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const
         config.max_channels = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "max-subscribers-per-channel")) {
         config.max_subscribers_per_channel = try parseInt(u32, trimmed_value, 10);
-    } else if (eql(u8, key, "kv-memory-budget")) {
+    } else if (eql(u8, key, "kv-memory-budget") or eql(u8, key, "maxmemory")) {
         config.kv_memory_budget = try parse_memory_size(trimmed_value);
     } else if (eql(u8, key, "initial-capacity")) {
         config.initial_capacity = try parseInt(u32, trimmed_value, 10);

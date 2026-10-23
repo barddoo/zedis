@@ -15,6 +15,7 @@ const Config = @import("config.zig");
 const KeyValueAllocator = @import("kv_allocator.zig");
 const aof = @import("./aof/aof.zig");
 const Clock = @import("clock.zig");
+const resp = @import("./commands/resp.zig");
 const ClientHandle = @import("types.zig").ClientHandle;
 const invalid_client_slot_index = @import("types.zig").invalid_client_slot_index;
 const Io = std.Io;
@@ -198,6 +199,12 @@ pub fn init_with_config(
         log.debug("No authentication required", .{});
     }
 
+    // Redis ignores maxmemory while loading a dataset; the budget is applied
+    // again at the next command. Besides matching Redis, this keeps eviction
+    // from running while the loader holds pointers into the store.
+    server.kv_allocator.begin_command();
+    defer server.kv_allocator.end_command();
+
     // Prefer AOF to RDB
     // Load AOF file if it exists
     // 'true' to be replaced with user option (use aof/rdb on boot)
@@ -288,9 +295,51 @@ fn aof_logging(self: *Server, command_name: []const u8) AofLogging {
     return if (self.registry.should_write_to_aof(command_name)) .verbatim else .none;
 }
 
+/// Redis' `processCommand` memory admission: evict down to the budget before
+/// the command runs, and reject `CMD_DENYOOM` commands with `-OOM` when that
+/// isn't possible. Returns false when the command was rejected and a reply was
+/// already written.
+fn memory_gate(self: *Server, client: *Client, args: []const Value, writer: *std.Io.Writer) bool {
+    if (args.len == 0) return true;
+
+    var buf: [32]u8 = undefined;
+    const command_name = args[0].as_slice();
+    if (command_name.len > buf.len) return true;
+    const upper_name = std.ascii.upperString(&buf, command_name);
+
+    // Unknown commands and bad arity get the registry's own error.
+    const info = self.registry.get(upper_name) orelse return true;
+    if (args.len < info.min_args) return true;
+    if (info.max_args) |max_args| {
+        if (args.len > max_args) return true;
+    }
+
+    // Let the registry answer NOAUTH for unauthenticated clients.
+    if (!client.is_authenticated() and
+        !std.mem.eql(u8, upper_name, "AUTH") and
+        !std.mem.eql(u8, upper_name, "PING"))
+    {
+        return true;
+    }
+
+    if (self.kv_allocator.enforce_budget()) return true;
+    if (!info.denyoom) return true;
+
+    resp.write_error(writer, CommandRegistry.oom_error_message) catch {};
+    return false;
+}
+
 fn execute_locked(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
-    // AOF entries are queued under the store lock (the single writer to the
-    // store), so the AOF order matches execution order.
+    if (!self.memory_gate(client, args, response_writer)) return;
+
+    // Like Redis' maxmemory, the budget is soft while the command runs: it may
+    // overshoot and is enforced at the next command boundary. Evicting here
+    // would be unsafe, because handlers hold pointers into the store.
+    self.kv_allocator.begin_command();
+    defer self.kv_allocator.end_command();
+
+    // AOF entries are queued during command execution, so the AOF order
+    // matches execution order.
     const logging: AofLogging = if (args.len > 0) self.aof_logging(args[0].as_slice()) else .none;
     if (logging != .none) {
         // Like Redis' MISCONF: refuse writes the AOF can't persist.
@@ -834,4 +883,122 @@ test "Server publish_to_channel enqueues active subscribers and prunes stale han
     const subscribers = server.pubsub_map.get("news").?;
     try testing.expectEqual(@as(usize, 1), subscribers.len);
     try testing.expect(ClientHandle.eql(active.handle, subscribers[0]));
+}
+
+/// Minimal server for memory-admission tests: store, KV allocator and registry
+/// wired up as in `init_with_config`, but without a listener or AOF writer.
+fn init_memory_test_server(allocator: Allocator, budget: usize, policy: Config.EvictionPolicy) !*Server {
+    const server = try allocator.create(Server);
+    errdefer allocator.destroy(server);
+
+    server.* = .{
+        .config = .{
+            .kv_memory_budget = budget,
+            .eviction_policy = policy,
+            .max_clients = 1,
+            .max_channels = 1,
+            .max_subscribers_per_channel = 1,
+        },
+        .base_allocator = allocator,
+        .address = undefined,
+        .listener = undefined,
+        .io = testing.io,
+        .client_slots = &.{},
+        .free_list_head = .init(invalid_client_slot_index),
+        .pubsub_map = .init(allocator),
+        .kv_allocator = undefined,
+        .clock = undefined,
+        .store = undefined,
+        .registry = undefined,
+        .pubsub_context = undefined,
+        .redisVersion = null,
+        .createdTime = 0,
+        .aof_writer = undefined,
+    };
+
+    server.kv_allocator = try KeyValueAllocator.init(allocator, budget, policy);
+    server.clock = Clock.init(testing.io, 0);
+    server.store = try Store.init(server.kv_allocator.allocator(), testing.io, &server.clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = policy,
+        .maxmemory_samples = 5,
+    });
+    server.kv_allocator.attach_store(&server.store);
+    server.registry = try command_init.init_registry(allocator);
+    server.pubsub_context = PubSubContext.init(server);
+    return server;
+}
+
+fn deinit_memory_test_server(server: *Server) void {
+    server.store.deinit();
+    server.registry.deinit();
+    server.pubsub_map.deinit();
+    server.clock.deinit();
+    server.base_allocator.destroy(server);
+}
+
+fn fill_past_budget(server: *Server, values: usize) !void {
+    var value: [1024]u8 = undefined;
+    @memset(&value, 'm');
+
+    server.kv_allocator.begin_command();
+    for (0..values) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        try server.store.set(key, value[0..]);
+    }
+    server.kv_allocator.end_command();
+}
+
+test "memory gate rejects denyoom commands when noeviction cannot meet the budget" {
+    const server = try init_memory_test_server(testing.allocator, 4096, .noeviction);
+    defer deinit_memory_test_server(server);
+
+    try fill_past_budget(server, 8);
+    try testing.expect(server.kv_allocator.get_memory_usage() > 4096);
+
+    var client: Client = undefined;
+    client.server = server;
+    client.authenticated = true;
+
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const set_args = [_]Value{ .{ .data = "SET" }, .{ .data = "new" }, .{ .data = "value" } };
+    try testing.expect(!server.memory_gate(&client, &set_args, &writer));
+    try testing.expectEqualStrings("-OOM command not allowed when used memory > 'maxmemory'.\r\n", writer.buffered());
+
+    // Reads and commands that free memory stay available, like Redis.
+    writer = .fixed(&buffer);
+    const get_args = [_]Value{ .{ .data = "GET" }, .{ .data = "key-0" } };
+    try testing.expect(server.memory_gate(&client, &get_args, &writer));
+
+    writer = .fixed(&buffer);
+    const del_args = [_]Value{ .{ .data = "DEL" }, .{ .data = "key-0" } };
+    try testing.expect(server.memory_gate(&client, &del_args, &writer));
+
+    // Bad arity and unknown commands get their own error from the registry.
+    writer = .fixed(&buffer);
+    const bad_args = [_]Value{.{ .data = "SET" }};
+    try testing.expect(server.memory_gate(&client, &bad_args, &writer));
+}
+
+test "memory gate evicts at the command boundary under allkeys-lru" {
+    const server = try init_memory_test_server(testing.allocator, 4096, .allkeys_lru);
+    defer deinit_memory_test_server(server);
+
+    try fill_past_budget(server, 8);
+    try testing.expect(server.kv_allocator.get_memory_usage() > 4096);
+
+    var client: Client = undefined;
+    client.server = server;
+    client.authenticated = true;
+
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    const set_args = [_]Value{ .{ .data = "SET" }, .{ .data = "new" }, .{ .data = "value" } };
+
+    try testing.expect(server.memory_gate(&client, &set_args, &writer));
+    try testing.expect(server.kv_allocator.get_memory_usage() <= 4096);
+    try testing.expect(server.store.size() < 8);
 }

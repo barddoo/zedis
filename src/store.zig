@@ -708,6 +708,66 @@ pub const Store = struct {
         return null;
     }
 
+    /// Releases allocator capacity that no longer holds live data: destroys the
+    /// free-list entries and shrinks the entry and slot arrays. Called from the
+    /// KV allocator at a command boundary, when eviction alone cannot get under
+    /// budget, so no pointers into the store are live.
+    ///
+    /// Returns false when there is nothing to reclaim.
+    pub fn reclaim_memory(self: *Store) bool {
+        var needed_capacity: usize = 16;
+        while (needed_capacity < self.count) needed_capacity *= 2;
+
+        const target_slots = if (self.count == 0) 16 else self.count + self.count / 4 + 1;
+        var slots_target: usize = 16;
+        while (slots_target < target_slots) slots_target *= 2;
+
+        const has_free_entries = self.free_head != no_entry;
+        const entries_oversized = self.entries_capacity > needed_capacity;
+        const slots_oversized = self.slots.len >= slots_target * 2;
+
+        if (!has_free_entries and !entries_oversized and !slots_oversized) return false;
+
+        var reclaimed = false;
+
+        if (has_free_entries or entries_oversized) {
+            // Allocate before mutating: if this fails, the store stays intact.
+            const new_entries = self.allocator.alloc(*StoreEntry, needed_capacity) catch return false;
+
+            var write: usize = 0;
+            for (self.slots) |*slot| {
+                if (slot.idx == empty_slot or slot.idx == tomb_slot) continue;
+                new_entries[write] = self.entries[slot.idx];
+                slot.idx = @intCast(write);
+                write += 1;
+            }
+            std.debug.assert(write == self.count);
+
+            // Only now that live pointers are copied out can the pooled entries go.
+            var idx = self.free_head;
+            while (idx != no_entry) {
+                const entry = self.entries[idx];
+                idx = entry.next_free;
+                self.allocator.destroy(entry);
+            }
+
+            self.free_entries_array();
+            self.entries = new_entries[0..self.count];
+            self.entries_capacity = needed_capacity;
+            self.free_head = no_entry;
+            self.deletions_since_rehash = 0;
+            reclaimed = true;
+        }
+
+        if (self.slots.len >= slots_target * 2) {
+            const previous_len = self.slots.len;
+            self.rebuildSlots(slots_target) catch {};
+            if (self.slots.len < previous_len) reclaimed = true;
+        }
+
+        return reclaimed;
+    }
+
     pub inline fn flush_db(self: *Store) void {
         for (self.slots) |s| {
             if (s.idx == empty_slot or s.idx == tomb_slot) continue;

@@ -42,7 +42,7 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "max-channels", .mutable = true },
     .{ .name = "max-subscribers-per-channel", .mutable = true },
     .{ .name = "maxclients", .aliases = &.{"max-clients"} },
-    .{ .name = "maxmemory", .aliases = &.{"kv-memory-budget"} },
+    .{ .name = "maxmemory", .aliases = &.{"kv-memory-budget"}, .mutable = true },
     .{ .name = "maxmemory-policy", .aliases = &.{"eviction-policy"}, .mutable = true },
     .{ .name = "maxmemory-samples", .mutable = true },
     .{ .name = "no-appendfsync-on-rewrite" },
@@ -375,6 +375,12 @@ fn apply_config_set(client: *Client, name: []const u8, value: []const u8) Config
         client.server.config.max_subscribers_per_channel = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
+    if (std.mem.eql(u8, param.name, "maxmemory")) {
+        const bytes = Config.parse_memory_size(value) catch return error.InvalidValue;
+        client.server.config.kv_memory_budget = bytes;
+        client.server.kv_allocator.memory_budget = bytes;
+        return;
+    }
     if (std.mem.eql(u8, param.name, "maxmemory-policy")) {
         const policy = parse_eviction_policy(value) catch return error.InvalidValue;
         client.server.config.eviction_policy = policy;
@@ -635,6 +641,8 @@ test "CONFIG SET updates supported runtime parameters" {
         .{ .data = "SET" },
         .{ .data = "maxmemory-samples" },
         .{ .data = "11" },
+        .{ .data = "maxmemory" },
+        .{ .data = "8kb" },
         .{ .data = "eviction-policy" },
         .{ .data = "noeviction" },
         .{ .data = "requirepass" },
@@ -646,6 +654,8 @@ test "CONFIG SET updates supported runtime parameters" {
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
     try testing.expectEqual(@as(u32, 11), ctx.server.config.maxmemory_samples);
     try testing.expectEqual(@as(usize, 11), ctx.server.store.maxmemory_samples);
+    try testing.expectEqual(@as(usize, 8192), ctx.server.config.kv_memory_budget);
+    try testing.expectEqual(@as(usize, 8192), ctx.server.kv_allocator.memory_budget);
     try testing.expectEqual(.noeviction, ctx.server.config.eviction_policy);
     try testing.expectEqual(.noeviction, ctx.server.store.eviction_policy);
     try testing.expectEqual(.noeviction, ctx.server.kv_allocator.eviction_policy);
