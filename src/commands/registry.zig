@@ -39,6 +39,9 @@ pub const CommandInfo = struct {
     max_args: ?usize, // null means unlimited
     description: []const u8,
     write_to_aof: bool,
+    /// Redis' `CMD_DENYOOM`: reject with `-OOM` when the memory budget is
+    /// exhausted. Commands that only free memory (DEL, LPOP, ...) leave it off.
+    denyoom: bool = false,
 };
 
 // Command registry that maps command names to their handlers
@@ -75,6 +78,9 @@ pub const CommandRegistry = struct {
         return false;
     }
 
+    /// Redis' reply when a `CMD_DENYOOM` command cannot get memory.
+    pub const oom_error_message = "OOM command not allowed when used memory > 'maxmemory'.";
+
     fn handle_command_error(writer: *std.Io.Writer, command_name: []const u8, err: anyerror) void {
         const msg = switch (err) {
             error.WrongType => "WRONGTYPE Operation against a key holding the wrong kind of value",
@@ -97,6 +103,7 @@ pub const CommandRegistry = struct {
             error.QuerySyntax => "ERR invalid query syntax",
             error.UnknownField => "ERR unknown field",
             error.MissingParam => "ERR missing query parameter",
+            error.OutOfMemory => oom_error_message,
             else => blk: {
                 std.log.err("Handler for command '{s}' failed with error: {s}", .{
                     command_name,
@@ -206,6 +213,23 @@ test "handle_command_error writes a single error code prefix" {
     writer = .fixed(&buffer);
     CommandRegistry.handle_command_error(&writer, "LPUSH", error.WrongType);
     try std.testing.expectEqualStrings("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", writer.buffered());
+
+    writer = .fixed(&buffer);
+    CommandRegistry.handle_command_error(&writer, "SET", error.OutOfMemory);
+    try std.testing.expectEqualStrings("-OOM command not allowed when used memory > 'maxmemory'.\r\n", writer.buffered());
+}
+
+test "CMD_DENYOOM covers allocating writes and leaves freeing commands alone" {
+    const init_registry = @import("init_registry.zig").init_registry;
+    var registry = try init_registry(std.testing.allocator);
+    defer registry.deinit();
+
+    for ([_][]const u8{ "SET", "MSET", "LPUSH", "RPUSH", "LSET", "APPEND", "INCR", "BF.ADD", "TS.ADD" }) |name| {
+        try std.testing.expect(registry.get(name).?.denyoom);
+    }
+    for ([_][]const u8{ "GET", "DEL", "LPOP", "RPOP", "FLUSHDB", "EXPIRE", "PERSIST" }) |name| {
+        try std.testing.expect(!registry.get(name).?.denyoom);
+    }
 }
 
 test "write commands are logged to the AOF and reads are not" {

@@ -12,6 +12,11 @@ memory_used: std.atomic.Value(usize),
 memory_budget: usize,
 eviction_policy: Config.EvictionPolicy,
 store: ?*Store = null,
+/// Set while a command is executing. Like Redis' `maxmemory`, the budget is
+/// soft inside a command: allocations may push usage past it, and eviction is
+/// deferred to the next command boundary (`enforce_budget`). This keeps
+/// eviction from running while a handler holds pointers into the store.
+in_command: bool = false,
 
 pub fn init(base_allocator: mem.Allocator, budget: usize, eviction_policy: Config.EvictionPolicy) !KeyValueAllocator {
     return .{
@@ -20,7 +25,48 @@ pub fn init(base_allocator: mem.Allocator, budget: usize, eviction_policy: Confi
         .memory_budget = budget,
         .eviction_policy = eviction_policy,
         .store = null,
+        .in_command = false,
     };
+}
+
+/// Marks the start of command execution. Allocations from here until
+/// `end_command` are not budget-checked; Redis behaves the same way, allowing
+/// a command to overshoot `maxmemory` and reclaiming on the next command.
+pub fn begin_command(self: *KeyValueAllocator) void {
+    self.in_command = true;
+}
+
+pub fn end_command(self: *KeyValueAllocator) void {
+    self.in_command = false;
+}
+
+/// Evicts entries until usage is within budget, as Redis' `performEvictions`
+/// does before every command. Returns false when usage is still over budget
+/// (only possible under `noeviction`, or when nothing can be evicted).
+pub fn enforce_budget(self: *KeyValueAllocator) bool {
+    const budget = self.memory_budget;
+    // `0` means no limit, like `maxmemory 0` in Redis.
+    if (budget == 0) return true;
+
+    const store = self.store orelse return self.memory_used.load(.acquire) <= budget;
+
+    while (self.memory_used.load(.acquire) > budget) {
+        if (self.eviction_policy != .noeviction and store.evict_one(self.eviction_policy)) {
+            continue;
+        }
+
+        // Eviction can't help (no evictable keys, or noeviction). Reclaim pool
+        // memory that isn't holding live data: deleted entries stay pooled for
+        // reuse, and arrays stay at their high-water mark, so without this a
+        // server that once held many keys could never shrink to a lower limit.
+        const was_in_command = self.in_command;
+        self.in_command = true; // shrinking allocates; do not recurse into eviction
+        const reclaimed = store.reclaim_memory();
+        self.in_command = was_in_command;
+        if (!reclaimed) return false;
+    }
+
+    return true;
 }
 
 pub fn attach_store(self: *KeyValueAllocator, store: *Store) void {
@@ -42,6 +88,13 @@ pub fn allocator(self: *KeyValueAllocator) mem.Allocator {
 }
 
 fn ensure_budget(self: *KeyValueAllocator, additional_bytes: usize) bool {
+    // Inside a command the budget is soft (see `begin_command`); eviction
+    // happens at the next command boundary instead.
+    if (self.in_command) return true;
+
+    // `0` means no limit, like `maxmemory 0` in Redis.
+    if (self.memory_budget == 0) return true;
+
     if (additional_bytes > self.memory_budget) return false;
 
     while (self.memory_used.load(.acquire) > self.memory_budget - additional_bytes) {
@@ -227,6 +280,152 @@ test "KeyValueAllocator survives repeated budgeted overwrite pressure" {
     }
 
     try testing.expect(kv.get_memory_usage() <= kv.get_memory_budget());
+}
+
+test "KeyValueAllocator allows command overshoot and enforces at boundary" {
+    const budget = 4096;
+
+    var kv = try KeyValueAllocator.init(testing.allocator, budget, .allkeys_lru);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 4,
+        .eviction_policy = .allkeys_lru,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [1024]u8 = undefined;
+    @memset(&value, 'z');
+
+    // Inside a command the budget is soft, like Redis' maxmemory.
+    kv.begin_command();
+    for (0..8) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        try store.set(key, value[0..]);
+    }
+    kv.end_command();
+
+    try testing.expect(kv.get_memory_usage() > budget);
+    // The next command boundary evicts back down to the budget.
+    try testing.expect(kv.enforce_budget());
+    try testing.expect(kv.get_memory_usage() <= budget);
+}
+
+test "KeyValueAllocator noeviction cannot enforce an exceeded budget" {
+    var kv = try KeyValueAllocator.init(testing.allocator, 4096, .noeviction);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 4,
+        .eviction_policy = .noeviction,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [1024]u8 = undefined;
+    @memset(&value, 'n');
+
+    kv.begin_command();
+    for (0..8) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        try store.set(key, value[0..]);
+    }
+    kv.end_command();
+
+    try testing.expect(kv.get_memory_usage() > 4096);
+    try testing.expect(!kv.enforce_budget());
+    // Redis keeps reads and memory-freeing commands available.
+    try testing.expect(store.get("key-0") != null);
+    const before = kv.get_memory_usage();
+    try testing.expect(store.delete("key-0"));
+    try testing.expect(kv.get_memory_usage() < before);
+}
+
+test "KeyValueAllocator reclaims the entry pool when the budget shrinks" {
+    var kv = try KeyValueAllocator.init(testing.allocator, 1024 * 1024, .allkeys_lru);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 64,
+        .eviction_policy = .allkeys_lru,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [512]u8 = undefined;
+    @memset(&value, 'p');
+
+    kv.begin_command();
+    for (0..3000) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        try store.set(key, value[0..]);
+    }
+    kv.end_command();
+    try testing.expect(kv.get_memory_usage() > 1024 * 1024);
+
+    // Like CONFIG SET maxmemory, far below the high-water entry pool.
+    kv.memory_budget = 64 * 1024;
+    try testing.expect(kv.enforce_budget());
+    try testing.expect(kv.get_memory_usage() <= 64 * 1024);
+
+    // The store is writable again at the new limit.
+    try store.set("probe", "1");
+    try testing.expect(store.get("probe") != null);
+}
+
+test "KeyValueAllocator reclaims pooled entries under noeviction" {
+    var kv = try KeyValueAllocator.init(testing.allocator, 1024 * 1024, .noeviction);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 64,
+        .eviction_policy = .noeviction,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [512]u8 = undefined;
+    @memset(&value, 'q');
+
+    kv.begin_command();
+    for (0..3000) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        try store.set(key, value[0..]);
+    }
+    for (0..3000) |i| {
+        var key_buf: [16]u8 = undefined;
+        const key = try std.fmt.bufPrint(&key_buf, "key-{d}", .{i});
+        _ = store.delete(key);
+    }
+    kv.end_command();
+
+    // Deleted entries are pooled, so usage stays high until reclaimed.
+    try testing.expect(kv.get_memory_usage() > 64 * 1024);
+
+    kv.memory_budget = 64 * 1024;
+    try testing.expect(kv.enforce_budget());
+    try testing.expect(kv.get_memory_usage() <= 64 * 1024);
+}
+
+test "KeyValueAllocator treats a zero budget as unlimited" {
+    var kv = try KeyValueAllocator.init(testing.allocator, 0, .noeviction);
+    defer kv.deinit();
+
+    const kv_alloc = kv.allocator();
+    const buf = try kv_alloc.alloc(u8, 1024 * 1024);
+    defer kv_alloc.free(buf);
+
+    try testing.expectEqual(@as(usize, 1024 * 1024), kv.get_memory_usage());
+    try testing.expect(kv.enforce_budget());
 }
 
 test "KeyValueAllocator works with smp allocator parent" {

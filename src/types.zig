@@ -30,6 +30,13 @@ pub const PrimitiveValue = union(enum) {
         const duped = try allocator.dupe(u8, str);
         return .{ .string = duped };
     }
+
+    pub fn deinit(self: PrimitiveValue, allocator: std.mem.Allocator) void {
+        switch (self) {
+            .string => |str| allocator.free(str),
+            .short_string, .int => {},
+        }
+    }
 };
 
 pub const invalid_client_slot_index: u32 = std.math.maxInt(u32);

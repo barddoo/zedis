@@ -10,6 +10,7 @@ const Io = std.Io;
 const testing = std.testing;
 const Writer = Io.Writer;
 const Clock = @import("../clock.zig");
+const KeyValueAllocator = @import("../kv_allocator.zig");
 
 /// Helper function to normalize a list index (handles negative indices).
 /// Returns null if the index is out of bounds.
@@ -40,29 +41,46 @@ inline fn normalize_range_index(index: i64, list_len: usize, comptime is_start: 
     }
 }
 
-pub fn lpush(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].as_slice();
-
-    const list = try store.get_set_list(key);
-
-    for (args[2..]) |arg| {
-        const pv = try PrimitiveValue.from_slice(arg.as_slice(), store.allocator);
-        try list.prepend(pv);
+/// Stages every value in a detached node chain before touching the store, then
+/// splices the chain into the list. A push either applies all values or none:
+/// like Redis, an OOM must not leave a partial list behind.
+fn push_staged(store: *Store, key: []const u8, args: []const Value, comptime prepend: bool) !*ZedisList {
+    var staged: std.DoublyLinkedList = .{};
+    errdefer {
+        while (staged.popFirst()) |node| {
+            const list_node: *ZedisListNode = @fieldParentPtr("node", node);
+            list_node.data.deinit(store.allocator);
+            store.allocator.destroy(list_node);
+        }
     }
 
+    for (args) |arg| {
+        const pv = try PrimitiveValue.from_slice(arg.as_slice(), store.allocator);
+        errdefer pv.deinit(store.allocator);
+
+        const list_node = try store.allocator.create(ZedisListNode);
+        list_node.* = .{ .data = pv };
+        staged.append(&list_node.node);
+    }
+
+    // The list is looked up only after every allocation succeeded: eviction or
+    // a failed allocation can no longer invalidate a pointer we hold.
+    const list = try store.get_set_list(key);
+
+    while (staged.popFirst()) |node| {
+        if (prepend) list.prepend_node(node) else list.append_node(node);
+    }
+
+    return list;
+}
+
+pub fn lpush(writer: *Writer, store: *Store, args: []const Value) !void {
+    const list = try push_staged(store, args[1].as_slice(), args[2..], true);
     try resp.write_int(writer, list.len());
 }
 
 pub fn rpush(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].as_slice();
-
-    const list = try store.get_set_list(key);
-
-    for (args[2..]) |arg| {
-        const pv = try PrimitiveValue.from_slice(arg.as_slice(), store.allocator);
-        try list.append(pv);
-    }
-
+    const list = try push_staged(store, args[1].as_slice(), args[2..], false);
     try resp.write_int(writer, list.len());
 }
 
@@ -1169,4 +1187,78 @@ test "LRANGE with reversed range" {
     try lrange(&writer, &store, &lrange_args);
 
     try testing.expectEqualStrings("*0\r\n", writer.buffered());
+}
+
+test "LPUSH applies every value or none when allocation fails" {
+    var kv = try KeyValueAllocator.init(testing.allocator, 4096, .noeviction);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = .noeviction,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [1500]u8 = undefined;
+    @memset(&value, 'v');
+
+    const push_args = [_]Value{
+        .{ .data = "LPUSH" },
+        .{ .data = "mylist" },
+        .{ .data = value[0..] },
+        .{ .data = value[0..] },
+        .{ .data = value[0..] },
+    };
+
+    var buffer: [128]u8 = undefined;
+    var writer: Writer = .fixed(&buffer);
+
+    try testing.expectError(error.OutOfMemory, lpush(&writer, &store, &push_args));
+    try testing.expect(!store.exists("mylist"));
+    try testing.expectEqual(@as(u32, 0), store.size());
+}
+
+test "repeated LPUSH under allkeys-lru never evicts the list mid-command" {
+    const budget = 8192;
+
+    var kv = try KeyValueAllocator.init(testing.allocator, budget, .allkeys_lru);
+    defer kv.deinit();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(kv.allocator(), testing.io, &clock, .{
+        .initial_capacity = 16,
+        .eviction_policy = .allkeys_lru,
+        .maxmemory_samples = 5,
+    });
+    defer store.deinit();
+    kv.attach_store(&store);
+
+    var value: [1024]u8 = undefined;
+    @memset(&value, 'L');
+
+    const push_args = [_]Value{
+        .{ .data = "LPUSH" },
+        .{ .data = "list" },
+        .{ .data = value[0..] },
+    };
+
+    var buffer: [64]u8 = undefined;
+    for (0..200) |_| {
+        // Same order as Server.execute_locked: evict at the command boundary,
+        // then run the command with the budget soft. Eviction inside the push
+        // would free the list the handler is writing to.
+        _ = kv.enforce_budget();
+        kv.begin_command();
+        var writer: Writer = .fixed(&buffer);
+        const result = lpush(&writer, &store, &push_args);
+        kv.end_command();
+        try result;
+
+        try testing.expect(store.exists("list"));
+        try testing.expect(kv.get_memory_usage() <= budget + value.len + 512);
+    }
+
+    try testing.expect(store.size() == 1);
 }
