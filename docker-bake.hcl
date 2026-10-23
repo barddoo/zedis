@@ -21,8 +21,7 @@ target "alpine" {
   target   = "alpine"
   tags = [
     "${REGISTRY}:${VERSION}-alpine",
-    "${REGISTRY}:${VERSION}",
-    "${REGISTRY}:latest",
+    "${REGISTRY}:alpine",
   ]
 }
 
@@ -32,6 +31,8 @@ target "debian" {
   tags = [
     "${REGISTRY}:${VERSION}-debian",
     "${REGISTRY}:${VERSION}-slim",
+    "${REGISTRY}:${VERSION}",
+    "${REGISTRY}:latest",
   ]
 }
 

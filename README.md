@@ -82,8 +82,8 @@ docker run -p 6379:6379 barddoo/zedis
 
 | Tag | Base | Size | Use case |
 |-----|------|------|----------|
-| `latest`, `x.x.x-alpine` | Alpine 3.20 | Smallest with shell | Default |
-| `x.x.x-debian`, `x.x.x-slim` | Debian Bookworm slim | glibc compat | Broader ecosystem |
+| `latest`, `x.x.x`, `x.x.x-debian`, `x.x.x-slim` | Debian Trixie slim | Larger, glibc base | Default; broader ecosystem |
+| `x.x.x-alpine`, `alpine` | Alpine 3.20 | Smallest with shell | Size-sensitive deployments |
 | `x.x.x-distroless` | Distroless static | No shell | Security-sensitive |
 
 ### Persistent data

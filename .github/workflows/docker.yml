@@ -72,14 +72,15 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag $REPO:$VERSION-alpine \
-            --tag $REPO:$VERSION \
-            --tag $REPO:latest \
+            --tag $REPO:alpine \
             $REPO:$VERSION-alpine-amd64 \
             $REPO:$VERSION-alpine-arm64
 
           docker buildx imagetools create \
             --tag $REPO:$VERSION-slim \
             --tag $REPO:$VERSION-debian \
+            --tag $REPO:$VERSION \
+            --tag $REPO:latest \
             $REPO:$VERSION-debian-amd64 \
             $REPO:$VERSION-debian-arm64
 

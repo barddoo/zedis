@@ -1,12 +1,26 @@
 .git
 .github
 .gitignore
+
+# Zig build artifacts and caches
 .zig-cache
+.zig-global-cache
 zig-out
-store.o
+zig-pkg
+*.o
+
+# Runtime data
 *.rdb
 *.aof
-result.md
-new_result.md
-PLAN.md
-blog posts
+
+# Dev tooling and docs (not needed to build the server)
+.agents
+.claude
+.vscode
+plans
+scripts
+docs
+*.md
+redis.conf
+docker-bake.hcl
+.env

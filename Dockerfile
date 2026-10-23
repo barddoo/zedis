@@ -35,7 +35,7 @@ RUN mkdir -p /home/nonroot/data && \
     touch /home/nonroot/data/.keep
 
 ##############################################################################
-# alpine — default variant, smallest with shell access
+# alpine — smallest variant with shell access
 ##############################################################################
 FROM alpine:3.20 AS alpine
 
@@ -56,9 +56,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 ENTRYPOINT ["zedis", "/etc/zedis/zedis.conf"]
 
 ##############################################################################
-# debian — glibc base, wider ecosystem compatibility
+# debian — default variant, glibc base, wider ecosystem compatibility
 ##############################################################################
-FROM debian:bookworm-slim AS debian
+FROM debian:trixie-slim AS debian
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
