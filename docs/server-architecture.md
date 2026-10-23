@@ -31,7 +31,8 @@ thread, and the optional clock fallback thread. There is no thread per client.
 5. The command executes inline against the shared `Store`; writes are queued for the
    AOF.
 6. The response is serialized into a `StackWriter` and written to the socket.
-7. Pub/sub messages queued in the client's mailbox are flushed after the command.
+7. Pub/sub messages queued in the client's mailbox are flushed after the command;
+   the per-client delivery coroutine also drains them while the client is idle.
 
 ## Serialization
 
@@ -49,8 +50,9 @@ around that suspension (or the single-executor/no-lock invariant no longer holds
 
 ## Coordination Primitives
 
-- `ClientMailbox`: lock-free queue for pub/sub delivery, drained by the owning client
-  coroutine.
+- `ClientMailbox`: spinlock-protected queue for pub/sub delivery (not lock-free),
+  drained by the client coroutine and by the per-client delivery coroutine while the
+  client is idle.
 - Client slots are preallocated and tracked with generation counters to avoid stale
   handle reuse during disconnect and reconnect cycles.
 - AOF queue: spinlock shared with the writer thread; the critical section is the
@@ -60,5 +62,6 @@ around that suspension (or the single-executor/no-lock invariant no longer holds
 
 Store access is globally serialized either way. With multiple executors, coroutines
 and the store bounce between threads on every command, adding contention and cache
-pressure for no throughput benefit. On the benchmark workload one executor was ~1.7×
-faster than `.auto` and used ~75% of one core instead of ~450% of the machine.
+pressure for no throughput benefit. On the benchmark workload one executor ran at
+~2.66M rps on ~0.75 cores, while `.auto` ran at ~1.2M rps using ~4.5 cores (one
+executor was also ~35% faster without pipelining).

@@ -8,19 +8,22 @@ CPU cache, and how the store was reworked to be cache-friendly.
 ## 1. Summary
 
 The store's hash table was rewritten from `std.StringHashMapUnmanaged(*StoreEntry)`
-(a pointer-based map) to a custom open-addressing table that stores **entries inline
-in a stable pool** and **keys inline in the entry**. A `GET` that previously chased
-three scattered heap allocations (map bucket → entry → key) now touches two
-contiguous structures (slot array → entry, with the key already inside the entry).
+(a pointer-based map) to a custom open-addressing table. Each slot stores a 32-bit
+hash fingerprint and an index into a stable, growable array of **entry pointers**;
+short keys (≤ 23 bytes) are stored **inline inside the entry**. A `GET` that
+previously chased three scattered heap allocations (map bucket → entry → key) now
+touches two structures: the contiguous slot array and the entry allocation, with the
+key already inside the entry. The `entries[idx]` pointer hop remains; the indirection
+that was removed is the per-probe key dereference.
 
 Measured impact:
 
-| Workload                          | Result                                   |
-| --------------------------------- | ---------------------------------------- |
-| Random `GET` over a large store   | ~1.5x faster (working set exceeds L3)    |
-| Skewed hot-key `GET`              | ~1.5x faster                             |
-| `DEL`-heavy workloads             | ~2x faster (free-list reuse, no malloc)  |
-| Small, cache-resident store       | ~parity (std `HashMap` is well optimized)|
+| Workload                        | Result                                    |
+| ------------------------------- | ----------------------------------------- |
+| Random `GET` over a large store | ~1.5x faster (working set exceeds L3)     |
+| Skewed hot-key `GET`            | ~1.5x faster                              |
+| `DEL`-heavy workloads           | ~2x faster (free-list reuse, no malloc)   |
+| Small, cache-resident store     | ~parity (std `HashMap` is well optimized) |
 
 The win is specifically for **large stores** — the realistic production case for a
 Redis-compatible database — where the working set no longer fits in cache.
@@ -43,17 +46,17 @@ is no — not directly:
 
 What software *can* do:
 
-| Technique                              | Effect                                            |
-| -------------------------------------- | ------------------------------------------------- |
-| Compact, contiguous data layout        | Hot data shares cache lines; fewer misses         |
-| Store fields used together, together   | One load pulls its neighbors into the same line   |
-| Avoid pointer chasing                  | Each chase is a likely cache miss                 |
-| Prefetch (`@prefetch`)                 | Overlap latency of a known future access          |
-| Huge pages                             | Reduce TLB misses (often mistaken for "cache")    |
-| Intel CAT                               | Coarse L2/L3 way-partitioning (not per-key)       |
+| Technique                            | Effect                                          |
+| ------------------------------------ | ----------------------------------------------- |
+| Compact, contiguous data layout      | Hot data shares cache lines; fewer misses       |
+| Store fields used together, together | One load pulls its neighbors into the same line |
+| Avoid pointer chasing                | Each chase is a likely cache miss               |
+| Prefetch (`@prefetch`)               | Overlap latency of a known future access        |
+| Huge pages                           | Reduce TLB misses (often mistaken for "cache")  |
+| Intel CAT                            | Coarse L2/L3 way-partitioning (not per-key)     |
 
 The rest of this document is about the first three: layout, field placement, and
-eliminating pointer chasing.
+reducing pointer chasing.
 
 ### 2.2 Cache lines
 
@@ -92,11 +95,11 @@ const StoreEntry = struct {
 
 Measured sizes:
 
-| Type          | Size   | Notes                              |
-| ------------- | ------ | ---------------------------------- |
-| `ZedisValue`  | 24 B   | tagged union (largest arm `[]u8`)  |
-| `ZedisObject` | 24 B   |                                    |
-| `StoreEntry`  | 96 B   | 1.5 cache lines of *metadata only* |
+| Type          | Size | Notes                              |
+| ------------- | ---- | ---------------------------------- |
+| `ZedisValue`  | 24 B | tagged union (largest arm `[]u8`)  |
+| `ZedisObject` | 24 B |                                    |
+| `StoreEntry`  | 96 B | 1.5 cache lines of *metadata only* |
 
 ### 3.2 The `GET` path: three pointer chases
 
@@ -121,14 +124,15 @@ pointers) — not data — yet it was a separate allocation from the key and val
 ## 4. Design goals
 
 1. **Eliminate the key indirection** — store short keys inline in the entry.
-2. **Eliminate the entry indirection** — entries live in a stable pool indexed by
-   the hash table, not behind a second pointer hop.
-3. **Hash-in-slot probing** — compare 4-byte hashes in a contiguous slot array
-   without dereferencing entries during the probe.
+2. **Eliminate per-probe key dereferences** — compare 4-byte hashes in a contiguous
+   slot array, touching the entry only when the hash matches.
+3. **Keep entry pointers stable** — entries stay individually allocated and never
+   move, so `get()`, `get_list()`, etc. still return valid pointers and the existing
+   LRU/volatile linked lists keep working.
 4. **Preserve the public API** — callers (`commands/*`, `server`, `kv_allocator`,
-   benchmarks, RDB) are unchanged.
-5. **Keep pointers stable** — so `get()`, `get_list()`, etc. still return valid
-   pointers and the existing LRU/volatile linked lists keep working.
+   benchmarks, RDB) are unchanged apart from the additions listed in §8.
+5. **Reuse deleted entries** — pool them on a free list instead of calling
+   `malloc`/`free` under delete-heavy workloads.
 
 ---
 
@@ -139,7 +143,7 @@ pointers) — not data — yet it was a separate allocation from the key and val
 ```zig
 const Slot = struct {
     hash: u32,   // 32-bit hash fingerprint
-    idx:  u32,   // index into `entries` (or EMPTY / TOMB sentinel)
+    idx:  u32,   // index into `entries` (or empty_slot / tomb_slot sentinel)
 };               // 8 bytes, 8 slots per cache line
 
 const StoreEntry = struct {
@@ -167,8 +171,9 @@ pub const Store = struct {
 Two parallel arrays replace the single pointer map:
 
 - `slots` — the hash table. Probing reads 4-byte hashes from one contiguous array.
-- `entries` — the actual entries. Referenced by `idx` from a slot, stable for the
-  lifetime of the key.
+- `entries` — a growable array of pointers to individually allocated `StoreEntry`
+  structs. The pointers are stable for the lifetime of the key; the array itself can
+  be compacted, which rewrites each live slot's `idx`.
 
 ### 5.2 Hash-in-slot probing
 
@@ -197,9 +202,9 @@ fn findSlot(self, h32, key) ?usize {
     var remaining = slots.len;
     while (remaining > 0) : (remaining -= 1) {
         const s = slots[i];
-        if (s.idx == EMPTY) return null;              // stop at empty
-        if (s.idx != TOMB and s.hash == h32) {        // hash match only
-            if (eql(entries[s.idx].key, key)) return i; // rare: real compare
+        if (s.idx == empty_slot) return null;                  // stop at empty
+        if (s.idx != tomb_slot and s.hash == h32) {            // hash match only
+            if (std.mem.eql(u8, entries[s.idx].key, key)) return i; // rare: real compare
         }
         i = (i + 1) & mask;
     }
@@ -207,8 +212,9 @@ fn findSlot(self, h32, key) ?usize {
 }
 ```
 
-No pointer, no heap access during the probe. The `slots` array is contiguous, and 8
-slots fit in one 64-byte cache line — so the first probe fetches a line and the next
+No pointer or heap access on a non-matching probe (the rare hash match still
+dereferences the entry to compare the full key). The `slots` array is contiguous, and
+8 slots fit in one 64-byte cache line — so the first probe fetches a line and the next
 ~7 probes read memory already in cache.
 
 Concretely, a lookup that probes 4 slots:
@@ -220,7 +226,7 @@ OLD:  probe0 -> follow key ptr -> MISS (heap key A)
       probe3 -> EMPTY                          = 3 cache misses
 
 NEW:  [h0][h1][h2][h3]  <- one contiguous cache line
-      compare hashes 0..3 (all cached) -> EMPTY = 0 misses (one line fetch)
+      compare hashes 0..3 (all cached) -> EMPTY = 1 line fetch
 ```
 
 For a *found* key, the entry (and its key) is touched **once**, on the hash match,
@@ -251,13 +257,13 @@ Freeing is keyed off length: `free_entry_contents` only frees `entry.key` when
 heap-allocated once and never moved, the existing `?*StoreEntry` LRU pointers and
 all public methods that return entry pointers stay valid unchanged.
 
-Deleted entries are not `destroy`ed — they are chained onto a free list via the
-`next_free` index field and reused by the next insert. This avoids `malloc`/`free`
-churn under delete-heavy workloads (the source of the `DEL` speedup):
+Deleted entries are not `destroy`ed immediately — they are chained onto a free list
+via the `next_free` index field and reused by the next insert. This avoids
+`malloc`/`free` churn under delete-heavy workloads (the source of the `DEL` speedup):
 
 ```zig
 fn allocEntry(self) !struct { idx: u32, entry: *StoreEntry } {
-    if (self.free_head != NO_ENTRY) {
+    if (self.free_head != no_entry) {
         const idx = self.free_head;
         const entry = self.entries[idx];
         self.free_head = entry.next_free;      // pop from free list
@@ -267,14 +273,23 @@ fn allocEntry(self) !struct { idx: u32, entry: *StoreEntry } {
 }
 ```
 
+The pool is not permanent: `Store.reclaim_memory()` destroys pooled entries and
+compacts `entries`/`slots` when the KV allocator cannot meet `maxmemory` by
+eviction alone. It only runs at a command boundary, when no handler holds pointers
+into the store.
+
 ### 5.5 Growth and shrinking
 
-`rebuildSlots(min_capacity)` allocates a power-of-two slot array and rehashes all
-live entries (skipping tombstones), which both grows the table and clears
-tombstones.
+`rebuildSlots(min_capacity)` allocates a power-of-two slot array and re-probes every
+live slot into it using the hash already cached in the slot (skipping tombstones).
+Both growing the table and rebuilding it clear tombstones.
 
 - `maybe_resize` (before insert): grows at 80% load factor.
-- `maintenance` (after deletes): rebuilds when waste > 50% or tombstones exceed 25%.
+- `maybe_maintenance` (after deletes): rate-limited to once every 50 ms; calls
+  `maintenance`, which rebuilds when waste > 50% or tombstones exceed 25%.
+- `reclaim_memory` (memory pressure): destroys pooled entries and shrinks
+  `entries`/`slots` toward the live count. It is not periodic — it only runs when
+  eviction cannot satisfy the KV budget.
 
 ### 5.6 Iteration
 
@@ -283,11 +298,12 @@ don't reach into internals:
 
 ```zig
 pub const EntryView = struct { key: []const u8, object: *const ZedisObject, expires_at: ?i64 };
-pub const Iterator = struct { /* walks slots, skipping EMPTY/TOMB */ };
+pub const Iterator = struct { /* walks slots, skipping empty_slot/tomb_slot */ };
 pub fn iterator(self: *const Store) Iterator;
 ```
 
-`rdb/zdb.zig` (RDB persistence) is the one external consumer and was migrated to it.
+`src/persistence/zdb.zig` (RDB persistence) is the one external consumer and was
+migrated to it.
 
 ---
 
@@ -306,29 +322,29 @@ the number of *distinct memory locations touched* per lookup dropped from 3–4 
 
 For the prototype's minimal entry (no expiry/LRU):
 
-| Prototype type   | Size                        |
-| ---------------- | --------------------------- |
-| `PointerEntry`   | 56 B (entry + key + value)  |
-| `InlineEntry`    | 64 B (single cache line)    |
+| Prototype type | Size                       |
+| -------------- | -------------------------- |
+| `PointerEntry` | 56 B (entry + key + value) |
+| `InlineEntry`  | 64 B (single cache line)   |
 
 ---
 
-## 7. Prototype and measurements
+## 7. Prototype and measurements (historical)
 
-Before touching the real store, a standalone benchmark (`src/cache_proto.zig`)
-compared the two designs head-to-head with a 1,000,000-key working set (≈ 64–150 MB,
-deliberately larger than L3) to expose memory-latency behavior.
-
-Run: `zig run src/cache_proto.zig -O ReleaseFast`
+Before touching the real store, a standalone prototype benchmark compared the two
+designs head-to-head with a 1,000,000-key working set (≈ 64–150 MB, deliberately
+larger than L3) to expose memory-latency behavior. The prototype was a local,
+uncommitted benchmark and is no longer part of the tree; the numbers below are
+historical.
 
 Representative results (ReleaseFast, Apple Silicon):
 
-| Operation           | PointerStore | InlineStore | Speedup |
-| ------------------- | ------------ | ----------- | ------- |
-| SET (populate)      | ~43 ns/op    | ~41 ns/op   | ~1.0x   |
-| GET (sequential)    | ~31 ns/op    | ~38 ns/op   | ~0.8x   |
-| GET (uniform random)| ~60 ns/op    | ~39 ns/op   | ~1.5x   |
-| GET (skewed hot-set)| ~27 ns/op    | ~18 ns/op   | ~1.5x   |
+| Operation            | PointerStore | InlineStore | Speedup |
+| -------------------- | ------------ | ----------- | ------- |
+| SET (populate)       | ~43 ns/op    | ~41 ns/op   | ~1.0x   |
+| GET (sequential)     | ~31 ns/op    | ~38 ns/op   | ~0.8x   |
+| GET (uniform random) | ~60 ns/op    | ~39 ns/op   | ~1.5x   |
+| GET (skewed hot-set) | ~27 ns/op    | ~18 ns/op   | ~1.5x   |
 
 Key observations:
 
@@ -347,7 +363,7 @@ Key observations:
 
 Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 `get_list`, `create_list`, `expire`, `persist`, `rename_key`, `evict_one`,
-`maintenance`, etc.) is unchanged. What changed:
+`maintenance`, etc.) is unchanged apart from the additions below. What changed:
 
 **Added**
 
@@ -356,6 +372,8 @@ Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 - `keyHash`, `findSlot`, `findInsertSlot`, `rebuildSlots`, `allocEntry`, `setEntryKey`
 - `iterator()` + `EntryView` / `Iterator`
 - `capacity()` (replaces test access to the old `.map.capacity()`)
+- `reclaim_memory()` (added later) — destroys pooled entries and compacts
+  `entries`/`slots` when the KV budget cannot be met by eviction
 
 **Rewritten**
 
@@ -434,13 +452,13 @@ The micro-benchmarks use a ~10,000-key working set that fits entirely in L3. In 
 regime the mature, heavily-optimized `std.HashMap` is hard to beat, and the custom
 table carries some overhead (bounded-probe counter, the `slots` → `entries` hop):
 
-| Metric              | Pointer (old) | Inline (new) |
-| ------------------- | ------------- | ------------ |
-| Store.get (cached)  | 31.4M ops/s   | 29.3M ops/s  |
-| Store.set           | 28.1M ops/s   | 25.8M ops/s  |
-| Store.exists        | 35.2M ops/s   | 30.9M ops/s  |
-| Store.delete        | 30.7M ops/s   | 34.5M ops/s  |
-| **Command: DEL**    | **5.9M ops/s**| **12.4M ops/s** |
+| Metric             | Pointer (old)  | Inline (new)    |
+| ------------------ | -------------- | --------------- |
+| Store.get (cached) | 31.4M ops/s    | 29.3M ops/s     |
+| Store.set          | 28.1M ops/s    | 25.8M ops/s     |
+| Store.exists       | 35.2M ops/s    | 30.9M ops/s     |
+| Store.delete       | 30.7M ops/s    | 34.5M ops/s     |
+| **Command: DEL**   | **5.9M ops/s** | **12.4M ops/s** |
 
 The one clear win at this size is **`DEL`**: the free-list reuse avoids the
 `malloc`/`free` churn that the old store paid on every delete (~2.1x).
@@ -477,7 +495,6 @@ the standard library map is fine and marginally faster.
 ## 13. Related files
 
 - `src/storage/store.zig` — the store implementation
-- `src/cache_proto.zig` — standalone prototype/benchmark (not wired into the build)
 - `src/persistence/zdb.zig` — RDB persistence, migrated to `Store.iterator()`
 - `docs/memory-architecture.md` — allocation domains and memory budget
 - `docs/server-architecture.md` — server structure

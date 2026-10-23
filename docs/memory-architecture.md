@@ -9,14 +9,17 @@ Three distinct allocation domains:
 
 | Domain                 | Backing                                       | Lifetime        | Budgeted |
 | ---------------------- | --------------------------------------------- | --------------- | -------- |
-| `base_allocator`       | `GeneralPurposeAllocator` (OS-provided)       | Server lifetime | No       |
+| `base_allocator`       | `std.process.Init.gpa` (see below)            | Server lifetime | No       |
 | `kv_allocator`         | `KeyValueAllocator` wrapping `base_allocator` | Server lifetime | Yes      |
-| Per-client parse arena | `ArenaAllocator` on the base allocator (keeps ≤64KB) | Per-command | No       |
+| Per-client parse arena | `ArenaAllocator` on `base_allocator`          | Per-command     | No       |
 
 ## Base Allocator
 
-Passed from `main` into `Server.initWithConfig()`. Used for general-purpose server
-allocations not charged against the KV memory budget:
+`init.gpa` is Zig's process allocator, passed from `main` into
+`Server.init_with_config()`. Zig's start code installs `std.heap.SafeAllocator`
+(page-backed) in Debug/Safe builds, and `c_allocator` or `smp_allocator` in
+optimized builds; it is not a `GeneralPurposeAllocator`. It is used for
+general-purpose server allocations not charged against the KV memory budget:
 
 - Server metadata and config-owned strings
 - `client_slots` array (fixed pool, allocated once)
@@ -35,8 +38,9 @@ allocations not charged against the KV memory budget:
 limit minus the fixed pool, with a 64 MB floor. Outside containers it is a
 fixed 256 MB, and the server warns so the operator can size it. An explicit
 `maxmemory`/`kv-memory-budget` disables sizing; `0` means unlimited, like
-`maxmemory 0`. If the cgroup limit cannot be read the server refuses to start
-rather than guessing.
+`maxmemory 0`. A missing `/proc/self/cgroup` (or a non-Linux host) falls back to
+the 256 MB host budget; if the cgroup files exist but cannot be read, the server
+refuses to start rather than guessing.
 Every allocation, resize, and free adjusts an atomic `memory_used` counter.
 
 The budget is applied the way Redis applies `maxmemory`:
@@ -64,7 +68,7 @@ The budget is applied the way Redis applies `maxmemory`:
   entries that the running handler still points at.
 - `resize()` correctly tracks grow/shrink delta
 - `free()` subtracts the freed size
-- Bound to the store via `attachStore()` for eviction callbacks
+- Bound to the store via `attach_store()` for eviction callbacks
 
 Direct `Store` users that bypass command execution (unit tests, benchmarks,
 AOF/RDB loading) still get the hard, allocation-time budget check.
@@ -148,18 +152,19 @@ Response serialization uses `StackWriter` (src/util/stack_writer.zig):
 - When response exceeds 16 KB, transparently switches to `ArrayListUnmanaged(u8)`
   (allocated from `base_allocator`)
 - Custom `Writer.drain` vtable hook handles the transition
-- `slice()` returns a contiguous view; `toOwnedSlice()` transfers ownership
+- `slice()` returns a contiguous view; `to_owned_slice()` transfers ownership
 
 ## ClientMailbox
 
 Per-client message queue used exclusively for pub/sub delivery (not command responses).
 
-- Lock-free linked list of `MessageNode { bytes: []u8, next: ?*MessageNode }`
+- Spinlock-protected linked list of `MessageNode { bytes: []u8, next: ?*MessageNode }`
+  (`std.atomic.Mutex`; not lock-free)
 - Capacity 256 per mailbox
 - Node pool of 4 recycled nodes to reduce allocations
-- `acquireNode()` checks pool before allocating; `releaseNode()` returns to pool
-- `takeAll()` atomically drains the entire list
-- Messages are written directly to the client socket during `flushMailbox()`
+- `acquire_node()` checks the pool before allocating; `release_node()` returns to it
+- `take_all()` drains the entire list while holding the mailbox lock
+- Messages are written directly to the client socket during `flush_mailbox()`
 
 Each client slot also holds a `zio.Event` set by `enqueue_to_handle()`. The first
 `SUBSCRIBE` starts a delivery coroutine that waits on that event and drains the
@@ -189,23 +194,26 @@ Structures that grow and shrink during operation:
 
 ## Memory Budgets and Reporting
 
-`Config.totalMemoryBudget()` = `fixedMemorySize()` + `kv_memory_budget`
+`Config.total_memory_budget()` = `fixed_memory_size()` + `kv_memory_budget`
 
-`Config.fixedMemorySize()` = `clientPoolSize()` + `pubsubMatrixSize()`
+`Config.fixed_memory_size()` = `client_pool_size()` + `pubsub_matrix_size()`
 (computed model, not a live measurement)
 
-`Server.getMemoryStats()` returns:
-- `fixed_memory_used` — from `Config.fixedMemorySize()` (model-based)
-- `kv_memory_used` — from `KeyValueAllocator.getMemoryUsage()` (precise)
+`Server.get_memory_stats()` returns:
+- `fixed_memory_used` — from `Config.fixed_memory_size()` (model-based)
+- `kv_memory_used` — from `KeyValueAllocator.get_memory_usage()` (precise)
 - `total_allocated` — sum of fixed + kv
-- `total_budget` — from `Config.totalMemoryBudget()`
+- `total_budget` — from `Config.total_memory_budget()`
 
 ## Reporting Caveats
 
 - `kv_memory_used` is precise (atomic counter in custom allocator)
 - `fixed_memory_used` is a configuration model, not a live measurement
-- `pubsubMatrixSize()` models channels × subscribers as a dense matrix, but
+- `pubsub_matrix_size()` models channels × subscribers as a dense matrix, but
   actual storage is dynamic/sparse
+- `client_pool_size()` models the pool as `max_clients * @sizeOf(Client)`, while the
+  server allocates `ClientSlot` (which embeds the mailbox, event and atomics), so
+  `fixed_memory_used` is a lower bound even for the modelled structures
 - Transient allocations from `base_allocator` (pub/sub arrays, mailbox nodes,
   StackWriter overflow, startup loader allocations) are not tracked in memory stats
 - Memory stats are operationally useful but not a complete byte accounting
