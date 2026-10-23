@@ -9,9 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `UNSUBSCRIBE [channel ...]` (with no arguments it unsubscribes from every channel), including Redis-compatible `unsubscribe` replies with the remaining subscription count.
+
 ### Fixed
 
+- Pub/sub messages were not delivered to idle subscribers: they sat in the mailbox until the subscriber sent another command. A per-client delivery coroutine now waits on a mailbox event and pushes messages as they arrive. `SUBSCRIBE` replies also report the cumulative channel count across commands.
+
+- Memory exhaustion now behaves like Redis: `denyoom` commands are rejected before executing with `-OOM command not allowed when used memory > 'maxmemory'.`, while reads and memory-freeing commands keep working. Previously clients got a generic `-ERR while processing command` and the server logged a handler error.
+- `LPUSH`/`RPUSH` no longer leave a partially applied list when an allocation fails; values are staged before the list is touched.
+- Fixed a crash (`EXC_BAD_ACCESS`) when `allkeys-lru` evicted the single key being written while a command held a pointer to it. Eviction now runs at command boundaries, never mid-command.
+- Memory that eviction frees is now reclaimed when the budget can't otherwise be met. Deleted entries stay pooled for reuse and the entry/slot arrays keep their high-water mark, so lowering `maxmemory` (or surviving a write spike) used to leave the server rejecting every write until restart. The pool and oversized arrays are released at the command boundary instead.
+
 ### Changed
+
+- The zio runtime is now always configured with exactly one executor (`.exact(1)`); the `executors` config key was removed.
+- Removed the global store lock. With one executor and non-suspending command handlers, commands execute one at a time on one thread, so no lock is needed. `SAVE` now uses blocking I/O and the AOF queue uses a spinlock to keep that invariant.
+- The KV memory budget is soft during command execution (commands may overshoot `maxmemory` by one command, as in Redis) and is enforced before the next command. `maxmemory 0` disables the limit.
+- `CONFIG SET maxmemory` and the `maxmemory` config-file key are supported at runtime, like Redis.
 
 ### Removed
 

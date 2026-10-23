@@ -1,70 +1,64 @@
 # Server Architecture
 
-Zedis uses a hybrid concurrency model built on Zig `std.Io.Threaded`.
+Zedis runs on zio with **exactly one executor** (`RuntimeOptions.executors = .exact(1)`).
+All client coroutines, parsing, command execution and response building run on that
+one OS thread.
 
 ## Threads And Tasks
 
-- The main thread initializes the threaded I/O runtime, loads config, builds the server, and runs the TCP accept loop.
-- Each accepted connection is handled as an `Io.Group.async(...)` task. These tasks own socket reads, RESP parsing, mailbox flushing, and socket writes.
-- A single dedicated store thread executes commands against the shared `Store`. This keeps store access serialized instead of relying on store-wide locks.
-- The clock may also run as a background I/O task, or fall back to a detached OS thread when concurrency is unavailable.
+- The main thread initializes the zio runtime, loads config, builds the server, and
+  runs the TCP accept loop (`Server.listen()`).
+- Each accepted connection runs as an `Io.Group.async(...)` coroutine on the single
+  executor. Coroutines own socket reads, RESP parsing, command execution, mailbox
+  flushing, and socket writes.
+- Commands run **inline on the client coroutine**. There is no store thread, no
+  command queue, and no store lock.
+- The AOF writer is a dedicated OS thread (`aof.Writer`) that owns file writes and
+  fsyncs. Commands only append to an in-memory queue.
+- The clock updater runs as a background coroutine, or as a detached OS thread when
+  the I/O backend has no concurrency (`Clock.start`).
 
-This means the architecture is not "one OS thread per client" in project code. The explicit application-owned threads are:
-
-- the main thread
-- one dedicated store thread
-- an optional clock updater fallback thread
-
-Connection work is scheduled through Zig's threaded I/O runtime rather than by manually spawning `std.Thread` for every client.
-
-## Thread Ownership
-
-### Main Thread
-
-- Initializes `std.Io.Threaded`
-- Reads configuration
-- Builds the server
-- Runs the TCP accept loop in `Server.listen()`
-
-### Store Thread
-
-- Runs `storeThreadLoop`
-- Drains the shared `CommandQueue`
-- Executes commands against the shared `Store`
-- Serializes responses
-- Enqueues response bytes into the target client's mailbox
-
-### Client Connection Tasks
-
-- Run per accepted connection via `Io.Group.async(...)`
-- Read from the socket
-- Parse RESP commands
-- Copy parsed command arguments into heap-owned buffers
-- Enqueue work for the store thread
-- Flush mailbox responses back to the socket
+Application-owned threads are therefore: the main/executor thread, the AOF writer
+thread, and the optional clock fallback thread. There is no thread per client.
 
 ## Request Flow
 
 1. The listener accepts a TCP connection.
 2. Zedis allocates a client slot from a fixed pool.
-3. The client task reads from the socket and parses RESP.
-4. The parsed command is enqueued to the shared command queue.
-5. The store thread executes the command against the shared store.
-6. The store thread writes the encoded response into the client's mailbox.
-7. The client task flushes mailbox messages to the socket.
+3. The client coroutine reads from the socket and parses a RESP command (zero-copy
+   from the read buffer when the whole command is buffered).
+4. The memory gate evicts to the KV budget, or rejects `denyoom` commands with `-OOM`.
+5. The command executes inline against the shared `Store`; writes are queued for the
+   AOF.
+6. The response is serialized into a `StackWriter` and written to the socket.
+7. Pub/sub messages queued in the client's mailbox are flushed after the command.
+
+## Serialization
+
+With one executor, only one coroutine runs at a time, so command execution is
+serialized without a store lock. This relies on commands never suspending:
+
+- `SAVE` uses blocking file I/O, so a snapshot cannot interleave with another
+  command (it stalls the server for its duration, like Redis' `SAVE`).
+- AOF queueing uses a spinlock, so contention with the writer thread cannot park the
+  coroutine in the middle of a command.
+
+Socket I/O and `appendfsync always` durability waits can suspend, but only outside
+command execution. If a handler ever needs to suspend, it must not mutate the store
+around that suspension (or the single-executor/no-lock invariant no longer holds).
 
 ## Coordination Primitives
 
-- `CommandQueue`: many client tasks push, one store thread drains.
-- `ClientMailbox`: store thread pushes responses, owning client task drains and writes them.
-- Client slots are preallocated and tracked with generation counters to avoid stale handle reuse during disconnect and reconnect cycles.
+- `ClientMailbox`: lock-free queue for pub/sub delivery, drained by the owning client
+  coroutine.
+- Client slots are preallocated and tracked with generation counters to avoid stale
+  handle reuse during disconnect and reconnect cycles.
+- AOF queue: spinlock shared with the writer thread; the critical section is the
+  in-memory queue swap/append only.
 
-## Why The Store Is Single-Threaded
+## Why One Executor
 
-Zedis keeps command execution serialized around the shared `Store`.
-
-- Client tasks handle network I/O and parsing concurrently.
-- The store thread is the synchronization boundary for command execution.
-- This avoids store-wide locking and keeps Redis-like command ordering simpler to reason about.
-
-The tradeoff is that command execution is globally serialized even though connection handling is concurrent.
+Store access is globally serialized either way. With multiple executors, coroutines
+and the store bounce between threads on every command, adding contention and cache
+pressure for no throughput benefit. On the benchmark workload one executor was ~1.7×
+faster than `.auto` and used ~75% of one core instead of ~450% of the machine.
