@@ -31,9 +31,20 @@ pub fn main(init: std.process.Init) !void {
     const io = rt.io();
 
     const cfg = Config.read_config(allocator, io, init.minimal.args) catch |err| {
-        log.err("Failed to read config: {s}", .{@errorName(err)});
+        switch (err) {
+            error.UnknownMemoryLimit => {
+                log.err("Cannot determine how much memory the server may use.", .{});
+                log.err("Set maxmemory explicitly (e.g. maxmemory 2gb), or maxmemory 0 to disable the budget.", .{});
+            },
+            else => log.err("Failed to read config: {s}", .{@errorName(err)}),
+        }
         return err;
     };
+
+    if (cfg.memory_budget_source == .default) {
+        log.warn("No container memory limit detected; using a {d} MB KV budget.", .{Config.host_kv_budget / (1024 * 1024)});
+        log.warn("Set maxmemory to size it explicitly, or maxmemory 0 to disable the budget.", .{});
+    }
 
     // Create and start the server with configuration
     const redis_server = Server.init_with_config(allocator, cfg.bind, cfg.port, cfg, io) catch |err| {
@@ -49,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
     log.info("Configuration loaded:", .{});
     log.info("  Network: {s}:{d}", .{ cfg.bind, cfg.port });
     log.info("  AOF enabled: {}", .{cfg.appendonly});
-    log.info("  Memory budget: {d} MB", .{cfg.total_memory_budget() / (1024 * 1024)});
+    log.info("  Memory budget: {d} MB{s}", .{ cfg.total_memory_budget() / (1024 * 1024), if (cfg.memory_budget_source == .container) " (auto-sized)" else "" });
     log.info("  Max clients: {d}", .{cfg.max_clients});
     log.info("  Eviction policy: {s}", .{@tagName(cfg.eviction_policy)});
     if (cfg.requires_auth()) {
