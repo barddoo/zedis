@@ -13,14 +13,13 @@ pub fn main(init: std.process.Init) !void {
     const runtime_prefs = Config.read_runtime_prefs(allocator, init.minimal.args);
 
     var rt_options: zio.RuntimeOptions = .{
-        // One executor by default. Command execution is serialized by the
-        // store lock (server.zig) anyway, and with several executors the lock
-        // and coroutines bounce between threads on every command: on an M4,
-        // .auto ran at ~1.2M rps pipelined using ~4.5 cores, while one
-        // executor ran at 2.66M+ rps (load-generator bound) on ~0.75 cores,
-        // and ~35% faster without pipelining. Set `executors` in the config
-        // file (a count or "auto") to run more.
-        .executors = if (runtime_prefs.executors == 0) .auto else .exact(runtime_prefs.executors),
+        // Always a single executor. Command execution is serialized by design
+        // and, with several executors, coroutines and the store bounce between
+        // threads on every command: on an M4, .auto ran at ~1.2M rps pipelined
+        // using ~4.5 cores, while one executor ran at 2.66M+ rps
+        // (load-generator bound) on ~0.75 cores, and ~35% faster without
+        // pipelining.
+        .executors = .exact(1),
     };
     if (runtime_prefs.metrics_log_interval_seconds > 0) {
         rt_options.metrics_log_interval = zio.Duration.fromSeconds(runtime_prefs.metrics_log_interval_seconds);

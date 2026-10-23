@@ -183,9 +183,6 @@ pub const RuntimePrefs = struct {
     /// zio RuntimeOptions.stack_pool.prewarm: number of coroutine stack slots
     /// to carve and commit at runtime init. 0 disables prewarming.
     stack_pool_prewarm: u32 = 0,
-    /// zio RuntimeOptions.executors: number of executor threads. 0 means
-    /// auto-detect from the CPU count. Defaults to 1; see main.zig.
-    executors: u8 = 1,
 };
 
 /// Path of the config file passed on the command line, if any.
@@ -231,24 +228,11 @@ pub fn read_runtime_prefs(allocator: std.mem.Allocator, args: std.process.Args) 
             prefs.metrics_log_interval_seconds = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
         } else if (eql(u8, key, "stack-pool-prewarm")) {
             prefs.stack_pool_prewarm = parseInt(u32, std.mem.trim(u8, value, " \t\r"), 10) catch continue;
-        } else if (eql(u8, key, "executors")) {
-            prefs.executors = parse_executors(std.mem.trim(u8, value, " \t\r")) orelse continue;
         }
     }
 
     return prefs;
 }
-
-/// Parses the `executors` value: "auto" (0) or a count in 1..max_executors.
-fn parse_executors(value: []const u8) ?u8 {
-    if (std.ascii.eqlIgnoreCase(value, "auto")) return 0;
-    const n = parseInt(u8, value, 10) catch return null;
-    if (n == 0 or n > max_executors) return null;
-    return n;
-}
-
-/// zio's executor limit (one more than the largest ExecutorId).
-const max_executors = std.math.maxInt(@import("zio").ExecutorId) + 1;
 
 fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !Config {
     var file = try Dir.cwd().openFile(io, file_name, .{});

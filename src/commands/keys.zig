@@ -1,5 +1,4 @@
 const std = @import("std");
-const zio = @import("zio");
 const storeModule = @import("../store.zig");
 const Store = storeModule.Store;
 const Client = @import("../client.zig").Client;
@@ -18,8 +17,10 @@ pub fn keys(writer: *Writer, store: *Store, args: []const Value) !void {
     const all_keys = try store.keys(store.allocator, pattern);
     defer store.allocator.free(all_keys);
     try resp.write_list_len(writer, all_keys.len);
+    // No yielding: `all_keys` borrows store-owned key bytes, and commands run
+    // without a store lock. Yielding here would let another client delete a key
+    // and invalidate the slice. Like Redis, KEYS blocks until the reply is built.
     for (all_keys) |key| {
-        try zio.maybeYield();
         try resp.write_bulk_string(writer, key);
     }
 }

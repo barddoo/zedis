@@ -14,10 +14,14 @@ const zio = @import("zio");
 
 const log = std.log.scoped(.aof);
 
+fn lock_spin(mutex: *std.atomic.Mutex) void {
+    while (!mutex.tryLock()) std.atomic.spinLoopHint();
+}
+
 /// Append-only file writer. Commands are encoded into an in-memory queue while
-/// they execute (under the store lock); a dedicated OS thread writes the queue
-/// to disk and fsyncs according to `fsync_policy`, so file I/O never runs on
-/// the event loop or while the store lock is held.
+/// they execute; a dedicated OS thread writes the queue to disk and fsyncs
+/// according to `fsync_policy`, so file I/O never runs on the event loop or
+/// during command execution.
 ///
 /// With `always`, a client must call `wait_durable` with the offset returned by
 /// `write_command` before replying. One fsync covers every command queued while
@@ -41,8 +45,11 @@ pub const Writer = struct {
         thread: std.Thread = undefined,
 
         /// Guards `queued`, `queued_end` and `stopping`. Held briefly: by command
-        /// execution to append, by the writer thread to take the queue.
-        mutex: zio.Mutex = .init,
+        /// execution to append, by the writer thread to take the queue. A
+        /// spinlock rather than `zio.Mutex`: command execution must not suspend,
+        /// because the store has no lock and another client's command must not
+        /// interleave with a half-executed one.
+        mutex: std.atomic.Mutex = .unlocked,
         /// Encoded commands the writer thread has not taken yet.
         queued: std.ArrayList(u8) = .empty,
         /// File offset at the end of `queued`.
@@ -126,7 +133,7 @@ pub const Writer = struct {
     pub fn deinit(self: *Writer) void {
         const shared = self.shared orelse return;
 
-        shared.mutex.lockUncancelable();
+        lock_spin(&shared.mutex);
         shared.stopping = true;
         shared.mutex.unlock();
         _ = shared.wake_seq.fetchAdd(1, .release);
@@ -146,7 +153,7 @@ pub const Writer = struct {
         if (!self.enabled) return 0;
         const shared = self.shared.?;
 
-        shared.mutex.lockUncancelable();
+        lock_spin(&shared.mutex);
         const start_len = shared.queued.items.len;
         encode_command(&shared.queued, shared.allocator, args) catch {
             shared.queued.shrinkRetainingCapacity(start_len);
@@ -165,8 +172,8 @@ pub const Writer = struct {
     }
 
     /// Under `always`, parks the calling coroutine until the AOF is fsynced up
-    /// to `end`. A no-op for other policies. Must not be called while holding
-    /// the store lock.
+    /// to `end`. A no-op for other policies. Must not be called during command
+    /// execution (it suspends).
     ///
     /// Returns false if the AOF failed (or the wait was canceled) before `end`
     /// became durable: the caller must not acknowledge those writes. They may
@@ -220,7 +227,7 @@ pub const Writer = struct {
         while (true) {
             const seq = shared.wake_seq.load(.acquire);
 
-            shared.mutex.lockUncancelable();
+            lock_spin(&shared.mutex);
             const file = shared.file;
             if (batch.items.len == 0) {
                 std.mem.swap(std.ArrayList(u8), &batch, &shared.queued);
@@ -450,7 +457,7 @@ test "disabled aof writer ignores commands" {
 /// Swaps the writer thread's file handle (for tests that simulate failures).
 fn swap_test_file(aof_writer: *Writer, file: Io.File) Io.File {
     const shared = aof_writer.shared.?;
-    shared.mutex.lockUncancelable();
+    lock_spin(&shared.mutex);
     defer shared.mutex.unlock();
     const previous = shared.file;
     shared.file = file;

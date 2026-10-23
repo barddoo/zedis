@@ -163,8 +163,9 @@ pub const Client = struct {
                 const command = maybe_command orelse break :batch;
                 may_block = false;
 
-                // Execute the command inline on this coroutine. The store lock
-                // serializes it against other clients; there is no store thread.
+                // Execute the command inline on this coroutine. The single zio
+                // executor serializes it against other clients; there is no store
+                // thread and no store lock.
                 self.server.execute_command(self, command.get_args(), response_writer);
                 _ = arena.reset(.{ .retain_with_limit = parse_arena_retain_bytes });
 
@@ -199,7 +200,7 @@ pub const Client = struct {
         if (response.len == 0) return;
 
         // appendfsync always: don't acknowledge writes before they are fsynced.
-        // The store lock is not held here, so other clients keep running.
+        // Command execution is finished here, so other clients keep running.
         if (!self.server.aof_writer.wait_durable(self.aof_end)) {
             // The AOF failed before these writes were durable. Send the MISCONF
             // error instead of the replies and close the connection.
