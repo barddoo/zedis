@@ -343,7 +343,7 @@ Key observations:
 
 ---
 
-## 8. Implementation in `src/store.zig`
+## 8. Implementation in `src/storage/store.zig`
 
 Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 `get_list`, `create_list`, `expire`, `persist`, `rename_key`, `evict_one`,
@@ -476,9 +476,9 @@ the standard library map is fine and marginally faster.
 
 ## 13. Related files
 
-- `src/store.zig` — the store implementation
+- `src/storage/store.zig` — the store implementation
 - `src/cache_proto.zig` — standalone prototype/benchmark (not wired into the build)
-- `src/rdb/zdb.zig` — RDB persistence, migrated to `Store.iterator()`
+- `src/persistence/zdb.zig` — RDB persistence, migrated to `Store.iterator()`
 - `docs/memory-architecture.md` — allocation domains and memory budget
 - `docs/server-architecture.md` — server structure
 

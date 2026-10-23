@@ -1,11 +1,11 @@
 const std = @import("std");
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const Server = @import("../server.zig");
-const resp = @import("../commands/resp.zig");
-const ClientHandle = @import("../types.zig").ClientHandle;
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const Server = @import("../app/server.zig");
+const resp = @import("../protocol/resp.zig");
+const ClientHandle = @import("../util/types.zig").ClientHandle;
 const testing = std.testing;
-const free_message_list = @import("../client_mailbox.zig").free_message_list;
+const free_message_list = @import("../util/client_mailbox.zig").free_message_list;
 
 /// Pub/sub operations the command handlers need. A vtable keeps them testable
 /// without a real `Server` (tests inject an in-memory mock).

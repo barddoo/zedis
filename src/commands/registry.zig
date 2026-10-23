@@ -1,8 +1,8 @@
 const std = @import("std");
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const Store = @import("../store.zig").Store;
-const resp = @import("./resp.zig");
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const Store = @import("../storage/store.zig").Store;
+const resp = @import("../protocol/resp.zig");
 
 pub const CommandError = error{
     WrongNumberOfArguments,

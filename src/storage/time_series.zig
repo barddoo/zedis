@@ -1,5 +1,5 @@
 const std = @import("std");
-const gorilla = @import("./compression/gorilla.zig");
+const gorilla = @import("../util/compression/gorilla.zig");
 const BitStream = gorilla.BitStream;
 const TimestampCompressor = gorilla.TimestampCompressor;
 const ValueCompressor = gorilla.ValueCompressor;
@@ -11,7 +11,7 @@ const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 const eql = std.mem.eql;
 
 const Store = @import("store.zig").Store;
-const Value = @import("parser.zig").Value;
+const Value = @import("../protocol/parser.zig").Value;
 
 const Sample = struct {
     timestamp: i64,
@@ -1062,12 +1062,12 @@ test "TimeSeries: alter updates properties" {
 }
 
 // Command-level tests
-const ts_commands = @import("commands/time_series.zig");
+const ts_commands = @import("../commands/time_series.zig");
 
 // Test aliases
 const testing = std.testing;
 const mem = std.mem;
-const Clock = @import("clock.zig");
+const Clock = @import("../app/clock.zig");
 const Io = std.Io;
 const Writer = Io.Writer;
 

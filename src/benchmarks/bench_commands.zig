@@ -1,16 +1,16 @@
 const std = @import("std");
-const Store = @import("../store.zig").Store;
+const Store = @import("../storage/store.zig").Store;
 const CommandRegistry = @import("../commands/registry.zig").CommandRegistry;
 const init_registry = @import("../commands/init_registry.zig").init_registry;
-const Parser = @import("../parser.zig");
+const Parser = @import("../protocol/parser.zig");
 const Value = Parser.Value;
 const bench_runner = @import("bench_runner.zig");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
-const Client = @import("../client.zig").Client;
-const aof = @import("../aof/aof.zig");
+const Client = @import("../app/client.zig").Client;
+const aof = @import("../persistence/aof.zig");
 const Io = std.Io;
-const Clock = @import("../clock.zig");
+const Clock = @import("../app/clock.zig");
 
 const CommandBenchContext = struct {
     threaded: Io.Threaded,

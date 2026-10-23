@@ -1,8 +1,8 @@
 const std = @import("std");
-const Client = @import("../client.zig").Client;
-const Config = @import("../config.zig");
-const Value = @import("../parser.zig").Value;
-const resp = @import("../commands/resp.zig");
+const Client = @import("../app/client.zig").Client;
+const Config = @import("../app/config.zig");
+const Value = @import("../protocol/parser.zig").Value;
+const resp = @import("../protocol/resp.zig");
 const string_match = @import("../util/string_match.zig").string_match;
 
 const Writer = std.Io.Writer;
@@ -72,10 +72,10 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "timeout", .mutable = true },
 };
 
-const Clock = @import("../clock.zig");
-const Store = @import("../store.zig").Store;
-const KeyValueAllocator = @import("../kv_allocator.zig");
-const Server = @import("../server.zig");
+const Clock = @import("../app/clock.zig");
+const Store = @import("../storage/store.zig").Store;
+const KeyValueAllocator = @import("../storage/kv_allocator.zig");
+const Server = @import("../app/server.zig");
 const Io = std.Io;
 const testing = std.testing;
 

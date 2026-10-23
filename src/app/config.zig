@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Dir = std.Io.Dir;
-const Client = @import("./client.zig").Client;
-const ClientHandle = @import("./types.zig").ClientHandle;
+const Client = @import("client.zig").Client;
+const ClientHandle = @import("../util/types.zig").ClientHandle;
 const eql = std.mem.eql;
 const parseInt = std.fmt.parseInt;
 

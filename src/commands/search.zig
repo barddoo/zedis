@@ -1,17 +1,17 @@
 const std = @import("std");
-const storeModule = @import("../store.zig");
+const storeModule = @import("../storage/store.zig");
 const Store = storeModule.Store;
-const Value = @import("../parser.zig").Value;
-const resp = @import("./resp.zig");
-const SearchIndex = @import("../search/index.zig").SearchIndex;
-const FieldDef = @import("../search/index.zig").FieldDef;
-const FieldValue = @import("../search/index.zig").FieldValue;
-const FieldType = @import("../search/index.zig").FieldType;
-const VectorParams = @import("../search/vector.zig").VectorParams;
-const VectorType = @import("../search/vector.zig").VectorType;
-const DistanceMetric = @import("../search/vector.zig").DistanceMetric;
-const Clock = @import("../clock.zig");
-const search_engine = @import("../search/search.zig");
+const Value = @import("../protocol/parser.zig").Value;
+const resp = @import("../protocol/resp.zig");
+const SearchIndex = @import("../storage/search/index.zig").SearchIndex;
+const FieldDef = @import("../storage/search/index.zig").FieldDef;
+const FieldValue = @import("../storage/search/index.zig").FieldValue;
+const FieldType = @import("../storage/search/index.zig").FieldType;
+const VectorParams = @import("../storage/search/vector.zig").VectorParams;
+const VectorType = @import("../storage/search/vector.zig").VectorType;
+const DistanceMetric = @import("../storage/search/vector.zig").DistanceMetric;
+const Clock = @import("../app/clock.zig");
+const search_engine = @import("../storage/search/search.zig");
 const SearchOptions = search_engine.SearchOptions;
 
 const Io = std.Io;
@@ -561,7 +561,7 @@ fn vec_f32_blob(values: []const f32) []const u8 {
 }
 
 test "FT.ADD under kv allocator does not OOM" {
-    const KeyValueAllocator = @import("../kv_allocator.zig");
+    const KeyValueAllocator = @import("../storage/kv_allocator.zig");
     var kv = try KeyValueAllocator.init(testing.allocator, 1024 * 1024, .allkeys_lru);
     defer kv.deinit();
 

@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 
-const BloomFilter = @import("./bloom_filter.zig").BloomFilter;
+const BloomFilter = @import("bloom_filter.zig").BloomFilter;
 
 pub const ScalableBloomFilter = @This();
 

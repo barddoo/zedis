@@ -1,6 +1,6 @@
 const std = @import("std");
 const metrics = @import("metrics.zig");
-const banner = @import("../banner.zig");
+const banner = @import("../app/banner.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 

@@ -137,7 +137,7 @@ On shutdown the writer drains the queue and fsyncs (unless `no`) before closing.
 
 ## StackWriter
 
-Response serialization uses `StackWriter` (src/stack_writer.zig):
+Response serialization uses `StackWriter` (src/util/stack_writer.zig):
 
 - 16 KB inline buffer — zero heap allocation for typical responses
 - When response exceeds 16 KB, transparently switches to `ArrayListUnmanaged(u8)`
@@ -207,7 +207,7 @@ Structures that grow and shrink during operation:
 
 ## Clock
 
-`Clock` (`src/clock.zig`) trades accuracy for throughput:
+`Clock` (`src/app/clock.zig`) trades accuracy for throughput:
 
 - `clock_update_ms = 0` → always calls `Timestamp.now(.real)` (syscall each access)
 - `clock_update_ms > 0` (default 100 ms) → cached timestamp updated periodically
