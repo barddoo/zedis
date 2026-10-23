@@ -391,13 +391,11 @@ fn stored_string_equals(self: *Server, key: []const u8, expected: []const u8) bo
     };
 }
 
-/// Run one parsed command inline on the calling client coroutine, serialized
-/// against other clients by the store lock. The RESP response is written into
+/// Run one parsed command inline on the calling client coroutine. With the
+/// single executor and non-suspending handlers, this is serialized against
+/// other clients without a lock. The RESP response is written into
 /// `response_writer`. Returns after the handler (and any AOF work) finished.
 pub fn execute_command(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
-    self.store_lock.lock() catch return;
-    defer self.store_lock.unlock();
-
     self.execute_locked(client, args, response_writer);
 }
 

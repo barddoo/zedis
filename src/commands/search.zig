@@ -1,5 +1,4 @@
 const std = @import("std");
-const zio = @import("zio");
 const storeModule = @import("../store.zig");
 const Store = storeModule.Store;
 const Value = @import("../parser.zig").Value;
@@ -329,8 +328,9 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
     defer results.deinit(store.allocator);
 
     try resp.write_list_len(writer, results.items.len);
+    // No yielding: commands run without a store lock, so yielding mid-reply
+    // would let another client mutate the index the results refer to.
     for (results.items) |r| {
-        try zio.maybeYield();
         try resp.write_bulk_string(writer, r.doc_id);
         if (opts.with_scores) try resp.write_double_bulk_string(writer, r.score);
         if (opts.no_content) continue;
