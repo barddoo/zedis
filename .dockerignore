@@ -20,7 +20,7 @@ zig-pkg
 plans
 scripts
 docs
+tests
 *.md
-redis.conf
 docker-bake.hcl
 .env

@@ -31,7 +31,12 @@ allocations not charged against the KV memory budget:
 ## KV Allocator
 
 `KeyValueAllocator` wraps `base_allocator` with a custom vtable to enforce
-`kv_memory_budget` (default 2 GB; `0` means unlimited, like `maxmemory 0`).
+`kv_memory_budget`. Inside a container the default is 80% of the cgroup memory
+limit minus the fixed pool, with a 64 MB floor. Outside containers it is a
+fixed 256 MB, and the server warns so the operator can size it. An explicit
+`maxmemory`/`kv-memory-budget` disables sizing; `0` means unlimited, like
+`maxmemory 0`. If the cgroup limit cannot be read the server refuses to start
+rather than guessing.
 Every allocation, resize, and free adjusts an atomic `memory_used` counter.
 
 The budget is applied the way Redis applies `maxmemory`:
