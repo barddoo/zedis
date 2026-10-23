@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-23
+
 ### Added
 
 - `UNSUBSCRIBE [channel ...]` (with no arguments it unsubscribes from every channel), including Redis-compatible `unsubscribe` replies with the remaining subscription count.
@@ -250,7 +252,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/bardoo/zedis/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/barddoo/zedis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bardoo/zedis/compare/0.1.3...v0.2.0
 [0.1.3]: https://github.com/bardoo/zedis/compare/0.1.2...0.1.3
 [0.1.2]: https://github.com/bardoo/zedis/compare/0.1.1...0.1.2
