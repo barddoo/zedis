@@ -145,7 +145,6 @@ pub const TimeSeries = struct {
     }
 
     pub fn deinit(self: *TimeSeries) void {
-        // Deinit the active samples buffer
         self.active_samples.deinit(self.allocator);
         self.allocator.destroy(self.active_samples);
 
@@ -157,11 +156,9 @@ pub const TimeSeries = struct {
         var chunk = self.head;
         while (chunk) |c| {
             const next = c.next;
-            // Free the chunk's data
             if (c.data.len > 0) {
                 self.allocator.free(c.data);
             }
-            // Free the chunk itself
             self.allocator.destroy(c);
             chunk = next;
         }
@@ -181,15 +178,12 @@ pub const TimeSeries = struct {
 
             const next = c.next;
 
-            // Free chunk data
             if (c.data.len > 0) {
                 self.allocator.free(c.data);
             }
 
-            // Free chunk itself
             self.allocator.destroy(c);
 
-            // Move head forward
             self.head = next;
             if (next) |n| {
                 n.prev = null;
@@ -204,12 +198,10 @@ pub const TimeSeries = struct {
 
     fn seal_current_chunk(self: *TimeSeries) !void {
         if (self.tail) |tail_chunk| {
-            // Seal by compressing active_samples based on encoding type
             const samples = self.active_samples.items;
 
             switch (self.encoding) {
                 .DeltaXor => {
-                    // Compress using Gorilla compression
                     var compressor = ChunkCompressor.init(self.allocator);
                     defer compressor.deinit();
 
@@ -221,7 +213,6 @@ pub const TimeSeries = struct {
                     tail_chunk.data = try compressor.stream.buffer.toOwnedSlice(self.allocator);
                 },
                 .Uncompressed => {
-                    // Store samples in binary format (16 bytes per sample)
                     const byte_size = samples.len * 16;
                     tail_chunk.data = try self.allocator.alloc(u8, byte_size);
 
@@ -234,7 +225,6 @@ pub const TimeSeries = struct {
                 },
             }
 
-            // Clear active samples for next chunk
             self.active_samples.clearRetainingCapacity();
         }
     }
@@ -301,7 +291,6 @@ pub const TimeSeries = struct {
         // Finalize the previous chunk before creating a new one
         try self.seal_current_chunk();
 
-        // Create new chunk header
         const new_chunk = try self.allocator.create(Chunk);
         new_chunk.* = Chunk{
             .prev = self.tail,
@@ -340,15 +329,12 @@ pub const TimeSeries = struct {
         // Check IGNORE filtering - returns true if sample should be ignored
         if (self.should_ignore_sample(timestamp, value)) return;
 
-        // Create new chunk if needed (no tail or current chunk is full)
         if (self.tail == null or self.tail.?.sample_count >= self.max_chunk_samples) {
             try self.create_new_chunk(timestamp);
         }
 
-        // Append sample to current chunk storage
         try self.append_to_chunk(timestamp, value);
 
-        // Update chunk and series metadata
         const tail = self.tail.?;
         tail.last_ts = timestamp;
         tail.sample_count += 1;
@@ -359,7 +345,6 @@ pub const TimeSeries = struct {
             // Reuse existing allocation
             sample_ptr.* = .{ .timestamp = timestamp, .value = value };
         } else {
-            // Allocate new sample
             const sample_ptr = try self.allocator.create(Sample);
             sample_ptr.* = .{ .timestamp = timestamp, .value = value };
             self.last_sample = sample_ptr;
@@ -403,7 +388,6 @@ pub const TimeSeries = struct {
             var chunk_samples = try self.decompress_chunk(c);
             defer chunk_samples.deinit(self.allocator);
 
-            // Add chunk samples to the result
             for (chunk_samples.items) |sample| {
                 if (sample.timestamp >= start_ts and sample.timestamp <= end_ts) {
                     try samples.append(self.allocator, sample);
@@ -422,7 +406,6 @@ pub const TimeSeries = struct {
             chunk = c.next;
         }
 
-        // Apply aggregation if specified
         if (aggregation) |agg| {
             return try self.apply_aggregation(samples, agg, count);
         }
@@ -456,10 +439,8 @@ pub const TimeSeries = struct {
                             .value = agg_value,
                         });
 
-                        // Check count limit
                         if (count) |limit| {
                             if (aggregated.items.len >= limit) {
-                                // Clean up original samples before returning
                                 samples.deinit(self.allocator);
                                 return aggregated;
                             }
@@ -482,7 +463,6 @@ pub const TimeSeries = struct {
             });
         }
 
-        // Clean up original samples
         samples.deinit(self.allocator);
 
         return aggregated;
@@ -602,7 +582,6 @@ pub const TimeSeries = struct {
         var samples: std.ArrayList(Sample) = .empty;
         errdefer samples.deinit(self.allocator);
 
-        // Check if this is the active tail chunk with unsealed data
         const is_active_tail = chunk == self.tail and chunk.data.len == 0;
 
         if (is_active_tail) {
@@ -613,10 +592,8 @@ pub const TimeSeries = struct {
                 try samples.append(self.allocator, sample);
             }
         } else {
-            // Read from sealed chunk data
             switch (chunk.encoding) {
                 .DeltaXor => {
-                    // Use Gorilla decompressor (zero-copy, no allocation)
                     var decompressor = ChunkDecompressor.init(chunk.data);
                     defer decompressor.deinit();
 
@@ -630,7 +607,6 @@ pub const TimeSeries = struct {
                     }
                 },
                 .Uncompressed => {
-                    // Deserialize binary format (16 bytes per sample)
                     const num_samples = chunk.data.len / 16;
                     for (0..num_samples) |i| {
                         const offset = i * 16;
@@ -860,7 +836,6 @@ test "TimeSeries: retention policy evicts old chunks" {
     );
     defer ts.deinit();
 
-    // Add samples that will create multiple chunks
     try ts.add_sample(1000, 10.0);
     try ts.add_sample(2000, 20.0);
     try testing.expectEqual(@as(u64, 2), ts.total_samples);
@@ -947,7 +922,6 @@ test "TimeSeries: multiple chunks with retention" {
     );
     defer ts.deinit();
 
-    // Create 5 chunks over time
     try ts.add_sample(1000, 1.0);
     try ts.add_sample(2000, 2.0);
 
@@ -1053,7 +1027,6 @@ test "TimeSeries: get_last_value returns last value" {
     // Empty time series should return 0.0
     try testing.expectEqual(@as(f64, 0.0), ts.get_last_value());
 
-    // Add samples
     try ts.add_sample(1000, 10.0);
     try testing.expectEqual(@as(f64, 10.0), ts.get_last_value());
 
@@ -1073,19 +1046,15 @@ test "TimeSeries: alter updates properties" {
     );
     defer ts.deinit();
 
-    // Alter retention
     ts.alter(5000, null, null);
     try testing.expectEqual(@as(u64, 5000), ts.retention_ms);
 
-    // Alter duplicate policy
     ts.alter(null, .LAST, null);
     try testing.expectEqual(Duplicate_Policy.LAST, ts.duplicate_policy);
 
-    // Alter chunk size
     ts.alter(null, null, 200);
     try testing.expectEqual(@as(u16, 200), ts.max_chunk_samples);
 
-    // Alter multiple at once
     ts.alter(10000, .MIN, 50);
     try testing.expectEqual(@as(u64, 10000), ts.retention_ms);
     try testing.expectEqual(Duplicate_Policy.MIN, ts.duplicate_policy);
@@ -1110,7 +1079,6 @@ test "TS.INCRBY increments from zero" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create time series
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1137,7 +1105,6 @@ test "TS.INCRBY increments from zero" {
     // Should return timestamp
     try testing.expectEqualStrings(":1000\r\n", writer.buffered());
 
-    // Verify value is 5.0 (formatted as "5" in RESP)
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
@@ -1158,7 +1125,6 @@ test "TS.INCRBY increments from existing value" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create and add initial value
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1175,7 +1141,6 @@ test "TS.INCRBY increments from existing value" {
     };
     try ts_commands.ts_add(&writer, &store, &add_args);
 
-    // Increment by 3.0
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const incrby_args = [_]Value{
@@ -1186,7 +1151,6 @@ test "TS.INCRBY increments from existing value" {
     };
     try ts_commands.ts_incrby(&writer, &store, &incrby_args);
 
-    // Verify value is 13.0 (formatted as "13" in RESP)
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
@@ -1207,7 +1171,6 @@ test "TS.DECRBY decrements value" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create and add initial value
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1224,7 +1187,6 @@ test "TS.DECRBY decrements value" {
     };
     try ts_commands.ts_add(&writer, &store, &add_args);
 
-    // Decrement by 7.0
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const decrby_args = [_]Value{
@@ -1235,7 +1197,6 @@ test "TS.DECRBY decrements value" {
     };
     try ts_commands.ts_decrby(&writer, &store, &decrby_args);
 
-    // Verify value is 13.0 (formatted as "13" in RESP)
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const get_args = [_]Value{
@@ -1256,7 +1217,6 @@ test "TS.ALTER changes retention" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create with retention 1000
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1265,7 +1225,6 @@ test "TS.ALTER changes retention" {
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    // Alter retention to 5000
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const alter_args = [_]Value{
@@ -1278,7 +1237,6 @@ test "TS.ALTER changes retention" {
 
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
-    // Verify the retention was changed
     const ts = try store.get_time_series("myts");
     try testing.expectEqual(@as(u64, 5000), ts.?.retention_ms);
 }
@@ -1291,7 +1249,6 @@ test "TS.ALTER changes duplicate policy" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create with BLOCK policy
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1300,7 +1257,6 @@ test "TS.ALTER changes duplicate policy" {
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    // Alter to LAST policy
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const alter_args = [_]Value{
@@ -1313,7 +1269,6 @@ test "TS.ALTER changes duplicate policy" {
 
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
-    // Verify the policy was changed
     const ts = try store.get_time_series("myts");
     try testing.expectEqual(Duplicate_Policy.LAST, ts.?.duplicate_policy);
 }
@@ -1364,12 +1319,10 @@ test "TS.RANGE can read from active unsealed chunk (hybrid approach)" {
     );
     defer ts.deinit();
 
-    // Add samples without sealing
     try ts.add_sample(1000, 100.0);
     try ts.add_sample(2000, 105.0);
     try ts.add_sample(3000, 110.0);
 
-    // Verify chunk is active (unsealed)
     try testing.expect(ts.tail != null);
     try testing.expectEqual(@as(usize, 0), ts.tail.?.data.len);
 
@@ -1401,13 +1354,11 @@ test "TS.RANGE with COUNT parameter limits results" {
     );
     defer ts.deinit();
 
-    // Add 10 samples
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
         try ts.add_sample(1000 + i * 100, @as(f64, @floatFromInt(i)));
     }
 
-    // Query with COUNT 5
     var samples = try ts.range("-", "+", 5, null);
     defer samples.deinit(testing.allocator);
 
@@ -1453,7 +1404,6 @@ test "TS.RANGE with COUNT across multiple chunks" {
     );
     defer ts.deinit();
 
-    // Add 10 samples, creating multiple chunks
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
         try ts.add_sample(1000 + i * 100, @as(f64, @floatFromInt(i)));
@@ -1476,7 +1426,6 @@ test "TS.RANGE command with COUNT parameter" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create time series with uncompressed encoding
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
@@ -1485,7 +1434,6 @@ test "TS.RANGE command with COUNT parameter" {
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    // Add 5 samples
     var i: usize = 0;
     while (i < 5) : (i += 1) {
         buffer = mem.zeroes([4096]u8);
@@ -1503,7 +1451,6 @@ test "TS.RANGE command with COUNT parameter" {
         try ts_commands.ts_add(&writer, &store, &add_args);
     }
 
-    // Range with COUNT 3
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const range_args = [_]Value{
@@ -1645,7 +1592,6 @@ test "TS.RANGE with AVG aggregation" {
     );
     defer ts.deinit();
 
-    // Add samples with known values across time buckets
     // Bucket 0-999: samples at 0, 500 with values 10, 20 (avg = 15)
     // Bucket 1000-1999: samples at 1000, 1500 with values 30, 50 (avg = 40)
     // Bucket 2000-2999: samples at 2000 with value 100 (avg = 100)
@@ -2048,7 +1994,6 @@ test "TS.RANGE aggregation with COUNT limit" {
     );
     defer ts.deinit();
 
-    // Create 10 buckets with 1 sample each
     var i: i64 = 0;
     while (i < 10) : (i += 1) {
         try ts.add_sample(i * 1000, @as(f64, @floatFromInt(i)));
@@ -2080,7 +2025,6 @@ test "TS.RANGE aggregation across multiple chunks" {
     );
     defer ts.deinit();
 
-    // Add samples across multiple chunks
     // Bucket 0: 4 samples
     // Bucket 1000: 4 samples
     try ts.add_sample(0, 10.0);
@@ -2113,14 +2057,12 @@ test "TS.RANGE command with aggregation parameter" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create time series
     const create_args = [_]Value{
         .{ .data = "TS.CREATE" },
         .{ .data = "myts" },
     };
     try ts_commands.ts_create(&writer, &store, &create_args);
 
-    // Add samples across multiple buckets
     const timestamps = [_][]const u8{ "0", "500", "1000", "1500", "2000", "2500" };
     const values = [_][]const u8{ "10", "20", "30", "40", "50", "60" };
 
@@ -2136,7 +2078,6 @@ test "TS.RANGE command with aggregation parameter" {
         try ts_commands.ts_add(&writer, &store, &add_args);
     }
 
-    // Range with AVG aggregation, bucket size 1000
     buffer = mem.zeroes([4096]u8);
     writer = Writer.fixed(&buffer);
     const range_args = [_]Value{

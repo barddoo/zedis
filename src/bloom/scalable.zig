@@ -243,11 +243,9 @@ test "scalable bloom filter expansion" {
 
     try std.testing.expect(filter.get_filter_count() == 1);
 
-    // Check the actual capacity of the first filter
     const first_filter = &filter.links.items[0].filter;
     const actual_capacity = first_filter.capacity;
 
-    // Add items until we fill the first filter
     var i: u64 = 0;
     while (i < actual_capacity) : (i += 1) {
         var buf: [20]u8 = undefined;
@@ -277,11 +275,9 @@ test "scalable bloom filter no scaling mode" {
     });
     defer filter.deinit();
 
-    // Check the actual capacity
     const first_filter = &filter.links.items[0].filter;
     const actual_capacity = first_filter.capacity;
 
-    // Fill the filter to capacity
     var i: u64 = 0;
     while (i < actual_capacity) : (i += 1) {
         var buf: [20]u8 = undefined;
@@ -311,11 +307,9 @@ test "scalable bloom filter check reverse order" {
     });
     defer filter.deinit();
 
-    // Check the actual capacity
     const first_filter = &filter.links.items[0].filter;
     const actual_capacity = first_filter.capacity;
 
-    // Fill the first filter
     var i: u64 = 0;
     while (i < actual_capacity) : (i += 1) {
         var buf: [20]u8 = undefined;
@@ -323,7 +317,6 @@ test "scalable bloom filter check reverse order" {
         _ = try filter.add(item);
     }
 
-    // Add one more to trigger expansion
     _ = try filter.add("extra-item");
 
     // All items should be found

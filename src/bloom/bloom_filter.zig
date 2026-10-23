@@ -34,7 +34,6 @@ const BloomOptions = struct {
 };
 
 pub fn init(options: BloomOptions) !BloomFilter {
-    // Validate inputs
     if (options.capacity < 1 or options.error_rate <= 0 or options.error_rate >= 1.0) {
         return error.InvalidArguments;
     }
@@ -48,7 +47,6 @@ pub fn init(options: BloomOptions) !BloomFilter {
     const bpe = calc_bpe(error_rate);
     const hashes = @as(u32, @intFromFloat(@ceil(math.ln2 * bpe)));
 
-    // Calculate bits needed
     const needed_bits = @as(f64, @floatFromInt(capacity)) * bpe;
 
     // Round up to next power of 2 (optimization for fast modulo)
@@ -56,7 +54,6 @@ pub fn init(options: BloomOptions) !BloomFilter {
     const n2 = @as(u6, @intFromFloat(@ceil(bn2)));
     const bits = @as(u64, 1) << n2;
 
-    // Calculate bytes with 64-bit alignment
     const bytes = if (bits % 64 != 0)
         ((bits / 64) + 1) * 8
     else
@@ -64,12 +61,10 @@ pub fn init(options: BloomOptions) !BloomFilter {
 
     const actual_bits = bytes * 8;
 
-    // Calculate actual capacity (may be larger due to rounding)
     const bit_diff = actual_bits - @as(u64, @intFromFloat(needed_bits));
     const item_diff = @as(u64, @intFromFloat(@floor(@as(f64, @floatFromInt(bit_diff)) / bpe)));
     const actual_capacity = capacity + item_diff;
 
-    // Allocate bit array
     const bit_array = try allocator.alloc(u8, bytes);
     @memset(bit_array, 0);
 
@@ -124,7 +119,6 @@ inline fn process_position(self: *const BloomFilter, byte_idx: usize) void {
     _ = byte_idx;
 }
 
-// Process positions using optimized method
 inline fn process_positions(
     self: *const BloomFilter,
     h1: u64,
@@ -166,10 +160,8 @@ inline fn process_positions(
 pub fn add(self: *BloomFilter, data: []const u8) bool {
     var newly_added = false;
 
-    // Calculate hashes
     const hashes = calculate_hashes(self, data);
 
-    // Process positions
     _ = process_positions(self, hashes.h1, hashes.h2, true, &newly_added);
 
     if (newly_added) {
@@ -182,10 +174,8 @@ pub fn add(self: *BloomFilter, data: []const u8) bool {
 // Returns true if item MIGHT be in set (could be false positive)
 // Returns false if item DEFINITELY NOT in set
 pub fn check(self: *const BloomFilter, data: []const u8) bool {
-    // Calculate hashes
     const hashes = calculate_hashes(self, data);
 
-    // Process positions
     return process_positions(self, hashes.h1, hashes.h2, false, undefined);
 }
 
@@ -201,7 +191,6 @@ pub fn add_many(self: *BloomFilter, items: []const []const u8) u64 {
         const end = @min(i + batch_size, items.len);
         const batch = items[i..end];
 
-        // Process each item in the batch
         for (batch) |item| {
             if (self.add(item)) {
                 newly_added_count += 1;
@@ -224,7 +213,6 @@ pub fn check_many(self: *const BloomFilter, items: []const []const u8, allocator
         const end = @min(i + batch_size, items.len);
         const batch = items[i..end];
 
-        // Process each item in the batch
         for (batch, i..) |item, idx| {
             results[idx] = self.check(item);
         }
@@ -237,7 +225,6 @@ pub fn check_many(self: *const BloomFilter, items: []const []const u8, allocator
 pub const contains = check;
 
 test "bloom filter initialization" {
-    // Test valid initialization
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
@@ -248,7 +235,6 @@ test "bloom filter initialization" {
     });
     defer filter.deinit();
 
-    // Verify filter properties
     try std.testing.expect(filter.error_rate == 0.01);
     try std.testing.expect(filter.capacity >= 1000); // May be larger due to rounding
     try std.testing.expect(filter.entries == 0);
@@ -257,7 +243,6 @@ test "bloom filter initialization" {
     try std.testing.expect(filter.hashes > 0);
     try std.testing.expect(filter.bit_array.len == filter.bytes);
 
-    // Test invalid initialization
     try std.testing.expectError(
         error.InvalidArguments,
         BloomFilter.init(.{
@@ -304,26 +289,22 @@ test "bloom filter add and check basic" {
     try std.testing.expect(!filter.check("a"));
     try std.testing.expect(!filter.check("very long string that should also work"));
 
-    // Add first item
     const added1 = filter.add("hello");
     try std.testing.expect(added1); // Should be newly added
     try std.testing.expect(filter.entries == 1);
     try std.testing.expect(filter.check("hello")); // Should find it
 
-    // Add same item again
     const added2 = filter.add("hello");
     try std.testing.expect(!added2); // Should not be newly added
     try std.testing.expect(filter.entries == 1); // Count shouldn't increase
     try std.testing.expect(filter.check("hello")); // Should still find it
 
-    // Add different item
     const added3 = filter.add("world");
     try std.testing.expect(added3); // Should be newly added
     try std.testing.expect(filter.entries == 2);
     try std.testing.expect(filter.check("world")); // Should find it
     try std.testing.expect(filter.check("hello")); // Should still find first item
 
-    // Test empty string
     const added4 = filter.add("");
     try std.testing.expect(added4);
     try std.testing.expect(filter.check(""));
@@ -334,7 +315,6 @@ test "bloom filter add and check with force64" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    // Test with force64 enabled
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
@@ -345,7 +325,6 @@ test "bloom filter add and check with force64" {
 
     try std.testing.expect(filter.force64 == true);
 
-    // Test basic operations with force64
     try std.testing.expect(!filter.check("test"));
     const added = filter.add("test");
     try std.testing.expect(added);
@@ -402,7 +381,6 @@ test "bloom filter with different error rates" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    // Test with very low error rate (more memory)
     var filter_low = try BloomFilter.init(.{
         .error_rate = 0.001, // 0.1%
         .capacity = 100,
@@ -410,7 +388,6 @@ test "bloom filter with different error rates" {
     });
     defer filter_low.deinit();
 
-    // Test with high error rate (less memory)
     var filter_high = try BloomFilter.init(.{
         .error_rate = 0.25, // 25% (max practical)
         .capacity = 100,
@@ -441,7 +418,6 @@ test "bloom filter entry counting" {
     });
     defer filter.deinit();
 
-    // Add 10 unique items
     for (0..10) |i| {
         var buf: [20]u8 = undefined;
         const item = try std.fmt.bufPrint(&buf, "item-{}", .{i});
@@ -482,7 +458,6 @@ test "bloom filter large capacity" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    // Test with large capacity
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100000, // 100k items
@@ -514,17 +489,14 @@ test "bloom filter add_many and check_many" {
 
     const items = [_][]const u8{ "apple", "banana", "cherry", "date", "elderberry" };
 
-    // Add multiple items at once
     const added_count = filter.add_many(&items);
     try std.testing.expect(added_count == 5);
     try std.testing.expect(filter.entries == 5);
 
-    // Check all added items
     for (items) |item| {
         try std.testing.expect(filter.check(item));
     }
 
-    // Check multiple items at once
     const test_items = [_][]const u8{ "apple", "banana", "fig", "grape", "cherry" };
     const results = try filter.check_many(&test_items, arena.allocator());
     defer arena.allocator().free(results);
@@ -536,7 +508,6 @@ test "bloom filter add_many and check_many" {
     try std.testing.expect(results[3] == false); // grape (not added)
     try std.testing.expect(results[4] == true); // cherry
 
-    // Test add_many with duplicates
     const duplicate_items = [_][]const u8{ "apple", "banana", "honeydew" };
     const added_count2 = filter.add_many(&duplicate_items);
     try std.testing.expect(added_count2 == 1); // Only honeydew is new

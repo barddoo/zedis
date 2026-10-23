@@ -247,7 +247,6 @@ test "PERSIST command with key having expiration" {
 
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
-    // Verify expiration was removed
     const ttl_val = store.get_ttl("mykey");
     try testing.expect(ttl_val == null);
 }
@@ -394,10 +393,8 @@ test "RENAME command with existing key" {
 
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
-    // Verify old key is gone
     try testing.expect(store.get("oldkey") == null);
 
-    // Verify new key exists with same value
     const new_value = store.get("newkey");
     try testing.expect(new_value != null);
     try testing.expectEqualStrings("value", new_value.?.value.short_string.as_slice());
@@ -501,7 +498,6 @@ test "KEYS command returns all keys when pattern is wildcard" {
     const output = writer.buffered();
     // Should return array with 3 elements
     try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
-    // Verify all keys are present in output
     try testing.expect(mem.indexOf(u8, output, "apple") != null);
     try testing.expect(mem.indexOf(u8, output, "banana") != null);
     try testing.expect(mem.indexOf(u8, output, "count") != null);
@@ -532,10 +528,8 @@ test "RENAME overwrites existing destination key" {
 
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
-    // Verify source is gone
     try testing.expect(store.get("source") == null);
 
-    // Verify dest has source's value
     const dest_value = store.get("dest");
     try testing.expect(dest_value != null);
     try testing.expectEqualStrings("source_value", dest_value.?.value.short_string.as_slice());

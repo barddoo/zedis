@@ -136,7 +136,6 @@ pub fn ts_alter(writer: *Io.Writer, store: *Store, args: []const Value) !void {
         var chunk_size: ?u16 = null;
         var duplicate_policy: ?Duplicate_Policy = null;
 
-        // Parse optional arguments
         var i: usize = 2;
         while (i < args.len) : (i += 1) {
             const arg = args[i].as_slice();
@@ -170,7 +169,6 @@ pub fn ts_range(writer: *Io.Writer, store: *Store, args: []const Value) !void {
         const start = args[2].as_slice();
         const end = args[3].as_slice();
 
-        // Parse optional parameters
         var count: ?usize = null;
         var aggregation: ?Aggregation = null;
 

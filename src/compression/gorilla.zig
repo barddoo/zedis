@@ -440,7 +440,6 @@ test "BitStream: write and read multiple bits" {
 test "ChunkCompressor: compress and decompress simple sequence" {
     const allocator = testing.allocator;
 
-    // Compress data
     var compressor = ChunkCompressor.init(allocator);
     defer compressor.deinit();
 
@@ -451,7 +450,6 @@ test "ChunkCompressor: compress and decompress simple sequence" {
         try compressor.add(ts, val);
     }
 
-    // Get compressed bytes
     const compressed = compressor.stream.items();
 
     // Decompress data

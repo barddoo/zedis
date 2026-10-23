@@ -19,7 +19,6 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
     const error_rate_str = args[2].as_slice();
     const capacity_str = args[3].as_slice();
 
-    // Parse error rate
     const error_rate = std.fmt.parseFloat(f64, error_rate_str) catch {
         return error.InvalidArgument;
     };
@@ -27,7 +26,6 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.InvalidArgument;
     }
 
-    // Parse capacity
     const capacity = std.fmt.parseInt(u64, capacity_str, 10) catch {
         return error.InvalidArgument;
     };
@@ -35,7 +33,6 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.InvalidArgument;
     }
 
-    // Parse optional parameters
     var expansion: f64 = 2.0;
     var non_scaling: bool = false;
     var i: usize = 4;
@@ -59,12 +56,10 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
         }
     }
 
-    // Check if key already exists
     if (store.exists(key)) {
         return error.AlreadyExists;
     }
 
-    // Create the Bloom filter
     const bf = try ScalableBloomFilter.init(.{
         .initial_capacity = capacity,
         .error_rate = error_rate,
@@ -74,7 +69,6 @@ pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {
         .no_scaling = non_scaling,
     });
 
-    // Store the Bloom filter
     try store.create_bloom_filter(key, bf);
 
     try resp.write_ok(writer);
@@ -87,12 +81,10 @@ pub fn bf_add(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const item = args[2].as_slice();
 
-    // Get the Bloom filter
     const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
-    // Add the item
     const added = try bf_ptr.add(item);
 
     // Return 1 if newly added, 0 if already exists (or false positive)
@@ -105,12 +97,10 @@ pub fn bf_madd(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const key = args[1].as_slice();
 
-    // Get the Bloom filter
     const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
-    // Process each item
     const results = try store.allocator.alloc(bool, args.len - 2);
     defer store.allocator.free(results);
 
@@ -120,7 +110,6 @@ pub fn bf_madd(writer: *Writer, store: *Store, args: []const Value) !void {
         results[idx] = added;
     }
 
-    // Return array of integers
     try resp.write_list_len(writer, results.len);
     for (results) |added| {
         try resp.write_int(writer, @as(i64, @intFromBool(added)));
@@ -134,15 +123,12 @@ pub fn bf_exists(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const item = args[2].as_slice();
 
-    // Get the Bloom filter
     const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
-    // Check if item exists
     const exists = bf_ptr.check(item);
 
-    // Return 1 if may exist, 0 if definitely doesn't exist
     try resp.write_int(writer, @as(i64, @intFromBool(exists)));
 }
 
@@ -152,12 +138,10 @@ pub fn bf_mexists(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const key = args[1].as_slice();
 
-    // Get the Bloom filter
     const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
-    // Process each item
     const results = try store.allocator.alloc(bool, args.len - 2);
     defer store.allocator.free(results);
 
@@ -167,7 +151,6 @@ pub fn bf_mexists(writer: *Writer, store: *Store, args: []const Value) !void {
         results[idx] = exists;
     }
 
-    // Return array of integers
     try resp.write_list_len(writer, results.len);
     for (results) |exists| {
         try resp.write_int(writer, @as(i64, @intFromBool(exists)));
@@ -180,17 +163,14 @@ pub fn bf_info(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const key = args[1].as_slice();
 
-    // Get the Bloom filter
     const bf_ptr = try store.get_bloom_filter(key) orelse {
         return error.KeyNotFound;
     };
 
-    // Get filter information
     const filter_count = bf_ptr.get_filter_count();
     const total_entries = bf_ptr.get_total_entries();
     const memory_usage = bf_ptr.get_memory_usage();
 
-    // Return information as an array
     try resp.write_list_len(writer, 10); // 5 key-value pairs
 
     // Capacity
@@ -240,7 +220,6 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
     var non_scaling: bool = false;
     var items_start: usize = 0;
 
-    // Parse optional parameters
     var i: usize = 2;
     while (i < args.len) {
         const param = args[i].as_slice();
@@ -291,7 +270,6 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.WrongNumberOfArguments;
     }
 
-    // Get or create the Bloom filter
     var bf_ptr: *ScalableBloomFilter = blk: {
         const existing_bf = try store.get_bloom_filter(key);
         if (existing_bf) |bf| {
@@ -326,7 +304,6 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
         results[idx] = added;
     }
 
-    // Return array of integers
     try resp.write_list_len(writer, results.len);
     for (results) |added| {
         try resp.write_int(writer, @as(i64, @intFromBool(added)));
@@ -356,7 +333,6 @@ test "BF.RESERVE command with valid parameters" {
 
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
-    // Verify the bloom filter was created
     const bf = try store.get_bloom_filter("bloom1");
     try testing.expect(bf != null);
 }
@@ -413,7 +389,6 @@ test "BF.ADD command with new item" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -426,7 +401,6 @@ test "BF.ADD command with new item" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Now add an item
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -450,7 +424,6 @@ test "BF.ADD command with existing item" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -463,7 +436,6 @@ test "BF.ADD command with existing item" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Add an item first
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -475,7 +447,6 @@ test "BF.ADD command with existing item" {
 
     try bf_add(&writer2, &store, &add_args1);
 
-    // Add the same item again
     var buffer3: [4096]u8 = undefined;
     var writer3 = Writer.fixed(&buffer3);
 
@@ -499,7 +470,6 @@ test "BF.EXISTS command with existing item" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -512,7 +482,6 @@ test "BF.EXISTS command with existing item" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Add an item
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -524,7 +493,6 @@ test "BF.EXISTS command with existing item" {
 
     try bf_add(&writer2, &store, &add_args);
 
-    // Check if item exists
     var buffer3: [4096]u8 = undefined;
     var writer3 = Writer.fixed(&buffer3);
 
@@ -548,7 +516,6 @@ test "BF.EXISTS command with non-existing item" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -561,7 +528,6 @@ test "BF.EXISTS command with non-existing item" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Check if non-existing item exists
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -585,7 +551,6 @@ test "BF.MADD command with multiple items" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -598,7 +563,6 @@ test "BF.MADD command with multiple items" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Add multiple items
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -625,7 +589,6 @@ test "BF.MEXISTS command with multiple items" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -638,7 +601,6 @@ test "BF.MEXISTS command with multiple items" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Add some items
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -650,7 +612,6 @@ test "BF.MEXISTS command with multiple items" {
 
     try bf_add(&writer2, &store, &add_args);
 
-    // Check multiple items (some existing, some not)
     var buffer3: [4096]u8 = undefined;
     var writer3 = Writer.fixed(&buffer3);
 
@@ -676,7 +637,6 @@ test "BF.INFO command" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 
@@ -689,7 +649,6 @@ test "BF.INFO command" {
 
     try bf_reserve(&writer1, &store, &reserve_args);
 
-    // Get info
     var buffer2: [4096]u8 = undefined;
     var writer2 = Writer.fixed(&buffer2);
 
@@ -734,7 +693,6 @@ test "BF.INSERT command with new bloom filter" {
     try testing.expect(result.len > 0);
     try testing.expect(result[0] == '*'); // Starts with array
 
-    // Verify the bloom filter was created and items were added
     const bf = try store.get_bloom_filter("bloom1");
     try testing.expect(bf != null);
     try testing.expect(bf.?.check("item1"));
@@ -750,7 +708,6 @@ test "BF.INSERT command with existing bloom filter" {
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // First reserve a bloom filter
     var buffer1: [4096]u8 = undefined;
     var writer1 = Writer.fixed(&buffer1);
 

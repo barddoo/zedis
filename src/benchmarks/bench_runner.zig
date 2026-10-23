@@ -37,7 +37,6 @@ pub fn run_benchmark(
         }
     }
 
-    // Setup tracking
     var tracking_allocator = metrics.TrackingAllocator.init(allocator);
     var latency_tracker = metrics.LatencyTracker.init(allocator);
     defer latency_tracker.deinit();
@@ -99,7 +98,6 @@ pub fn run_benchmark_advanced(
         }
     }
 
-    // Setup tracking
     var tracking_allocator = metrics.TrackingAllocator.init(allocator);
     var latency_tracker = metrics.LatencyTracker.init(allocator);
     defer latency_tracker.deinit();

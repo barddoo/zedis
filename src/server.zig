@@ -156,17 +156,14 @@ pub fn init_with_config(
     try server.clock.start();
     errdefer server.clock.deinit();
 
-    // Initialize the single shared store with the KV allocator
     server.store = try Store.init(server.kv_allocator.allocator(), io, &server.clock, .{
         .initial_capacity = config.initial_capacity,
         .eviction_policy = config.eviction_policy,
         .maxmemory_samples = config.maxmemory_samples,
     });
 
-    // Initialize command registry with base allocator (lives for server lifetime)
     server.registry = try command_init.init_registry(base_allocator);
 
-    // Allocate fixed memory pools on heap
     const client_slots = try base_allocator.alloc(ClientSlot, config.max_clients);
     for (client_slots, 0..) |*slot, index| {
         slot.* = .{};
@@ -215,7 +212,6 @@ pub fn init_with_config(
             log.debug("AOF not available: {s}", .{@errorName(err)});
         }
     } else {
-        // Load RDB file if it exists
         if (Reader.rdb_file_exists()) {
             if (Reader.init(base_allocator, &server.store)) |reader_value| {
                 var reader = reader_value;
@@ -247,13 +243,11 @@ pub fn deinit(self: *Server) void {
 
     self.clock.deinit();
 
-    // Store cleanup (uses KV allocator)
     self.store.deinit();
 
     // Registry cleanup (uses temp arena)
     self.registry.deinit();
 
-    // Clean up pubsub map
     var iterator = self.pubsub_map.iterator();
     while (iterator.next()) |entry| {
         self.base_allocator.free(entry.key_ptr.*);
@@ -261,7 +255,6 @@ pub fn deinit(self: *Server) void {
     }
     self.pubsub_map.deinit();
 
-    // Free heap allocated fixed memory pools
     for (self.client_slots) |*slot| {
         slot.mailbox.deinit(self.base_allocator);
     }
@@ -382,7 +375,6 @@ pub fn listen(self: *Server) !void {
             continue;
         };
 
-        // Handle this client on its own coroutine
         connection_group.async(self.io, handle_connection_async, .{ self, conn });
     }
 }
@@ -394,7 +386,6 @@ fn handle_connection_async(self: *Server, conn: Stream) void {
 }
 
 fn handle_connection(self: *Server, conn: Stream) !void {
-    // Allocate client from fixed pool
     const allocation = self.allocate_client_slot() orelse {
         log.warn("Maximum client connections reached, rejecting connection", .{});
         conn.close(self.io);
@@ -402,7 +393,6 @@ fn handle_connection(self: *Server, conn: Stream) !void {
     };
     const client_slot = allocation.slot;
 
-    // Initialize client in the allocated slot
     client_slot.client = Client.init(
         self.base_allocator,
         conn,

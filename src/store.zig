@@ -1078,7 +1078,6 @@ test "Store expire functionality" {
     try store.set("key1", "value1");
     try testing.expect(!store.is_expired("key1"));
 
-    // Set expiration to far future
     const now = Io.Clock.real.now(testing.io);
     const future_time = now.toMilliseconds() + 1000000;
     const success = try store.expire("key1", future_time);
@@ -1087,7 +1086,6 @@ test "Store expire functionality" {
     try testing.expect(store.get("key1") != null);
     try testing.expectEqual(future_time, store.get_ttl("key1").?);
 
-    // Set expiration to past
     const past_time: i64 = 12345;
     _ = try store.expire("key1", past_time);
     try testing.expect(store.is_expired("key1"));
@@ -1308,7 +1306,6 @@ test "Store flush_db removes all keys" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // Add various types of keys
     try store.set("str1", "hello");
     try store.set("str2", "world");
     try store.set_int("int1", 42);
@@ -1318,7 +1315,6 @@ test "Store flush_db removes all keys" {
     try list.append(.{ .string = try testing.allocator.dupe(u8, "item1") });
     try list.append(.{ .string = try testing.allocator.dupe(u8, "item2") });
 
-    // Verify all keys exist
     try testing.expectEqual(@as(u32, 5), store.size());
     try testing.expect(store.exists("str1"));
     try testing.expect(store.exists("str2"));
@@ -1326,10 +1322,8 @@ test "Store flush_db removes all keys" {
     try testing.expect(store.exists("int2"));
     try testing.expect(store.exists("mylist"));
 
-    // Flush the database
     store.flush_db();
 
-    // Verify all keys are removed
     try testing.expectEqual(@as(u32, 0), store.size());
     try testing.expect(!store.exists("str1"));
     try testing.expect(!store.exists("str2"));
@@ -1361,21 +1355,17 @@ test "Store flush_db allows reuse after flush" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
     defer store.deinit();
 
-    // Add keys
     try store.set("key1", "value1");
     try store.set_int("key2", 123);
     try testing.expectEqual(@as(u32, 2), store.size());
 
-    // Flush
     store.flush_db();
     try testing.expectEqual(@as(u32, 0), store.size());
 
-    // Add new keys after flush
     try store.set("key3", "value3");
     try store.set_int("key4", 456);
     try testing.expectEqual(@as(u32, 2), store.size());
 
-    // Verify new keys work correctly
     try testing.expectEqualStrings("value3", store.get("key3").?.value.short_string.as_slice());
     try testing.expectEqual(@as(i64, 456), store.get("key4").?.value.int);
 
@@ -1389,7 +1379,6 @@ test "Store maintenance() rehashes and reduces capacity" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
-    // Add many keys to grow the capacity
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1402,7 +1391,6 @@ test "Store maintenance() rehashes and reduces capacity" {
     try testing.expect(capacity_before > 0);
     try testing.expectEqual(@as(usize, 1000), size_before);
 
-    // Delete half the keys to create tombstones
     i = 0;
     while (i < 500) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1417,7 +1405,6 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Deletes may trigger automatic maintenance, but capacity should never grow here.
     try testing.expect(store.capacity() <= capacity_before);
 
-    // Run maintenance to clean up tombstones
     store.maintenance();
 
     const capacity_after = store.capacity();
@@ -1429,7 +1416,6 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Capacity should be reduced or at least not larger
     try testing.expect(capacity_after <= capacity_before);
 
-    // Verify remaining keys are still accessible
     i = 500;
     while (i < 1000) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1445,7 +1431,6 @@ test "Store maintenance() resets deletion counter" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
-    // Add and delete keys to increment deletion counter
     var i: usize = 0;
     while (i < 100) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1456,7 +1441,6 @@ test "Store maintenance() resets deletion counter" {
 
     try testing.expect(store.deletions_since_rehash > 0);
 
-    // Run maintenance
     store.maintenance();
 
     // Deletion counter should be reset
@@ -1468,7 +1452,6 @@ test "Store maybe_maintenance() respects rate limiting" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
-    // Add enough keys to trigger capacity growth
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1515,7 +1498,6 @@ test "Store maybe_maintenance() triggers on 50% waste threshold" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
-    // Add many keys
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1550,7 +1532,6 @@ test "Store maybe_maintenance() triggers on 25% deletions threshold" {
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
-    // Add keys to establish capacity
     var i: usize = 0;
     while (i < 500) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1593,7 +1574,6 @@ test "Store deletion tracking increments counter" {
     // Initially, deletion counter should be 0
     try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
 
-    // Add and delete some keys
     try store.set("key1", "value1");
     try store.set("key2", "value2");
     try store.set("key3", "value3");
