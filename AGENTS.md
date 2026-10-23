@@ -5,12 +5,18 @@ A file for [guiding coding agents](https://agents.md/).
 ## Commands
 
 - **Build:** `zig build`
+  - Debug build by default. Use `zig build --release=fast` (or `-Drelease`)
+    for an optimized binary.
 - **Test (Zig):** `zig build test`
-- **Formatting (Zig)**: `zig fmt .`
+  - Prefer targeted tests with `-Dtest-filter`; the full suite is slow.
+- **Test filter (Zig):** `zig build test -Dtest-filter=<test name>`
+- **Formatting (Zig):** `zig fmt .`
 
 ## Directory Structure
 
 - Shared Zig core: `src/`
+- Architecture, memory, and storage notes: `docs/`
+- Benchmarks: `src/benchmarks/`
 
 ## Tests
 
