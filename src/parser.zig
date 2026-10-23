@@ -547,7 +547,6 @@ test "parser parse multiple commands in sequence" {
     const reader = @constCast(&fixed_reader);
     var parser = Parser.init(testing.allocator);
 
-    // First command
     var command1 = try parser.parse(reader);
     defer command1.deinit();
     try testing.expectEqual(@as(usize, 2), command1.arg_count());
@@ -564,7 +563,6 @@ test "parser parse multiple commands in sequence" {
 }
 
 test "parser parse large bulk string" {
-    // Create a large value (1KB)
     var large_value: [1024]u8 = undefined;
     @memset(&large_value, 'X');
 
@@ -736,14 +734,11 @@ test "Command convenience methods" {
     try command.add_arg(.{ .data = data1 });
     try command.add_arg(.{ .data = data2 });
 
-    // Test arg_count
     try testing.expectEqual(@as(usize, 2), command.arg_count());
 
-    // Test get_arg
     try testing.expect(command.get_arg(0) != null);
     try testing.expect(command.get_arg(2) == null); // Out of bounds
 
-    // Test get_arg_slice
     try testing.expectEqualStrings("GET", command.get_arg_slice(0).?);
     try testing.expectEqualStrings("my-key", command.get_arg_slice(1).?);
     try testing.expect(command.get_arg_slice(2) == null); // Out of bounds
@@ -759,7 +754,6 @@ test "Command ensure_capacity pre-allocation" {
     // Should have allocated ArrayList since 10 > 6
     try testing.expect(command.large_args != null);
 
-    // Add args without reallocation
     var i: usize = 0;
     while (i < 10) : (i += 1) {
         const data = try testing.allocator.dupe(u8, "arg");

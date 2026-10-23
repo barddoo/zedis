@@ -13,10 +13,8 @@ const WorkloadContext = client_pool.WorkloadContext;
 pub fn build_resp_command(buffer: []u8, parts: []const []const u8) ![]const u8 {
     var pos: usize = 0;
 
-    // Write array length
     pos += (try std.fmt.bufPrint(buffer[pos..], "*{d}\r\n", .{parts.len})).len;
 
-    // Write each part as bulk string
     for (parts) |part| {
         pos += (try std.fmt.bufPrint(buffer[pos..], "${d}\r\n{s}\r\n", .{ part.len, part })).len;
     }
@@ -46,7 +44,6 @@ fn workload_write_heavy(client: *ClientConnection, ctx: *WorkloadContext, buffer
         try client.send_command(cmd);
     }
 
-    // Read response
     var response_buf: [1024]u8 = undefined;
     _ = try client.read_response(&response_buf);
 }
@@ -72,7 +69,6 @@ fn workload_read_heavy(client: *ClientConnection, ctx: *WorkloadContext, buffer:
         try client.send_command(cmd);
     }
 
-    // Read response
     var response_buf: [1024]u8 = undefined;
     _ = try client.read_response(&response_buf);
 }
@@ -98,7 +94,6 @@ fn workload_mixed(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8
         try client.send_command(cmd);
     }
 
-    // Read response
     var response_buf: [1024]u8 = undefined;
     _ = try client.read_response(&response_buf);
 }
@@ -124,7 +119,6 @@ fn workload_lists(client: *ClientConnection, ctx: *WorkloadContext, buffer: []u8
         try client.send_command(cmd);
     }
 
-    // Read response
     var response_buf: [4096]u8 = undefined;
     _ = try client.read_response(&response_buf);
 }
@@ -138,7 +132,6 @@ fn workload_counters(client: *ClientConnection, ctx: *WorkloadContext, buffer: [
     const cmd = try build_resp_command(buffer, &[_][]const u8{ "INCR", key });
     try client.send_command(cmd);
 
-    // Read response
     var response_buf: [1024]u8 = undefined;
     _ = try client.read_response(&response_buf);
 }
@@ -166,11 +159,9 @@ pub fn run_load_test(
     // Wait a bit to ensure server is ready
     try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(100 * std.time.ns_per_ms) }, io);
 
-    // Create client pool
     var pool = try ClientPool.init(allocator, config.num_clients, config.host, config.port);
     defer pool.deinit();
 
-    // Run workload
     const start_time = std.Io.Clock.awake.now(io);
     const result = try client_pool.run_workload(allocator, &pool, workload_fn, config.operations);
     const end_time = std.Io.Clock.awake.now(io);
@@ -178,7 +169,6 @@ pub fn run_load_test(
     const duration_ns: u64 = @intCast(start_time.durationTo(end_time).toNanoseconds());
     const duration_s = @as(f64, @floatFromInt(duration_ns)) / 1_000_000_000.0;
 
-    // Print results
     try stdout.print("Duration: {d:.2}s\n", .{duration_s});
     try stdout.print("Throughput: {d:.0} ops/sec\n", .{result.throughput});
     try stdout.print("Latency: {any}\n", .{result.latency_stats});
@@ -211,7 +201,6 @@ pub fn run_all_load_tests(allocator: Allocator, io: std.Io) !void {
         _ = try reader.interface.takeByte();
     } else {
         try stdout.writeAll("Starting tests in 2 seconds...\n");
-        // Sleep for 2 seconds
         try std.Io.Clock.Duration.sleep(.{ .clock = .boot, .raw = std.Io.Duration.fromNanoseconds(2 * std.time.ns_per_s) }, io);
     }
 

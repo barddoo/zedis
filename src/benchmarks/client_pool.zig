@@ -167,7 +167,6 @@ pub fn run_workload(
 } {
     const num_clients = pool.clients.len;
 
-    // Setup workload context
     var workload_ctx = WorkloadContext{
         .iterations = iterations,
         .current_iteration = std.atomic.Value(usize).init(0),
@@ -199,7 +198,6 @@ pub fn run_workload(
         tracker.* = metrics.LatencyTracker.init(allocator);
     }
 
-    // Setup worker contexts
     var worker_contexts = try allocator.alloc(WorkerContext, num_clients);
     defer allocator.free(worker_contexts);
 
@@ -218,7 +216,6 @@ pub fn run_workload(
         };
     }
 
-    // Spawn worker threads
     const threads = try allocator.alloc(std.Thread, num_clients);
     defer allocator.free(threads);
 
@@ -228,7 +225,6 @@ pub fn run_workload(
         thread.* = try std.Thread.spawn(.{}, worker_thread_fn, .{&worker_contexts[i]});
     }
 
-    // Wait for all threads to complete
     for (threads) |thread| {
         thread.join();
     }
@@ -237,7 +233,6 @@ pub fn run_workload(
     const duration_ns: u64 = @intCast(start_time.durationTo(end_time).toNanoseconds());
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
-    // Merge all latency stats
     var merged_tracker = metrics.LatencyTracker.init(allocator);
     defer merged_tracker.deinit();
 
@@ -249,7 +244,6 @@ pub fn run_workload(
 
     const latency_stats = try merged_tracker.calculate();
 
-    // Calculate throughput
     var total_ops: usize = 0;
     for (worker_contexts) |*worker_ctx| {
         total_ops += worker_ctx.ops_completed.load(.monotonic);

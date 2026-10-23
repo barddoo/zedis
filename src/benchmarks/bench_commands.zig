@@ -234,7 +234,6 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
         var ctx = try CommandBenchContext.init(allocator);
         defer ctx.deinit();
 
-        // Pre-populate data
         var i: usize = 0;
         while (i < 10_000) : (i += 1) {
             var key_buf: [32]u8 = undefined;
@@ -307,7 +306,6 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
         var ctx = try CommandBenchContext.init(allocator);
         defer ctx.deinit();
 
-        // Pre-populate data
         var i: usize = 0;
         while (i < 10_000) : (i += 1) {
             var key_buf: [32]u8 = undefined;
@@ -358,7 +356,6 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
         var ctx = try CommandBenchContext.init(allocator);
         defer ctx.deinit();
 
-        // Pre-populate lists
         var i: usize = 0;
         while (i < 100) : (i += 1) {
             var j: usize = 0;
@@ -413,6 +410,5 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
         bench_runner.print_result(result);
     }
 
-    // Print summary table
     bench_runner.print_results(results.items);
 }

@@ -58,21 +58,18 @@ pub const LatencyTracker = struct {
             return error.NoSamples;
         }
 
-        // Sort samples for percentile calculation
         std.mem.sort(u64, self.samples.items, {}, std.sort.asc(u64));
 
         const count = self.samples.items.len;
         const min_ns = self.samples.items[0];
         const max_ns = self.samples.items[count - 1];
 
-        // Calculate average
         var sum: u128 = 0;
         for (self.samples.items) |sample| {
             sum += sample;
         }
         const avg_ns: u64 = @intCast(sum / count);
 
-        // Calculate percentiles
         const median_idx = count / 2;
         const p95_idx = (count * 95) / 100;
         const p99_idx = (count * 99) / 100;
@@ -289,7 +286,6 @@ test "ThroughputCounter" {
     var counter = ThroughputCounter.init(threaded.io());
     counter.start();
 
-    // Simulate some operations
     var i: usize = 0;
     while (i < 1000) : (i += 1) {
         counter.record_op();

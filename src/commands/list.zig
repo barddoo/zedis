@@ -183,7 +183,6 @@ pub fn lset(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.KeyNotFound;
     };
 
-    // Set value inline if small enough, otherwise duplicate via KV allocator
     const pv = try PrimitiveValue.from_slice(value, store.allocator);
     try list.set_by_index(actual_index, pv);
 
@@ -206,7 +205,6 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
         return;
     }
 
-    // Normalize indices with clamping behavior
     const actual_start = normalize_range_index(start, list_len, true) orelse {
         try resp.write_list_len(writer, 0);
         return;
@@ -217,7 +215,6 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
         return;
     };
 
-    // Handle invalid range
     if (actual_start > actual_stop) {
         try resp.write_list_len(writer, 0);
         return;
@@ -239,7 +236,6 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
     }
 }
 
-// LPUSH Tests
 test "LPUSH single element to new list" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -262,7 +258,6 @@ test "LPUSH single element to new list" {
 
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 
-    // Verify the list was created and contains the element
     const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 1), list.?.len());
@@ -292,7 +287,6 @@ test "LPUSH multiple elements to new list" {
 
     try testing.expectEqualStrings(":3\r\n", writer.buffered());
 
-    // Verify the list has 3 elements
     const list = try store.get_list("mylist");
     try testing.expect(list != null);
     try testing.expectEqual(@as(usize, 3), list.?.len());
@@ -310,7 +304,6 @@ test "LPUSH to existing list" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // First, add some elements
     const args1 = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -319,7 +312,6 @@ test "LPUSH to existing list" {
     try lpush(&writer, &store, &args1);
     writer = Writer.fixed(&buffer);
 
-    // Then add more elements
     const args2 = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -335,7 +327,6 @@ test "LPUSH to existing list" {
     try testing.expectEqual(@as(usize, 3), list.?.len());
 }
 
-// RPUSH Tests
 test "RPUSH single element to new list" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -392,7 +383,6 @@ test "RPUSH multiple elements to new list" {
     try testing.expectEqual(@as(usize, 3), list.?.len());
 }
 
-// LPOP Tests
 test "LPOP from list with single element" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -405,7 +395,6 @@ test "LPOP from list with single element" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // First create a list with one element
     const push_args = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -414,7 +403,6 @@ test "LPOP from list with single element" {
     try lpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Then pop the element
     const pop_args = [_]Value{
         .{ .data = "LPOP" },
         .{ .data = "mylist" },
@@ -462,7 +450,6 @@ test "LPOP with count from list with multiple elements" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create a list with multiple elements
     const push_args = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -473,7 +460,6 @@ test "LPOP with count from list with multiple elements" {
     try lpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Pop 2 elements
     const pop_args = [_]Value{
         .{ .data = "LPOP" },
         .{ .data = "mylist" },
@@ -502,7 +488,6 @@ test "LPOP with count of 0" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create a list with elements
     const push_args = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -511,7 +496,6 @@ test "LPOP with count of 0" {
     try lpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Pop 0 elements
     const pop_args = [_]Value{
         .{ .data = "LPOP" },
         .{ .data = "mylist" },
@@ -522,7 +506,6 @@ test "LPOP with count of 0" {
     try testing.expectEqualStrings("$-1\r\n", writer.buffered());
 }
 
-// RPOP Tests
 test "RPOP from list with single element" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -535,7 +518,6 @@ test "RPOP from list with single element" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // First create a list with one element
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -544,7 +526,6 @@ test "RPOP from list with single element" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Then pop the element
     const pop_args = [_]Value{
         .{ .data = "RPOP" },
         .{ .data = "mylist" },
@@ -566,7 +547,6 @@ test "RPOP with count from list with multiple elements" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create a list with multiple elements
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -577,7 +557,6 @@ test "RPOP with count from list with multiple elements" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Pop 2 elements from the right
     const pop_args = [_]Value{
         .{ .data = "RPOP" },
         .{ .data = "mylist" },
@@ -594,7 +573,6 @@ test "RPOP with count from list with multiple elements" {
     try testing.expectEqual(@as(usize, 1), list.?.len());
 }
 
-// LLEN Tests
 test "LLEN on existing list" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -607,7 +585,6 @@ test "LLEN on existing list" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create a list with elements
     const push_args = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -618,7 +595,6 @@ test "LLEN on existing list" {
     try lpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Check length
     const llen_args = [_]Value{
         .{ .data = "LLEN" },
         .{ .data = "mylist" },
@@ -662,7 +638,6 @@ test "Mixed LPUSH and RPUSH operations" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // LPUSH "middle"
     const lpush_args = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -671,7 +646,6 @@ test "Mixed LPUSH and RPUSH operations" {
     try lpush(&writer, &store, &lpush_args);
     writer = Writer.fixed(&buffer);
 
-    // LPUSH "left"
     const lpush_args2 = [_]Value{
         .{ .data = "LPUSH" },
         .{ .data = "mylist" },
@@ -680,7 +654,6 @@ test "Mixed LPUSH and RPUSH operations" {
     try lpush(&writer, &store, &lpush_args2);
     writer = Writer.fixed(&buffer);
 
-    // RPUSH "right"
     const rpush_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -711,7 +684,6 @@ test "LPOP and RPOP from the same list" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -749,7 +721,6 @@ test "LPOP and RPOP from the same list" {
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
 }
 
-// LINDEX Tests
 test "LINDEX get first element" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -762,7 +733,6 @@ test "LINDEX get first element" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -773,7 +743,6 @@ test "LINDEX get first element" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Get first element (index 0)
     const lindex_args = [_]Value{
         .{ .data = "LINDEX" },
         .{ .data = "mylist" },
@@ -796,7 +765,6 @@ test "LINDEX get last element with negative index" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -807,7 +775,6 @@ test "LINDEX get last element with negative index" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Get last element (index -1)
     const lindex_args = [_]Value{
         .{ .data = "LINDEX" },
         .{ .data = "mylist" },
@@ -830,7 +797,6 @@ test "LINDEX with out of range index" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -839,7 +805,6 @@ test "LINDEX with out of range index" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Try to get element at index 10
     const lindex_args = [_]Value{
         .{ .data = "LINDEX" },
         .{ .data = "mylist" },
@@ -873,7 +838,6 @@ test "LINDEX on non-existing list" {
     try testing.expectEqualStrings("$-1\r\n", writer.buffered());
 }
 
-// LSET Tests
 test "LSET update element at index" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -886,7 +850,6 @@ test "LSET update element at index" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -897,7 +860,6 @@ test "LSET update element at index" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Set element at index 1 to "TWO"
     const lset_args = [_]Value{
         .{ .data = "LSET" },
         .{ .data = "mylist" },
@@ -909,7 +871,6 @@ test "LSET update element at index" {
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
     writer = Writer.fixed(&buffer);
 
-    // Verify the element was updated
     const lindex_args = [_]Value{
         .{ .data = "LINDEX" },
         .{ .data = "mylist" },
@@ -932,7 +893,6 @@ test "LSET with negative index" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -943,7 +903,6 @@ test "LSET with negative index" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Set last element using -1
     const lset_args = [_]Value{
         .{ .data = "LSET" },
         .{ .data = "mylist" },
@@ -1001,7 +960,6 @@ test "LSET with out of range index" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1010,7 +968,6 @@ test "LSET with out of range index" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Try to set element at index 10
     const lset_args = [_]Value{
         .{ .data = "LSET" },
         .{ .data = "mylist" },
@@ -1022,7 +979,6 @@ test "LSET with out of range index" {
     try testing.expectError(error.KeyNotFound, result);
 }
 
-// LRANGE Tests
 test "LRANGE get all elements" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -1035,7 +991,6 @@ test "LRANGE get all elements" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1046,7 +1001,6 @@ test "LRANGE get all elements" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Get all elements (0 to -1)
     const lrange_args = [_]Value{
         .{ .data = "LRANGE" },
         .{ .data = "mylist" },
@@ -1070,7 +1024,6 @@ test "LRANGE get subset of elements" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three, four, five
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1083,7 +1036,6 @@ test "LRANGE get subset of elements" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Get elements from index 1 to 3
     const lrange_args = [_]Value{
         .{ .data = "LRANGE" },
         .{ .data = "mylist" },
@@ -1107,7 +1059,6 @@ test "LRANGE with negative indices" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three, four, five
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1120,7 +1071,6 @@ test "LRANGE with negative indices" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Get last 2 elements (-2 to -1)
     const lrange_args = [_]Value{
         .{ .data = "LRANGE" },
         .{ .data = "mylist" },
@@ -1168,7 +1118,6 @@ test "LRANGE with out of range indices" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1178,7 +1127,6 @@ test "LRANGE with out of range indices" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Try to get elements from 10 to 20 (out of range)
     const lrange_args = [_]Value{
         .{ .data = "LRANGE" },
         .{ .data = "mylist" },
@@ -1202,7 +1150,6 @@ test "LRANGE with reversed range" {
     var buffer: [4096]u8 = undefined;
     var writer = Writer.fixed(&buffer);
 
-    // Create list with: one, two, three
     const push_args = [_]Value{
         .{ .data = "RPUSH" },
         .{ .data = "mylist" },
@@ -1213,7 +1160,6 @@ test "LRANGE with reversed range" {
     try rpush(&writer, &store, &push_args);
     writer = Writer.fixed(&buffer);
 
-    // Try reversed range (start > stop)
     const lrange_args = [_]Value{
         .{ .data = "LRANGE" },
         .{ .data = "mylist" },

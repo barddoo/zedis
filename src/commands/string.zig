@@ -198,7 +198,6 @@ pub fn getset(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const new_value = args[2].as_slice();
 
-    // Get old value
     const old_value = store.get(key);
 
     if (old_value) |v| {
@@ -212,15 +211,12 @@ pub fn getset(writer: *Writer, store: *Store, args: []const Value) !void {
         try resp.write_null(writer);
     }
 
-    // Set new value
     try store.set(key, new_value);
 }
 
 pub fn mget(writer: *Writer, store: *Store, args: []const Value) !void {
-    // Write array header
     try resp.write_list_len(writer, args.len - 1);
 
-    // Get each key
     for (args[1..]) |key_arg| {
         const key = key_arg.as_slice();
         const value = store.get(key);
@@ -244,7 +240,6 @@ pub fn mset(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.InvalidArgument;
     }
 
-    // Set all key-value pairs
     var i: usize = 1;
     while (i < args.len) : (i += 2) {
         const key = args[i].as_slice();
@@ -262,10 +257,8 @@ pub fn setex(writer: *Writer, store: *Store, args: []const Value) !void {
     };
     const value = args[3].as_slice();
 
-    // Set the value
     try store.set(key, value);
 
-    // Set expiration
     if (seconds > 0) {
         const ts = store.clock.now();
         const now = ts.toMilliseconds();
@@ -315,12 +308,10 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const increment_str = args[2].as_slice();
 
-    // Parse increment as float
     const increment = std.fmt.parseFloat(f64, increment_str) catch {
         return error.InvalidFloat;
     };
 
-    // Get current value
     const current_value = store.get(key);
     var current_float: f64 = 0.0;
 
@@ -343,7 +334,6 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
         }
     }
 
-    // Compute new value
     const new_float = current_float + increment;
 
     // Format to string with up to 17 decimal places, removing trailing zeros
@@ -352,7 +342,6 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
         return error.Overflow;
     };
 
-    // Remove trailing zeros and trailing decimal point
     var end = formatted.len;
     if (std.mem.indexOf(u8, formatted, ".")) |_| {
         while (end > 0 and formatted[end - 1] == '0') {
@@ -365,10 +354,8 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
 
     const result = formatted[0..end];
 
-    // Store as string
     try store.set(key, result);
 
-    // Return as bulk string
     try resp.write_bulk_string(writer, result);
 }
 

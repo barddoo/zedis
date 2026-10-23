@@ -56,7 +56,6 @@ pub const Writer = struct {
         };
     }
 
-    // Helper functions to write data and update CRC checksum
     inline fn write_byte(self: *Writer, byte: u8) !void {
         self.checksum.update(&.{byte});
         try self.buffered_writer.interface.writeByte(byte);
@@ -136,7 +135,6 @@ pub const Writer = struct {
     fn write_end_of_file(self: *Writer) !void {
         try self.write_byte(OPCODE_EOF);
 
-        // Get the accumulated checksum from all writes
         const checksum = self.checksum.final();
 
         // Write checksum directly (not included in checksum calculation)
@@ -553,11 +551,9 @@ test "ZDB write_metadata writes correct format" {
     defer allocator.free(file_content);
 
     try testing.expectEqual(0xFA, file_content[0]);
-    // Key
     try testing.expectEqual(key.len, file_content[1]);
     try testing.expect(mem.eql(u8, file_content[2..6], key));
 
-    // Value
     try testing.expectEqual(value.len, file_content[key.len + 2]);
 
     const valueStart = 3 + key.len;

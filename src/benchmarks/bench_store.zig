@@ -383,6 +383,5 @@ pub fn run_all_benchmarks(allocator: Allocator) !void {
         bench_runner.print_result(result);
     }
 
-    // Print summary table
     bench_runner.print_results(results.items);
 }
