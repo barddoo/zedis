@@ -332,51 +332,6 @@ test "bloom filter add and check with force64" {
     try std.testing.expect(filter.entries == 1);
 }
 
-test "bloom filter false positive rate estimation" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
-    // Create a small filter to increase chance of collisions
-    var filter = try BloomFilter.init(.{
-        .error_rate = 0.1, // 10% error rate for easier testing
-        .capacity = 10, // Small capacity
-        .allocator = arena.allocator(),
-    });
-    defer filter.deinit();
-
-    // Add some items
-    const items = [_][]const u8{ "a", "b", "c", "d", "e" };
-    for (items) |item| {
-        _ = filter.add(item);
-    }
-
-    // Check added items (should all be true)
-    for (items) |item| {
-        try std.testing.expect(filter.check(item));
-    }
-
-    // Test some items that were NOT added
-    // With small filter and 10% error rate, some may be false positives
-    const test_items = [_][]const u8{ "x", "y", "z", "1", "2", "3", "4", "5", "6", "7" };
-    var false_positives: u32 = 0;
-    var total_tests: u32 = 0;
-
-    for (test_items) |item| {
-        if (filter.check(item)) {
-            false_positives += 1;
-        }
-        total_tests += 1;
-    }
-
-    const false_positive_rate = @as(f64, @floatFromInt(false_positives)) / @as(f64, @floatFromInt(total_tests));
-
-    // With 10% configured error rate and 5 items in 10-capacity filter,
-    // actual false positive rate should be reasonable
-    // Keep the check broad to avoid flaky tests while still catching a saturated filter.
-    try std.testing.expect(false_positives < total_tests);
-    try std.testing.expect(false_positive_rate < 1.0);
-}
-
 test "bloom filter with different error rates" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

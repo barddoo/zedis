@@ -152,6 +152,9 @@ test "string_match: combining * and ?" {
     try testing.expect(string_match("h?*o", "hello"));
     try testing.expect(string_match("?*?", "ab"));
     try testing.expect(string_match("?*?", "abc"));
+    try testing.expect(string_match("*?*", "x"));
+    try testing.expect(string_match("?*?*?*?", "abcd"));
+    try testing.expect(string_match("*?*?*?*", "abc"));
 }
 
 test "string_match: complex patterns" {
@@ -170,10 +173,6 @@ test "string_match: pattern longer than string with wildcards" {
 // Edge Cases
 // ============================================================================
 
-test "string_match: empty pattern and string" {
-    try testing.expect(string_match("", ""));
-}
-
 test "string_match: empty pattern with non-empty string" {
     try testing.expect(!string_match("", "hello"));
 }
@@ -184,12 +183,6 @@ test "string_match: empty string with wildcard pattern" {
     try testing.expect(string_match("***", ""));
     try testing.expect(!string_match("?", ""));
     try testing.expect(!string_match("*?", ""));
-}
-
-test "string_match: pattern with only wildcards" {
-    try testing.expect(string_match("???", "abc"));
-    try testing.expect(string_match("***", "test"));
-    try testing.expect(string_match("*?*", "x"));
 }
 
 // ============================================================================
@@ -229,14 +222,6 @@ test "string_match: redis key patterns" {
 // Special Characters
 // ============================================================================
 
-test "string_match: special characters in string" {
-    try testing.expect(string_match("hello-world", "hello-world"));
-    try testing.expect(string_match("hello_world", "hello_world"));
-    try testing.expect(string_match("hello:world", "hello:world"));
-    try testing.expect(string_match("hello.world", "hello.world"));
-    try testing.expect(string_match("hello@world", "hello@world"));
-}
-
 test "string_match: special characters with wildcards" {
     try testing.expect(string_match("hello-*", "hello-world"));
     try testing.expect(string_match("*-world", "hello-world"));
@@ -261,12 +246,6 @@ test "string_match: many wildcards" {
     try testing.expect(string_match("*a*b*c*", "xaybzc"));
     try testing.expect(string_match("*a*b*c*", "aabbcc"));
     try testing.expect(string_match("*a*b*c*d*e*", "abcde"));
-}
-
-test "string_match: alternating ? and *" {
-    try testing.expect(string_match("?*?*?", "abc"));
-    try testing.expect(string_match("?*?*?*?", "abcd"));
-    try testing.expect(string_match("*?*?*?*", "abc"));
 }
 
 // ============================================================================

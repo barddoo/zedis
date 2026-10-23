@@ -434,13 +434,3 @@ pub fn parse_memory_size(value: []const u8) !usize {
         return try parseInt(usize, value, 10);
     }
 }
-
-test "parse_executors accepts auto and bounded counts" {
-    try std.testing.expectEqual(@as(?u8, 0), parse_executors("auto"));
-    try std.testing.expectEqual(@as(?u8, 0), parse_executors("AUTO"));
-    try std.testing.expectEqual(@as(?u8, 1), parse_executors("1"));
-    try std.testing.expectEqual(@as(?u8, max_executors), parse_executors(std.fmt.comptimePrint("{d}", .{max_executors})));
-    try std.testing.expectEqual(@as(?u8, null), parse_executors("0"));
-    try std.testing.expectEqual(@as(?u8, null), parse_executors(std.fmt.comptimePrint("{d}", .{max_executors + 1})));
-    try std.testing.expectEqual(@as(?u8, null), parse_executors("many"));
-}

@@ -1273,40 +1273,6 @@ test "TS.ALTER changes duplicate policy" {
     try testing.expectEqual(Duplicate_Policy.LAST, ts.?.duplicate_policy);
 }
 
-test "TS.RANGE returns samples from active unsealed chunk - Uncompressed" {
-    var ts = try TimeSeries.init(
-        testing.allocator,
-        0,
-        .BLOCK,
-        100, // Large chunk size to avoid sealing
-        .Uncompressed,
-        0,
-        0.0,
-    );
-    defer ts.deinit();
-
-    // Add samples without sealing the chunk
-    try ts.add_sample(1000, 10.0);
-    try ts.add_sample(2000, 20.0);
-    try ts.add_sample(3000, 30.0);
-
-    // Verify chunk is active (not sealed)
-    try testing.expect(ts.tail != null);
-    try testing.expectEqual(@as(usize, 0), ts.tail.?.data.len); // No sealed data yet
-
-    // Query range - should read from active buffer
-    var samples = try ts.range("-", "+", null, null);
-    defer samples.deinit(testing.allocator);
-
-    try testing.expectEqual(@as(usize, 3), samples.items.len);
-    try testing.expectEqual(@as(i64, 1000), samples.items[0].timestamp);
-    try testing.expectEqual(@as(f64, 10.0), samples.items[0].value);
-    try testing.expectEqual(@as(i64, 2000), samples.items[1].timestamp);
-    try testing.expectEqual(@as(f64, 20.0), samples.items[1].value);
-    try testing.expectEqual(@as(i64, 3000), samples.items[2].timestamp);
-    try testing.expectEqual(@as(f64, 30.0), samples.items[2].value);
-}
-
 test "TS.RANGE can read from active unsealed chunk (hybrid approach)" {
     var ts = try TimeSeries.init(
         testing.allocator,
@@ -1468,113 +1434,78 @@ test "TS.RANGE command with COUNT parameter" {
     try testing.expect(mem.startsWith(u8, output, "*3\r\n"));
 }
 
-test "TS.RANGE with 5000 random samples using compressed encoding" {
+test "TS.RANGE with 5000 random samples across encodings" {
+    const Case = struct {
+        encoding: EncodingType,
+        seed: u64,
+        base_ts: i64,
+        interval: i64,
+        min_value: f64,
+        value_span: f64,
+    };
+    const cases = [_]Case{
+        .{ .encoding = .DeltaXor, .seed = 12345, .base_ts = 1_000_000, .interval = 1000, .min_value = 20.0, .value_span = 10.0 },
+        .{ .encoding = .Uncompressed, .seed = 67890, .base_ts = 2_000_000, .interval = 500, .min_value = 15.0, .value_span = 20.0 },
+    };
 
-    // Create a PRNG with fixed seed for reproducibility
-    var prng = std.Random.DefaultPrng.init(12345);
-    const random = prng.random();
+    for (cases) |c| {
+        // Fixed seed per encoding keeps the generated data reproducible.
+        var prng = std.Random.DefaultPrng.init(c.seed);
+        const random = prng.random();
 
-    // Create time series with compressed encoding and reasonable chunk size
-    var ts = try TimeSeries.init(
-        testing.allocator,
-        0, // No retention
-        .BLOCK,
-        100, // 100 samples per chunk - will create ~50 chunks
-        .DeltaXor, // Use compression to test Gorilla codec at scale
-        0,
-        0.0,
-    );
-    defer ts.deinit();
+        // 100 samples per chunk creates ~50 chunks, exercising both the
+        // Gorilla codec and the uncompressed chunk path at scale.
+        var ts = try TimeSeries.init(
+            testing.allocator,
+            0,
+            .BLOCK,
+            100,
+            c.encoding,
+            0,
+            0.0,
+        );
+        defer ts.deinit();
 
-    // Generate and add 5000 random samples
-    const num_samples = 5000;
-    var i: i64 = 0;
-    while (i < num_samples) : (i += 1) {
-        const timestamp = 1000000 + i * 1000; // Start at 1000000, increment by 1 second
-        const value = 20.0 + random.float(f64) * 10.0; // Random temperature between 20-30°C
-        try ts.add_sample(timestamp, value);
-    }
+        const num_samples = 5000;
+        var i: i64 = 0;
+        while (i < num_samples) : (i += 1) {
+            const timestamp = c.base_ts + i * c.interval;
+            const value = c.min_value + random.float(f64) * c.value_span;
+            try ts.add_sample(timestamp, value);
+        }
 
-    // Verify all samples were added
-    try testing.expectEqual(@as(u64, num_samples), ts.total_samples);
+        try testing.expectEqual(@as(u64, num_samples), ts.total_samples);
 
-    // Fetch all samples using range query
-    var samples = try ts.range("-", "+", null, null);
-    defer samples.deinit(testing.allocator);
+        var samples = try ts.range("-", "+", null, null);
+        defer samples.deinit(testing.allocator);
 
-    // Verify we got all samples back
-    try testing.expectEqual(@as(usize, num_samples), samples.items.len);
+        try testing.expectEqual(@as(usize, num_samples), samples.items.len);
 
-    // Verify the timestamps are sequential (data integrity check)
-    for (samples.items, 0..) |sample, idx| {
-        const expected_ts = 1000000 + @as(i64, @intCast(idx)) * 1000;
-        try testing.expectEqual(expected_ts, sample.timestamp);
-        // Verify value is in expected range
-        try testing.expect(sample.value >= 20.0 and sample.value <= 30.0);
-    }
+        for (samples.items, 0..) |sample, idx| {
+            const expected_ts = c.base_ts + @as(i64, @intCast(idx)) * c.interval;
+            try testing.expectEqual(expected_ts, sample.timestamp);
+            try testing.expect(sample.value >= c.min_value and sample.value <= c.min_value + c.value_span);
+        }
 
-    // Test range query with specific start and end timestamps
-    const start_ts = 1000000 + 1000 * 1000; // Sample 1000
-    const end_ts = 1000000 + 2000 * 1000; // Sample 2000
-    const start_str = try testing.allocator.print("{d}", .{start_ts});
-    defer testing.allocator.free(start_str);
-    const end_str = try testing.allocator.print("{d}", .{end_ts});
-    defer testing.allocator.free(end_str);
+        const start_ts = c.base_ts + 1000 * c.interval;
+        const end_ts = c.base_ts + 2000 * c.interval;
+        const start_str = try testing.allocator.print("{d}", .{start_ts});
+        defer testing.allocator.free(start_str);
+        const end_str = try testing.allocator.print("{d}", .{end_ts});
+        defer testing.allocator.free(end_str);
 
-    var range_samples = try ts.range(start_str, end_str, null, null);
-    defer range_samples.deinit(testing.allocator);
+        var range_samples = try ts.range(start_str, end_str, null, null);
+        defer range_samples.deinit(testing.allocator);
 
-    // Should get samples from 1000 to 2000 inclusive (1001 samples)
-    try testing.expectEqual(@as(usize, 1001), range_samples.items.len);
-    try testing.expectEqual(start_ts, range_samples.items[0].timestamp);
-    try testing.expectEqual(end_ts, range_samples.items[range_samples.items.len - 1].timestamp);
+        try testing.expectEqual(@as(usize, 1001), range_samples.items.len);
+        try testing.expectEqual(start_ts, range_samples.items[0].timestamp);
+        try testing.expectEqual(end_ts, range_samples.items[range_samples.items.len - 1].timestamp);
 
-    // Test range query with COUNT parameter
-    var limited_samples = try ts.range("-", "+", 500, null);
-    defer limited_samples.deinit(testing.allocator);
+        var limited_samples = try ts.range("-", "+", 500, null);
+        defer limited_samples.deinit(testing.allocator);
 
-    try testing.expectEqual(@as(usize, 500), limited_samples.items.len);
-    try testing.expectEqual(@as(i64, 1000000), limited_samples.items[0].timestamp);
-}
-
-test "TS.RANGE with 5000 random samples using uncompressed encoding" {
-    var prng = std.Random.DefaultPrng.init(67890);
-    const random = prng.random();
-
-    // Create time series with uncompressed encoding
-    var ts = try TimeSeries.init(
-        testing.allocator,
-        0,
-        .BLOCK,
-        100,
-        .Uncompressed, // Test uncompressed path as well
-        0,
-        0.0,
-    );
-    defer ts.deinit();
-
-    // Generate and add 5000 random samples
-    const num_samples = 5000;
-    var i: i64 = 0;
-    while (i < num_samples) : (i += 1) {
-        const timestamp = 2000000 + i * 500; // Different base timestamp and interval
-        const value = 15.0 + random.float(f64) * 20.0; // Random values between 15-35
-        try ts.add_sample(timestamp, value);
-    }
-
-    try testing.expectEqual(@as(u64, num_samples), ts.total_samples);
-
-    // Fetch all samples
-    var samples = try ts.range("-", "+", null, null);
-    defer samples.deinit(testing.allocator);
-
-    try testing.expectEqual(@as(usize, num_samples), samples.items.len);
-
-    // Verify data integrity
-    for (samples.items, 0..) |sample, idx| {
-        const expected_ts = 2000000 + @as(i64, @intCast(idx)) * 500;
-        try testing.expectEqual(expected_ts, sample.timestamp);
-        try testing.expect(sample.value >= 15.0 and sample.value <= 35.0);
+        try testing.expectEqual(@as(usize, 500), limited_samples.items.len);
+        try testing.expectEqual(c.base_ts, limited_samples.items[0].timestamp);
     }
 }
 
