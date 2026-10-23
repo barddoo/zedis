@@ -1,6 +1,6 @@
 const std = @import("std");
 const zio = @import("zio");
-const banner = @import("banner.zig");
+const banner = @import("app/banner.zig");
 const bench_load = @import("benchmarks/bench_load.zig");
 
 pub fn main(init: std.process.Init) !void {

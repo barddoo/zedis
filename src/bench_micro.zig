@@ -1,5 +1,5 @@
 const std = @import("std");
-const banner = @import("banner.zig");
+const banner = @import("app/banner.zig");
 const bench_store = @import("benchmarks/bench_store.zig");
 const bench_commands = @import("benchmarks/bench_commands.zig");
 

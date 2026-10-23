@@ -1,5 +1,5 @@
 const std = @import("std");
-const PrimitiveValue = @import("types.zig").PrimitiveValue;
+const PrimitiveValue = @import("../util/types.zig").PrimitiveValue;
 
 pub const ZedisListNode = struct {
     data: PrimitiveValue,

@@ -1,16 +1,16 @@
 const std = @import("std");
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const PrimitiveValue = @import("../store.zig").PrimitiveValue;
-const ZedisListNode = @import("../list.zig").ZedisListNode;
-const ZedisList = @import("../list.zig").ZedisList;
-const Store = @import("../store.zig").Store;
-const resp = @import("./resp.zig");
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const PrimitiveValue = @import("../storage/store.zig").PrimitiveValue;
+const ZedisListNode = @import("../storage/list.zig").ZedisListNode;
+const ZedisList = @import("../storage/list.zig").ZedisList;
+const Store = @import("../storage/store.zig").Store;
+const resp = @import("../protocol/resp.zig");
 const Io = std.Io;
 const testing = std.testing;
 const Writer = Io.Writer;
-const Clock = @import("../clock.zig");
-const KeyValueAllocator = @import("../kv_allocator.zig");
+const Clock = @import("../app/clock.zig");
+const KeyValueAllocator = @import("../storage/kv_allocator.zig");
 
 /// Helper function to normalize a list index (handles negative indices).
 /// Returns null if the index is out of bounds.

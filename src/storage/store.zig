@@ -3,13 +3,13 @@ const ZedisList = @import("list.zig").ZedisList;
 const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const Io = std.Io;
-const Clock = @import("clock.zig");
-const Config = @import("config.zig");
-const string_match = @import("./util/string_match.zig").string_match;
-const ScalableBloomFilter = @import("./bloom/bloom.zig").BloomFilter;
-const SearchIndex = @import("./search/index.zig").SearchIndex;
-pub const ShortString = @import("types.zig").ShortString;
-pub const PrimitiveValue = @import("types.zig").PrimitiveValue;
+const Clock = @import("../app/clock.zig");
+const Config = @import("../app/config.zig");
+const string_match = @import("../util/string_match.zig").string_match;
+const ScalableBloomFilter = @import("bloom/bloom.zig").BloomFilter;
+const SearchIndex = @import("search/index.zig").SearchIndex;
+pub const ShortString = @import("../util/types.zig").ShortString;
+pub const PrimitiveValue = @import("../util/types.zig").PrimitiveValue;
 
 const assert = std.debug.assert;
 

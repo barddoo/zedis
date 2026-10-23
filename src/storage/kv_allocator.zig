@@ -1,8 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
-const Config = @import("config.zig");
+const Config = @import("../app/config.zig");
 const Store = @import("store.zig").Store;
-const Clock = @import("clock.zig");
+const Clock = @import("../app/clock.zig");
 const mem = std.mem;
 
 const KeyValueAllocator = @This();

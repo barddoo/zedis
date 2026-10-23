@@ -1,14 +1,14 @@
 const std = @import("std");
-const storeModule = @import("../store.zig");
+const storeModule = @import("../storage/store.zig");
 const Store = storeModule.Store;
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const resp = @import("./resp.zig");
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const resp = @import("../protocol/resp.zig");
 const Io = std.Io;
 const Writer = Io.Writer;
 
-const ScalableBloomFilter = @import("../bloom/bloom.zig").BloomFilter;
-const Clock = @import("../clock.zig");
+const ScalableBloomFilter = @import("../storage/bloom/bloom.zig").BloomFilter;
+const Clock = @import("../app/clock.zig");
 const testing = std.testing;
 
 pub fn bf_reserve(writer: *Writer, store: *Store, args: []const Value) !void {

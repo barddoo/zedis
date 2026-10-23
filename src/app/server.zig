@@ -2,22 +2,22 @@ const std = @import("std");
 const zio = @import("zio");
 const Allocator = std.mem.Allocator;
 const Client = @import("client.zig").Client;
-const ClientMailbox = @import("client_mailbox.zig").ClientMailbox;
-const MessageNode = @import("client_mailbox.zig").MessageNode;
-const free_message_list = @import("client_mailbox.zig").free_message_list;
-const CommandRegistry = @import("./commands/registry.zig").CommandRegistry;
-const command_init = @import("./commands/init_registry.zig");
-const Reader = @import("./rdb/zdb.zig").Reader;
-const Store = @import("store.zig").Store;
-const pubsub = @import("./commands/pubsub.zig");
+const ClientMailbox = @import("../util/client_mailbox.zig").ClientMailbox;
+const MessageNode = @import("../util/client_mailbox.zig").MessageNode;
+const free_message_list = @import("../util/client_mailbox.zig").free_message_list;
+const CommandRegistry = @import("../commands/registry.zig").CommandRegistry;
+const command_init = @import("../commands/init_registry.zig");
+const Reader = @import("../persistence/zdb.zig").Reader;
+const Store = @import("../storage/store.zig").Store;
+const pubsub = @import("../commands/pubsub.zig");
 const PubSubContext = pubsub.PubSubContext;
 const Config = @import("config.zig");
-const KeyValueAllocator = @import("kv_allocator.zig");
-const aof = @import("./aof/aof.zig");
+const KeyValueAllocator = @import("../storage/kv_allocator.zig");
+const aof = @import("../persistence/aof.zig");
 const Clock = @import("clock.zig");
-const resp = @import("./commands/resp.zig");
-const ClientHandle = @import("types.zig").ClientHandle;
-const invalid_client_slot_index = @import("types.zig").invalid_client_slot_index;
+const resp = @import("../protocol/resp.zig");
+const ClientHandle = @import("../util/types.zig").ClientHandle;
+const invalid_client_slot_index = @import("../util/types.zig").invalid_client_slot_index;
 const Io = std.Io;
 const Stream = Io.net.Stream;
 
@@ -26,7 +26,7 @@ const log = std.log.scoped(.server);
 const Server = @This();
 const mailbox_capacity = 256;
 
-const Value = @import("parser.zig").Value;
+const Value = @import("../protocol/parser.zig").Value;
 
 const ClientSlotState = enum(u8) {
     free,

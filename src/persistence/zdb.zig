@@ -1,17 +1,17 @@
 const std = @import("std");
-const storeModule = @import("../store.zig");
+const storeModule = @import("../storage/store.zig");
 const ZedisObject = storeModule.ZedisObject;
 const Store = storeModule.Store;
 const ZedisValue = storeModule.ZedisValue;
 const ValueType = storeModule.ValueType;
-const ZedisList = @import("../list.zig").ZedisList;
-const ZedisListNode = @import("../list.zig").ZedisListNode;
-const Config = @import("../config.zig");
+const ZedisList = @import("../storage/list.zig").ZedisList;
+const ZedisListNode = @import("../storage/list.zig").ZedisListNode;
+const Config = @import("../app/config.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 const mem = std.mem;
 const eql = mem.eql;
-const Clock = @import("../clock.zig");
+const Clock = @import("../app/clock.zig");
 
 /// Redis RDB/AOF checksum (CRC-64/Jones); std ships the exact catalog entry.
 const Crc64 = std.hash.crc.@"CRC-64/REDIS";

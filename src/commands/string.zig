@@ -1,14 +1,14 @@
 const std = @import("std");
-const storeModule = @import("../store.zig");
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const resp = @import("./resp.zig");
+const storeModule = @import("../storage/store.zig");
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const resp = @import("../protocol/resp.zig");
 const Io = std.Io;
 const Store = storeModule.Store;
 const ZedisObject = storeModule.ZedisObject;
 const Writer = Io.Writer;
 const testing = std.testing;
-const Clock = @import("../clock.zig");
+const Clock = @import("../app/clock.zig");
 
 pub fn set(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();

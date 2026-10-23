@@ -4,11 +4,11 @@ const CommandRegistry = @import("registry.zig").CommandRegistry;
 const connection_commands = @import("connection.zig");
 const string = @import("string.zig");
 const list = @import("list.zig");
-const rdb = @import("../commands/rdb.zig");
-const pubsub = @import("../commands/pubsub.zig");
-const ts = @import("../commands/time_series.zig");
-const key = @import("../commands/keys.zig");
-const server_commands = @import("../commands/server.zig");
+const rdb = @import("rdb.zig");
+const pubsub = @import("pubsub.zig");
+const ts = @import("time_series.zig");
+const key = @import("keys.zig");
+const server_commands = @import("server.zig");
 
 pub fn init_registry(allocator: Allocator) !CommandRegistry {
     var registry = CommandRegistry.init(allocator);
@@ -518,7 +518,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     // Bloom Filter Commands
-    const bloom = @import("../commands/bloom.zig");
+    const bloom = @import("bloom.zig");
 
     try registry.register(.{
         .name = "BF.RESERVE",

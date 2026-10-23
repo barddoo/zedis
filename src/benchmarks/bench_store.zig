@@ -1,10 +1,10 @@
 const std = @import("std");
-const Store = @import("../store.zig").Store;
-const KeyValueAllocator = @import("../kv_allocator.zig");
+const Store = @import("../storage/store.zig").Store;
+const KeyValueAllocator = @import("../storage/kv_allocator.zig");
 const bench_runner = @import("bench_runner.zig");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
-const Clock = @import("../clock.zig");
+const Clock = @import("../app/clock.zig");
 
 const BenchContext = struct {
     threaded: Io.Threaded,

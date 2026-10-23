@@ -1,11 +1,11 @@
 const std = @import("std");
-const storeModule = @import("../store.zig");
+const storeModule = @import("../storage/store.zig");
 const Store = storeModule.Store;
 const ZedisObject = storeModule.ZedisObject;
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
+const Client = @import("../app/client.zig").Client;
+const Value = @import("parser.zig").Value;
 const ZedisValue = storeModule.ZedisValue;
-const PrimitiveValue = @import("../types.zig").PrimitiveValue;
+const PrimitiveValue = @import("../util/types.zig").PrimitiveValue;
 const Io = std.Io;
 const Writer = Io.Writer;
 

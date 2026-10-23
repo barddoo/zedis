@@ -1,11 +1,11 @@
 const std = @import("std");
-const store = @import("../store.zig");
+const store = @import("../storage/store.zig");
 const Store = store.Store;
 const ZedisObject = store.ZedisObject;
-const Client = @import("../client.zig").Client;
-const Value = @import("../parser.zig").Value;
-const ZDB = @import("../rdb/zdb.zig");
-const resp = @import("./resp.zig");
+const Client = @import("../app/client.zig").Client;
+const Value = @import("../protocol/parser.zig").Value;
+const ZDB = @import("../persistence/zdb.zig");
+const resp = @import("../protocol/resp.zig");
 
 pub fn save(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     _ = args;
