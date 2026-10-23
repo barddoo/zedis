@@ -131,6 +131,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "UNSUBSCRIBE",
+        .handler = .{ .client_handler = pubsub.unsubscribe },
+        .min_args = 1,
+        .max_args = null,
+        .description = "Unsubscribe from channels",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
         .name = "EXPIRE",
         .handler = .{ .store_handler = string.expire },
         .min_args = 3,

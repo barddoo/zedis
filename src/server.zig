@@ -40,6 +40,8 @@ const ClientSlot = struct {
     disconnect_requested: std.atomic.Value(bool) = .init(false),
     next_free: std.atomic.Value(u32) = .init(invalid_client_slot_index),
     mailbox: ClientMailbox = ClientMailbox.init(mailbox_capacity),
+    /// Signaled by publishers; wakes the client's delivery coroutine.
+    mailbox_event: zio.Event = .init,
     client: Client = undefined,
 };
 
@@ -62,18 +64,11 @@ free_list_head: std.atomic.Value(u64),
 pubsub_map: std.StringHashMap([]ClientHandle),
 pubsub_mutex: std.atomic.Mutex = .unlocked,
 
-// Serializes command execution against the shared store. Each command executes
-// inline on its own client's coroutine — no store thread / cross-thread
-// hand-off. The lock is required even with a single executor (the default, see
-// main.zig): command handlers may suspend (SAVE does file I/O), letting another
-// client's coroutine run on the same thread, which must not interleave with a
-// half-executed command. AOF entries are queued under it, so the AOF order
-// matches execution order (the AOF writer thread does the file I/O). With several executors it also
-// guards against true parallelism. A cooperative (parking) lock is used rather
-// than a raw spinlock: a spinlock held across a suspension would deadlock once
-// every executor thread is spinning on it. Uncontended acquisition is a single
-// atomic CAS.
-store_lock: zio.Mutex = .init,
+// Command execution needs no store lock: the zio runtime always runs exactly
+// one executor (main.zig), and command handlers are written so they never
+// suspend (SAVE uses blocking I/O; AOF queueing uses a spinlock). A coroutine
+// therefore runs a command to completion before another client coroutine can
+// run, and no one else touches the store from another thread.
 
 // Custom allocator for key-value store with eviction
 kv_allocator: KeyValueAllocator,
@@ -449,6 +444,7 @@ fn handle_connection(self: *Server, conn: Stream) !void {
         &self.store,
         allocation.handle,
         &client_slot.mailbox,
+        &client_slot.mailbox_event,
         &client_slot.disconnect_requested,
         self.io,
     );
@@ -557,6 +553,7 @@ fn enqueue_to_handle(self: *Server, handle: ClientHandle, payload: []const u8) !
     }
     slot.mailbox.tail = node;
     slot.mailbox.pending_count += 1;
+    slot.mailbox_event.set();
 }
 
 fn begin_client_shutdown(self: *Server, handle: ClientHandle, prune_subscriptions: bool) bool {
@@ -659,7 +656,8 @@ fn prune_handles_from_channel(self: *Server, channel_name: []const u8, handles: 
     try self.prune_handles_from_channel_locked(channel_name, handles);
 }
 
-pub fn subscribe_to_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
+/// Returns true when the client was not already subscribed.
+pub fn subscribe_to_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !bool {
     self.lock_pubsub();
     defer self.unlock_pubsub();
 
@@ -667,7 +665,7 @@ pub fn subscribe_to_channel(self: *Server, channel_name: []const u8, handle: Cli
     const current_subscribers = subscribers_ptr.*;
 
     for (current_subscribers) |existing_handle| {
-        if (ClientHandle.eql(existing_handle, handle)) return;
+        if (ClientHandle.eql(existing_handle, handle)) return false;
     }
 
     if (current_subscribers.len >= self.config.max_subscribers_per_channel) {
@@ -677,25 +675,57 @@ pub fn subscribe_to_channel(self: *Server, channel_name: []const u8, handle: Cli
     const new_subscribers = try self.base_allocator.realloc(current_subscribers, current_subscribers.len + 1);
     new_subscribers[new_subscribers.len - 1] = handle;
     subscribers_ptr.* = new_subscribers;
+    return true;
 }
 
-pub fn unsubscribe_from_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !void {
+/// Returns true when the client was actually removed from the channel.
+pub fn unsubscribe_from_channel(self: *Server, channel_name: []const u8, handle: ClientHandle) !bool {
     self.lock_pubsub();
     defer self.unlock_pubsub();
 
-    const current_subscribers = self.pubsub_map.get(channel_name) orelse return;
-    const new_subscribers = try self.remove_handle_from_slice(current_subscribers, handle) orelse return;
+    const current_subscribers = self.pubsub_map.get(channel_name) orelse return false;
+    const new_subscribers = try self.remove_handle_from_slice(current_subscribers, handle) orelse return false;
 
     if (new_subscribers.len == 0) {
         if (self.pubsub_map.fetchRemove(channel_name)) |removed| {
             self.base_allocator.free(removed.key);
             self.base_allocator.free(removed.value);
         }
-        return;
+        return true;
     }
 
     self.base_allocator.free(current_subscribers);
     self.pubsub_map.getPtr(channel_name).?.* = new_subscribers;
+    return true;
+}
+
+/// Removes a client from every channel. Returns the channel names it was
+/// subscribed to, owned by `allocator` (caller frees each name and the slice).
+pub fn unsubscribe_all(self: *Server, handle: ClientHandle, allocator: Allocator) ![][]u8 {
+    var names: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+
+    {
+        self.lock_pubsub();
+        defer self.unlock_pubsub();
+
+        var iterator = self.pubsub_map.iterator();
+        while (iterator.next()) |entry| {
+            if (!contains_handle(entry.value_ptr.*, handle)) continue;
+            const copy = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(copy);
+            try names.append(allocator, copy);
+        }
+    }
+
+    for (names.items) |name| {
+        _ = self.unsubscribe_from_channel(name, handle) catch {};
+    }
+
+    return try names.toOwnedSlice(allocator);
 }
 
 pub fn publish_to_channel(self: *Server, channel_name: []const u8, payload: []const u8) !usize {
@@ -791,6 +821,9 @@ pub fn get_channel_count(self: *Server) u32 {
 
 const testing = std.testing;
 
+/// Test-only minimal server (no listener, store, registry or AOF). Returned by
+/// value, so `pubsub_context` is intentionally left unbound: bind it after the
+/// value has its final address if a test needs it.
 fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
     const client_slots = try allocator.alloc(ClientSlot, max_clients);
     for (client_slots, 0..) |*slot, index| {
@@ -863,8 +896,8 @@ test "Server publish_to_channel enqueues active subscribers and prunes stale han
     const active = server.allocate_client_slot().?;
     active.slot.state.store(.active, .release);
 
-    try server.subscribe_to_channel("news", active.handle);
-    try server.subscribe_to_channel("news", .{ .slot_index = 1, .generation = 99 });
+    _ = try server.subscribe_to_channel("news", active.handle);
+    _ = try server.subscribe_to_channel("news", .{ .slot_index = 1, .generation = 99 });
 
     const delivered = try server.publish_to_channel("news", "payload");
     try testing.expectEqual(@as(usize, 1), delivered);
@@ -881,6 +914,66 @@ test "Server publish_to_channel enqueues active subscribers and prunes stale han
     const subscribers = server.pubsub_map.get("news").?;
     try testing.expectEqual(@as(usize, 1), subscribers.len);
     try testing.expect(ClientHandle.eql(active.handle, subscribers[0]));
+}
+
+test "subscribe reports new subscriptions and unsubscribe removes them" {
+    var server = try init_test_server(testing.allocator, 2);
+    defer deinit_test_server(&server);
+
+    const active = server.allocate_client_slot().?;
+    active.slot.state.store(.active, .release);
+
+    try testing.expect(try server.subscribe_to_channel("news", active.handle));
+    // Duplicate subscriptions are ignored.
+    try testing.expect(!try server.subscribe_to_channel("news", active.handle));
+    try testing.expectEqual(@as(u32, 1), server.get_channel_count());
+
+    try testing.expect(try server.unsubscribe_from_channel("news", active.handle));
+    try testing.expect(!try server.unsubscribe_from_channel("news", active.handle));
+    try testing.expectEqual(@as(u32, 0), server.get_channel_count());
+}
+
+test "subscribe_to_channel enforces channel and subscriber limits" {
+    var server = try init_test_server(testing.allocator, 2);
+    defer deinit_test_server(&server);
+
+    server.config.max_channels = 1;
+    server.config.max_subscribers_per_channel = 1;
+
+    const first = server.allocate_client_slot().?;
+    const second = server.allocate_client_slot().?;
+
+    _ = try server.subscribe_to_channel("only", first.handle);
+    try testing.expectError(error.ChannelLimitReached, server.subscribe_to_channel("other", first.handle));
+    try testing.expectError(error.ChannelFull, server.subscribe_to_channel("only", second.handle));
+    try testing.expectEqual(@as(u32, 1), server.get_channel_count());
+}
+
+test "unsubscribe_all returns every channel the client was on" {
+    var server = try init_test_server(testing.allocator, 2);
+    defer deinit_test_server(&server);
+
+    const active = server.allocate_client_slot().?;
+    active.slot.state.store(.active, .release);
+
+    _ = try server.subscribe_to_channel("alpha", active.handle);
+    _ = try server.subscribe_to_channel("beta", active.handle);
+
+    const names = try server.unsubscribe_all(active.handle, testing.allocator);
+    defer {
+        for (names) |name| testing.allocator.free(name);
+        testing.allocator.free(names);
+    }
+
+    try testing.expectEqual(@as(usize, 2), names.len);
+    var saw_alpha = false;
+    var saw_beta = false;
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "alpha")) saw_alpha = true;
+        if (std.mem.eql(u8, name, "beta")) saw_beta = true;
+    }
+    try testing.expect(saw_alpha and saw_beta);
+    try testing.expectEqual(@as(u32, 0), server.get_channel_count());
 }
 
 /// Minimal server for memory-admission tests: store, KV allocator and registry

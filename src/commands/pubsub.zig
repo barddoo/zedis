@@ -1,42 +1,86 @@
 const std = @import("std");
-const mem = std.mem;
 const Client = @import("../client.zig").Client;
-const store = @import("../store.zig");
-const ZedisValue = store.ZedisValue;
 const Value = @import("../parser.zig").Value;
 const Server = @import("../server.zig");
 const resp = @import("../commands/resp.zig");
 const ClientHandle = @import("../types.zig").ClientHandle;
+const testing = std.testing;
+const free_message_list = @import("../client_mailbox.zig").free_message_list;
 
+/// Pub/sub operations the command handlers need. A vtable keeps them testable
+/// without a real `Server` (tests inject an in-memory mock).
 pub const PubSubContext = struct {
-    server: *Server,
+    ptr: *anyopaque,
+    vtable: *const VTable,
+
+    pub const VTable = struct {
+        subscribe: *const fn (ptr: *anyopaque, channel: []const u8, handle: ClientHandle) anyerror!bool,
+        unsubscribe: *const fn (ptr: *anyopaque, channel: []const u8, handle: ClientHandle) anyerror!bool,
+        unsubscribe_all: *const fn (ptr: *anyopaque, handle: ClientHandle, allocator: std.mem.Allocator) anyerror![][]u8,
+        publish: *const fn (ptr: *anyopaque, channel: []const u8, payload: []const u8) anyerror!usize,
+    };
 
     pub fn init(server: *Server) PubSubContext {
-        return PubSubContext{ .server = server };
+        return .{
+            .ptr = server,
+            .vtable = &.{
+                .subscribe = server_subscribe,
+                .unsubscribe = server_unsubscribe,
+                .unsubscribe_all = server_unsubscribe_all,
+                .publish = server_publish,
+            },
+        };
     }
 
-    pub fn subscribe_to_channel(self: *PubSubContext, channel_name: []const u8, handle: ClientHandle) !void {
-        return self.server.subscribe_to_channel(channel_name, handle);
+    pub fn subscribe(self: PubSubContext, channel_name: []const u8, handle: ClientHandle) !bool {
+        return self.vtable.subscribe(self.ptr, channel_name, handle);
     }
 
-    pub fn publish_to_channel(self: *PubSubContext, channel_name: []const u8, payload: []const u8) !usize {
-        return self.server.publish_to_channel(channel_name, payload);
+    pub fn unsubscribe(self: PubSubContext, channel_name: []const u8, handle: ClientHandle) !bool {
+        return self.vtable.unsubscribe(self.ptr, channel_name, handle);
+    }
+
+    pub fn unsubscribeAll(self: PubSubContext, handle: ClientHandle, allocator: std.mem.Allocator) ![][]u8 {
+        return self.vtable.unsubscribe_all(self.ptr, handle, allocator);
+    }
+
+    pub fn publish(self: PubSubContext, channel_name: []const u8, payload: []const u8) !usize {
+        return self.vtable.publish(self.ptr, channel_name, payload);
     }
 };
 
-pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
-    var pubsub_context = client.pubsub_context;
+fn server_subscribe(ptr: *anyopaque, channel_name: []const u8, handle: ClientHandle) anyerror!bool {
+    const server: *Server = @ptrCast(@alignCast(ptr));
+    return server.subscribe_to_channel(channel_name, handle);
+}
 
+fn server_unsubscribe(ptr: *anyopaque, channel_name: []const u8, handle: ClientHandle) anyerror!bool {
+    const server: *Server = @ptrCast(@alignCast(ptr));
+    return server.unsubscribe_from_channel(channel_name, handle);
+}
+
+fn server_unsubscribe_all(ptr: *anyopaque, handle: ClientHandle, allocator: std.mem.Allocator) anyerror![][]u8 {
+    const server: *Server = @ptrCast(@alignCast(ptr));
+    return server.unsubscribe_all(handle, allocator);
+}
+
+fn server_publish(ptr: *anyopaque, channel_name: []const u8, payload: []const u8) anyerror!usize {
+    const server: *Server = @ptrCast(@alignCast(ptr));
+    return server.publish_to_channel(channel_name, payload);
+}
+
+pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
     // Enter pubsub mode on first subscription
     if (!client.is_in_pubsub_mode) {
         client.enter_pub_sub_mode();
     }
+    // Pushes messages even while this coroutine is blocked reading the socket.
+    client.start_mailbox_delivery();
 
-    var i: i64 = 0;
     for (args[1..]) |item| {
         const channel_name = item.as_slice();
         // Subscribe client to channel
-        pubsub_context.subscribe_to_channel(channel_name, client.slot_handle) catch |err| switch (err) {
+        const newly_subscribed = client.pubsub_context.subscribe(channel_name, client.slot_handle) catch |err| switch (err) {
             error.ChannelLimitReached => {
                 try resp.write_error(writer, "ERR maximum number of channels reached");
                 continue;
@@ -50,8 +94,8 @@ pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !
                 continue;
             },
         };
-
-        const subscription_count = i + 1;
+        if (newly_subscribed) client.subscription_count += 1;
+        const subscription_count: i64 = @intCast(client.subscription_count);
 
         const response_tuple = .{
             "subscribe",
@@ -61,18 +105,46 @@ pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !
 
         // Use a generic writer to send the tuple as a RESP array.
         try resp.write_tuple_as_array(writer, response_tuple);
-        i += 1;
     }
 }
 
+pub fn unsubscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
+    if (args.len == 1) {
+        const names = try client.pubsub_context.unsubscribeAll(client.slot_handle, client.allocator);
+        defer {
+            for (names) |name| client.allocator.free(name);
+            client.allocator.free(names);
+        }
+
+        if (names.len == 0) {
+            try writer.writeAll("*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n");
+        } else {
+            for (names) |name| {
+                if (client.subscription_count > 0) client.subscription_count -= 1;
+                const count: i64 = @intCast(client.subscription_count);
+                try resp.write_tuple_as_array(writer, .{ "unsubscribe", name, count });
+            }
+        }
+    } else {
+        for (args[1..]) |item| {
+            const channel_name = item.as_slice();
+            const removed = try client.pubsub_context.unsubscribe(channel_name, client.slot_handle);
+            if (removed and client.subscription_count > 0) client.subscription_count -= 1;
+            const count: i64 = @intCast(client.subscription_count);
+            try resp.write_tuple_as_array(writer, .{ "unsubscribe", channel_name, count });
+        }
+    }
+
+    if (client.subscription_count == 0) client.is_in_pubsub_mode = false;
+}
+
 pub fn publish(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
-    var pubsub_context = client.pubsub_context;
     const channel_name = args[1].as_slice();
     const message = args[2].as_slice();
     const payload = try serialize_pub_sub_message(client.allocator, channel_name, message);
     defer client.allocator.free(payload);
 
-    const messages_sent = try pubsub_context.publish_to_channel(channel_name, payload);
+    const messages_sent = try client.pubsub_context.publish(channel_name, payload);
     try resp.write_int(writer, @as(i64, @intCast(messages_sent)));
 }
 
@@ -87,483 +159,332 @@ fn serialize_pub_sub_message(allocator: std.mem.Allocator, channel_name: []const
     return try buffer.toOwnedSlice();
 }
 
-// test "PubSubContext - findOrCreateChannel creates new channels" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Create first channel
-//     const channel_id_1 = context.findOrCreateChannel("news");
-//     try testing.expect(channel_id_1 != null);
-//     try testing.expectEqual(@as(u32, 0), channel_id_1.?);
-
-//     // Create second channel
-//     const channel_id_2 = context.findOrCreateChannel("sports");
-//     try testing.expect(channel_id_2 != null);
-//     try testing.expectEqual(@as(u32, 1), channel_id_2.?);
-
-//     // Find existing channel
-//     const channel_id_1_again = context.findOrCreateChannel("news");
-//     try testing.expect(channel_id_1_again != null);
-//     try testing.expectEqual(@as(u32, 0), channel_id_1_again.?);
-
-//     try testing.expectEqual(@as(u32, 2), context.get_channel_count());
-// }
-
-// test "PubSubContext - subscribe and unsubscribe clients" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Create channel
-//     const channel_id = context.findOrCreateChannel("test-channel").?;
-
-//     // Subscribe clients
-//     try context.subscribe_to_channel(channel_id, 100);
-//     try context.subscribe_to_channel(channel_id, 200);
-
-//     const subscribers = context.getChannelSubscribers(channel_id);
-//     try testing.expectEqual(@as(usize, 2), subscribers.len);
-//     try testing.expectEqual(@as(u64, 100), subscribers[0]);
-//     try testing.expectEqual(@as(u64, 200), subscribers[1]);
-
-//     // Unsubscribe one client
-//     context.unsubscribe_from_channel(channel_id, 100);
-//     const subscribers_after = context.getChannelSubscribers(channel_id);
-//     try testing.expectEqual(@as(usize, 1), subscribers_after.len);
-//     try testing.expectEqual(@as(u64, 200), subscribers_after[0]);
-// }
-
-// test "PubSubContext - duplicate subscription is ignored" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     const channel_id = context.findOrCreateChannel("test-channel").?;
-
-//     // Subscribe same client multiple times
-//     try context.subscribe_to_channel(channel_id, 100);
-//     try context.subscribe_to_channel(channel_id, 100);
-//     try context.subscribe_to_channel(channel_id, 100);
-
-//     const subscribers = context.getChannelSubscribers(channel_id);
-//     try testing.expectEqual(@as(usize, 1), subscribers.len);
-//     try testing.expectEqual(@as(u64, 100), subscribers[0]);
-// }
-
-// test "PubSubContext - error conditions" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Subscribe to invalid channel
-//     const result = context.subscribe_to_channel(999, 100);
-//     try testing.expectError(error.InvalidChannel, result);
-
-//     // Test channel full condition by filling up a channel
-//     const channel_id = context.findOrCreateChannel("test-channel").?;
-//     var client_id: u64 = 1;
-//     while (client_id <= 16) : (client_id += 1) {
-//         try context.subscribe_to_channel(channel_id, client_id);
-//     }
-
-//     // Next subscription should fail
-//     const full_result = context.subscribe_to_channel(channel_id, 17);
-//     try testing.expectError(error.ChannelFull, full_result);
-// }
-
-// test "PubSubContext - find client by ID" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Create clients
-//     var client1 = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer client1.deinit();
-//     var client2 = MockClient.initWithId(200, allocator, &data_store, &context);
-//     defer client2.deinit();
-
-//     // Add clients to server
-//     try server.addClient(&client1);
-//     try server.addClient(&client2);
-
-//     // Find clients
-//     const found_client1 = context.findClientById(100);
-//     try testing.expect(found_client1 != null);
-//     try testing.expectEqual(@as(u64, 100), found_client1.?.client_id);
-
-//     const found_client2 = context.findClientById(200);
-//     try testing.expect(found_client2 != null);
-//     try testing.expectEqual(@as(u64, 200), found_client2.?.client_id);
-
-//     // Try to find non-existent client
-//     const not_found = context.findClientById(999);
-//     try testing.expect(not_found == null);
-// }
-
-// test "subscribe command - single channel subscription" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     var client = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer client.deinit();
-
-//     try server.addClient(&client);
-
-//     const args = [_]Value{
-//         Value{ .data = "SUBSCRIBE" },
-//         Value{ .data = "news" },
-//     };
-
-//     try testSubscribe(&client, &args);
-
-//     // Check response format: *3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n
-//     const output = client.getOutput();
-//     try testing.expect(mem.indexOf(u8, output, "*3\r\n") != null); // Array of 3 elements
-//     try testing.expect(mem.indexOf(u8, output, "$9\r\nsubscribe\r\n") != null); // "subscribe"
-//     try testing.expect(mem.indexOf(u8, output, "$4\r\nnews\r\n") != null); // "news"
-//     try testing.expect(mem.indexOf(u8, output, ":1\r\n") != null); // subscription count
-
-//     // Verify client is subscribed
-//     const channel_id = context.findOrCreateChannel("news").?;
-//     const subscribers = context.getChannelSubscribers(channel_id);
-//     try testing.expectEqual(@as(usize, 1), subscribers.len);
-//     try testing.expectEqual(@as(u64, 100), subscribers[0]);
-// }
-
-// test "subscribe command - multiple channel subscriptions" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     var client = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer client.deinit();
-
-//     try server.addClient(&client);
-
-//     const args = [_]Value{
-//         Value{ .data = "SUBSCRIBE" },
-//         Value{ .data = "news" },
-//         Value{ .data = "sports" },
-//         Value{ .data = "weather" },
-//     };
-
-//     try testSubscribe(&client, &args);
-
-//     const output = client.getOutput();
-
-//     // Should have responses for all three subscriptions
-//     // Each response should have subscription count increasing
-//     try testing.expect(mem.indexOf(u8, output, ":1\r\n") != null);
-//     try testing.expect(mem.indexOf(u8, output, ":2\r\n") != null);
-//     try testing.expect(mem.indexOf(u8, output, ":3\r\n") != null);
-
-//     // Verify all channels exist and client is subscribed
-//     const news_id = context.findOrCreateChannel("news").?;
-//     const sports_id = context.findOrCreateChannel("sports").?;
-//     const weather_id = context.findOrCreateChannel("weather").?;
-
-//     try testing.expectEqual(@as(usize, 1), context.getChannelSubscribers(news_id).len);
-//     try testing.expectEqual(@as(usize, 1), context.getChannelSubscribers(sports_id).len);
-//     try testing.expectEqual(@as(usize, 1), context.getChannelSubscribers(weather_id).len);
-// }
-
-// test "subscribe command - channel limit reached" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     var client = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer client.deinit();
-
-//     try server.addClient(&client);
-
-//     // Fill up all channels
-//     var i: u32 = 0;
-//     while (i < 8) : (i += 1) {
-//         const channel_name = try std.fmt.allocPrint(allocator, "channel{d}", .{i});
-//         defer allocator.free(channel_name);
-//         _ = context.findOrCreateChannel(channel_name);
-//     }
-
-//     // Try to subscribe to one more channel
-//     const args = [_]Value{
-//         Value{ .data = "SUBSCRIBE" },
-//         Value{ .data = "overflow-channel" },
-//     };
-
-//     try testSubscribe(&client, &args);
-
-//     const output = client.getOutput();
-//     try testing.expect(mem.indexOf(u8, output, "ERR maximum number of channels reached") != null);
-// }
-
-// test "publish command - single subscriber" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Create publisher and subscriber clients
-//     var publisher = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer publisher.deinit();
-//     var subscriber = MockClient.initWithId(200, allocator, &data_store, &context);
-//     defer subscriber.deinit();
-
-//     try server.addClient(&publisher);
-//     try server.addClient(&subscriber);
-
-//     // Subscribe client to channel
-//     const channel_id = context.findOrCreateChannel("news").?;
-//     try context.subscribe_to_channel(channel_id, 200);
-
-//     // Publish message
-//     const args = [_]Value{
-//         Value{ .data = "PUBLISH" },
-//         Value{ .data = "news" },
-//         Value{ .data = "Breaking news!" },
-//     };
-
-//     try testPublish(&publisher, &args);
-
-//     // Check publisher response (number of messages sent)
-//     const pub_output = publisher.getOutput();
-//     try testing.expect(mem.indexOf(u8, pub_output, ":1\r\n") != null);
-
-//     // Check subscriber received message
-//     const sub_output = subscriber.getOutput();
-//     try testing.expect(mem.indexOf(u8, sub_output, "*3\r\n") != null); // Array of 3 elements
-//     try testing.expect(mem.indexOf(u8, sub_output, "$7\r\nmessage\r\n") != null); // "message"
-//     try testing.expect(mem.indexOf(u8, sub_output, "$4\r\nnews\r\n") != null); // "news"
-//     try testing.expect(mem.indexOf(u8, sub_output, "$14\r\nBreaking news!\r\n") != null); // "Breaking news!" (14 chars)
-// }
-
-// test "publish command - multiple subscribers" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Create publisher and multiple subscribers
-//     var publisher = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer publisher.deinit();
-//     var subscriber1 = MockClient.initWithId(200, allocator, &data_store, &context);
-//     defer subscriber1.deinit();
-//     var subscriber2 = MockClient.initWithId(300, allocator, &data_store, &context);
-//     defer subscriber2.deinit();
-//     var subscriber3 = MockClient.initWithId(400, allocator, &data_store, &context);
-//     defer subscriber3.deinit();
-
-//     try server.addClient(&publisher);
-//     try server.addClient(&subscriber1);
-//     try server.addClient(&subscriber2);
-//     try server.addClient(&subscriber3);
-
-//     // Subscribe all clients to the same channel
-//     const channel_id = context.findOrCreateChannel("broadcast").?;
-//     try context.subscribe_to_channel(channel_id, 200);
-//     try context.subscribe_to_channel(channel_id, 300);
-//     try context.subscribe_to_channel(channel_id, 400);
-
-//     // Publish message
-//     const args = [_]Value{
-//         Value{ .data = "PUBLISH" },
-//         Value{ .data = "broadcast" },
-//         Value{ .data = "Hello everyone!" },
-//     };
-
-//     try testPublish(&publisher, &args);
-
-//     // Check publisher response (should be 3 messages sent)
-//     const pub_output = publisher.getOutput();
-//     try testing.expect(mem.indexOf(u8, pub_output, ":3\r\n") != null);
-
-//     // Check all subscribers received the message
-//     const sub1_output = subscriber1.getOutput();
-//     const sub2_output = subscriber2.getOutput();
-//     const sub3_output = subscriber3.getOutput();
-
-//     for ([_][]const u8{ sub1_output, sub2_output, sub3_output }) |output| {
-//         try testing.expect(mem.indexOf(u8, output, "*3\r\n") != null);
-//         try testing.expect(mem.indexOf(u8, output, "$7\r\nmessage\r\n") != null);
-//         try testing.expect(mem.indexOf(u8, output, "$9\r\nbroadcast\r\n") != null);
-//         try testing.expect(mem.indexOf(u8, output, "$15\r\nHello everyone!\r\n") != null);
-//     }
-// }
-
-// test "publish command - non-existent channel" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     var publisher = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer publisher.deinit();
-
-//     try server.addClient(&publisher);
-
-//     // Publish to non-existent channel
-//     const args = [_]Value{
-//         Value{ .data = "PUBLISH" },
-//         Value{ .data = "non-existent" },
-//         Value{ .data = "No one will see this" },
-//     };
-
-//     try testPublish(&publisher, &args);
-
-//     // Should return 0 messages sent
-//     const pub_output = publisher.getOutput();
-//     try testing.expect(mem.indexOf(u8, pub_output, ":0\r\n") != null);
-// }
-
-// test "publish command - empty channel" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     var publisher = MockClient.initWithId(100, allocator, &data_store, &context);
-//     defer publisher.deinit();
-
-//     try server.addClient(&publisher);
-
-//     // Create channel but don't subscribe anyone
-//     _ = context.findOrCreateChannel("empty-channel");
-
-//     // Publish to empty channel
-//     const args = [_]Value{
-//         Value{ .data = "PUBLISH" },
-//         Value{ .data = "empty-channel" },
-//         Value{ .data = "No subscribers" },
-//     };
-
-//     try testPublish(&publisher, &args);
-
-//     // Should return 0 messages sent
-//     const pub_output = publisher.getOutput();
-//     try testing.expect(mem.indexOf(u8, pub_output, ":0\r\n") != null);
-// }
-
-// test "subscriber limit per channel error" {
-//     var arena = std.heap.ArenaAllocator.init(testing.allocator);
-//     defer arena.deinit();
-//     const allocator = arena.allocator();
-
-//     var clock = Clock.init(testing.io, 0);
-//     var data_store = try Store.init(allocator, testing.io, &clock, .{.initial_capacity = 4096});
-//     defer data_store.deinit();
-
-//     var server = MockServer.init(allocator);
-//     defer server.deinit();
-
-//     var context = MockPubSubContext.init(&server);
-
-//     // Fill channel to capacity
-//     const channel_id = context.findOrCreateChannel("full-channel").?;
-//     var client_id: u64 = 1;
-//     while (client_id <= 16) : (client_id += 1) {
-//         try context.subscribe_to_channel(channel_id, client_id);
-//     }
-
-//     // Try to subscribe one more
-//     var client = MockClient.initWithId(17, allocator, &data_store, &context);
-//     defer client.deinit();
-
-//     const args = [_]Value{
-//         Value{ .data = "SUBSCRIBE" },
-//         Value{ .data = "full-channel" },
-//     };
-
-//     try testSubscribe(&client, &args);
-//     const output = client.getOutput();
-//     try testing.expect(mem.indexOf(u8, output, "ERR maximum subscribers per channel reached") != null);
-// }
+const MockPubSub = struct {
+    allocator: std.mem.Allocator,
+    subscriptions: std.ArrayList(Subscription) = .empty,
+    published: std.ArrayList(Published) = .empty,
+    /// When set, the next subscribe/publish call fails with this error, so the
+    /// handler's error mapping can be tested without a real store or server.
+    next_error: ?anyerror = null,
+    publish_return: usize = 0,
+
+    const Subscription = struct { channel: []u8, handle: ClientHandle };
+    const Published = struct { channel: []u8, payload: []u8 };
+
+    fn init(allocator: std.mem.Allocator) MockPubSub {
+        return .{ .allocator = allocator };
+    }
+
+    fn deinit(self: *MockPubSub) void {
+        for (self.subscriptions.items) |sub| self.allocator.free(sub.channel);
+        self.subscriptions.deinit(self.allocator);
+        for (self.published.items) |message| {
+            self.allocator.free(message.channel);
+            self.allocator.free(message.payload);
+        }
+        self.published.deinit(self.allocator);
+    }
+
+    fn context(self: *MockPubSub) PubSubContext {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .subscribe = mock_subscribe,
+                .unsubscribe = mock_unsubscribe,
+                .unsubscribe_all = mock_unsubscribe_all,
+                .publish = mock_publish,
+            },
+        };
+    }
+
+    fn find(self: *MockPubSub, channel: []const u8, handle: ClientHandle) ?usize {
+        for (self.subscriptions.items, 0..) |sub, i| {
+            if (ClientHandle.eql(sub.handle, handle) and std.mem.eql(u8, sub.channel, channel)) return i;
+        }
+        return null;
+    }
+};
+
+fn mock_subscribe(ptr: *anyopaque, channel: []const u8, handle: ClientHandle) anyerror!bool {
+    const self: *MockPubSub = @ptrCast(@alignCast(ptr));
+    if (self.next_error) |err| {
+        self.next_error = null;
+        return err;
+    }
+    if (self.find(channel, handle) != null) return false;
+
+    const owned = try self.allocator.dupe(u8, channel);
+    errdefer self.allocator.free(owned);
+    try self.subscriptions.append(self.allocator, .{ .channel = owned, .handle = handle });
+    return true;
+}
+
+fn mock_unsubscribe(ptr: *anyopaque, channel: []const u8, handle: ClientHandle) anyerror!bool {
+    const self: *MockPubSub = @ptrCast(@alignCast(ptr));
+    const index = self.find(channel, handle) orelse return false;
+    self.allocator.free(self.subscriptions.items[index].channel);
+    _ = self.subscriptions.swapRemove(index);
+    return true;
+}
+
+fn mock_unsubscribe_all(ptr: *anyopaque, handle: ClientHandle, allocator: std.mem.Allocator) anyerror![][]u8 {
+    const self: *MockPubSub = @ptrCast(@alignCast(ptr));
+
+    var names: std.ArrayList([]u8) = .empty;
+    errdefer {
+        for (names.items) |name| allocator.free(name);
+        names.deinit(allocator);
+    }
+
+    var i: usize = 0;
+    while (i < self.subscriptions.items.len) {
+        const sub = self.subscriptions.items[i];
+        if (!ClientHandle.eql(sub.handle, handle)) {
+            i += 1;
+            continue;
+        }
+
+        const copy = try allocator.dupe(u8, sub.channel);
+        errdefer allocator.free(copy);
+        try names.append(allocator, copy);
+        self.allocator.free(sub.channel);
+        _ = self.subscriptions.swapRemove(i);
+    }
+
+    return try names.toOwnedSlice(allocator);
+}
+
+fn mock_publish(ptr: *anyopaque, channel: []const u8, payload: []const u8) anyerror!usize {
+    const self: *MockPubSub = @ptrCast(@alignCast(ptr));
+    if (self.next_error) |err| {
+        self.next_error = null;
+        return err;
+    }
+
+    const owned_channel = try self.allocator.dupe(u8, channel);
+    errdefer self.allocator.free(owned_channel);
+    const owned_payload = try self.allocator.dupe(u8, payload);
+    errdefer self.allocator.free(owned_payload);
+
+    try self.published.append(self.allocator, .{ .channel = owned_channel, .payload = owned_payload });
+    return self.publish_return;
+}
+
+const TestContext = struct {
+    allocator: std.mem.Allocator,
+    mock: MockPubSub,
+    context: PubSubContext,
+
+    fn init(self: *TestContext, allocator: std.mem.Allocator) !void {
+        self.allocator = allocator;
+        self.mock = MockPubSub.init(allocator);
+        self.context = self.mock.context();
+    }
+
+    fn deinit(self: *TestContext) void {
+        self.mock.deinit();
+    }
+
+    /// A handler-only client. `delivery_started` is pre-set so tests don't
+    /// spawn the zio delivery task (it needs a zio runtime).
+    fn makeClient(self: *TestContext, slot_index: u32) Client {
+        var client: Client = undefined;
+        client.allocator = self.allocator;
+        client.pubsub_context = &self.context;
+        client.slot_handle = .{ .slot_index = slot_index, .generation = 0 };
+        client.is_in_pubsub_mode = false;
+        client.subscription_count = 0;
+        client.delivery_started = true;
+        return client;
+    }
+};
+
+test "subscribe writes one tuple per channel with a cumulative count" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var client = ctx.makeClient(0);
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "SUBSCRIBE" },
+        .{ .data = "news" },
+        .{ .data = "sports" },
+    };
+    try subscribe(&client, &args, &writer);
+
+    try testing.expectEqualStrings(
+        "*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n" ++
+            "*3\r\n$9\r\nsubscribe\r\n$6\r\nsports\r\n:2\r\n",
+        writer.buffered(),
+    );
+    try testing.expect(client.is_in_pubsub_mode);
+    try testing.expectEqual(@as(usize, 2), client.subscription_count);
+    try testing.expectEqual(@as(usize, 2), ctx.mock.subscriptions.items.len);
+}
+
+test "duplicate subscribe still replies and keeps the cumulative count" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var client = ctx.makeClient(0);
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const args = [_]Value{ .{ .data = "SUBSCRIBE" }, .{ .data = "news" } };
+    try subscribe(&client, &args, &writer);
+
+    writer = .fixed(&buffer);
+    try subscribe(&client, &args, &writer);
+
+    try testing.expectEqualStrings("*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 1), client.subscription_count);
+    try testing.expectEqual(@as(usize, 1), ctx.mock.subscriptions.items.len);
+}
+
+test "subscribe maps channel and subscriber limit errors" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var first = ctx.makeClient(0);
+    var second = ctx.makeClient(1);
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const only_args = [_]Value{ .{ .data = "SUBSCRIBE" }, .{ .data = "only" } };
+    try subscribe(&first, &only_args, &writer);
+    try testing.expectEqual(@as(usize, 1), first.subscription_count);
+
+    ctx.mock.next_error = error.ChannelLimitReached;
+    writer = .fixed(&buffer);
+    const other_args = [_]Value{ .{ .data = "SUBSCRIBE" }, .{ .data = "other" } };
+    try subscribe(&first, &other_args, &writer);
+    try testing.expectEqualStrings("-ERR maximum number of channels reached\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 1), first.subscription_count);
+
+    ctx.mock.next_error = error.ChannelFull;
+    writer = .fixed(&buffer);
+    try subscribe(&second, &only_args, &writer);
+    try testing.expectEqualStrings("-ERR maximum subscribers per channel reached\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 0), second.subscription_count);
+}
+
+test "publish frames the message and returns the receiver count" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    ctx.mock.publish_return = 1;
+
+    var publisher = ctx.makeClient(3);
+    var buffer: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "PUBLISH" },
+        .{ .data = "news" },
+        .{ .data = "he\r\nllo" },
+    };
+    try publish(&publisher, &args, &writer);
+
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 1), ctx.mock.published.items.len);
+    try testing.expectEqualStrings("news", ctx.mock.published.items[0].channel);
+    try testing.expectEqualStrings(
+        "*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$7\r\nhe\r\nllo\r\n",
+        ctx.mock.published.items[0].payload,
+    );
+
+    // No subscribers: the handler still frames and sends the message.
+    ctx.mock.publish_return = 0;
+    writer = .fixed(&buffer);
+    const empty_args = [_]Value{
+        .{ .data = "PUBLISH" },
+        .{ .data = "empty" },
+        .{ .data = "nobody" },
+    };
+    try publish(&publisher, &empty_args, &writer);
+    try testing.expectEqualStrings(":0\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 2), ctx.mock.published.items.len);
+}
+
+test "unsubscribe reports the remaining count and leaves pubsub mode" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var client = ctx.makeClient(0);
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const subscribe_args = [_]Value{
+        .{ .data = "SUBSCRIBE" },
+        .{ .data = "alpha" },
+        .{ .data = "beta" },
+    };
+    try subscribe(&client, &subscribe_args, &writer);
+
+    writer = .fixed(&buffer);
+    const unsubscribe_alpha = [_]Value{ .{ .data = "UNSUBSCRIBE" }, .{ .data = "alpha" } };
+    try unsubscribe(&client, &unsubscribe_alpha, &writer);
+    try testing.expectEqualStrings("*3\r\n$11\r\nunsubscribe\r\n$5\r\nalpha\r\n:1\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 1), client.subscription_count);
+    try testing.expectEqual(@as(usize, 1), ctx.mock.subscriptions.items.len);
+
+    writer = .fixed(&buffer);
+    const unsubscribe_beta = [_]Value{ .{ .data = "UNSUBSCRIBE" }, .{ .data = "beta" } };
+    try unsubscribe(&client, &unsubscribe_beta, &writer);
+    try testing.expectEqualStrings("*3\r\n$11\r\nunsubscribe\r\n$4\r\nbeta\r\n:0\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 0), client.subscription_count);
+    try testing.expect(!client.is_in_pubsub_mode);
+    try testing.expectEqual(@as(usize, 0), ctx.mock.subscriptions.items.len);
+}
+
+test "unsubscribe with no subscriptions replies with a nil channel" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var client = ctx.makeClient(0);
+    var buffer: [128]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const args = [_]Value{.{ .data = "UNSUBSCRIBE" }};
+    try unsubscribe(&client, &args, &writer);
+
+    try testing.expectEqualStrings("*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n", writer.buffered());
+    try testing.expectEqual(@as(usize, 0), client.subscription_count);
+}
+
+test "unsubscribe with no arguments removes every channel" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+
+    var client = ctx.makeClient(0);
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    const subscribe_args = [_]Value{
+        .{ .data = "SUBSCRIBE" },
+        .{ .data = "alpha" },
+        .{ .data = "beta" },
+    };
+    try subscribe(&client, &subscribe_args, &writer);
+
+    writer = .fixed(&buffer);
+    const args = [_]Value{.{ .data = "UNSUBSCRIBE" }};
+    try unsubscribe(&client, &args, &writer);
+
+    try testing.expectEqualStrings(
+        "*3\r\n$11\r\nunsubscribe\r\n$5\r\nalpha\r\n:1\r\n" ++
+            "*3\r\n$11\r\nunsubscribe\r\n$4\r\nbeta\r\n:0\r\n",
+        writer.buffered(),
+    );
+    try testing.expectEqual(@as(usize, 0), client.subscription_count);
+    try testing.expectEqual(@as(usize, 0), ctx.mock.subscriptions.items.len);
+}
