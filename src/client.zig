@@ -44,12 +44,23 @@ pub const Client = struct {
     is_in_pubsub_mode: bool,
     pubsub_context: *PubSubContext,
     mailbox: *ClientMailbox,
+    /// Signaled when a pub/sub message is enqueued; wakes the delivery task.
+    mailbox_event: *zio.Event,
     disconnect_requested: *std.atomic.Value(bool),
     server: *Server,
     io: std.Io,
     /// AOF offset just past this client's last logged command; replies wait for
     /// it to be durable under appendfsync always.
     aof_end: u64 = 0,
+    /// Task that pushes pub/sub messages while the client is idle (its main
+    /// coroutine blocks reading the socket). Started on first SUBSCRIBE.
+    delivery_group: std.Io.Group = .init,
+    delivery_started: bool = false,
+    /// Serializes socket writes between the client coroutine and the delivery
+    /// task. Unlike the store, writes may suspend, so this is a parking mutex.
+    write_mutex: zio.Mutex = .init,
+    /// Channels this client is subscribed to, for the SUBSCRIBE reply count.
+    subscription_count: usize = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -60,6 +71,7 @@ pub const Client = struct {
         store: *Store,
         slot_handle: ClientHandle,
         mailbox: *ClientMailbox,
+        mailbox_event: *zio.Event,
         disconnect_requested: *std.atomic.Value(bool),
         io: std.Io,
     ) Client {
@@ -76,6 +88,7 @@ pub const Client = struct {
             .is_in_pubsub_mode = false,
             .pubsub_context = pubsub_context,
             .mailbox = mailbox,
+            .mailbox_event = mailbox_event,
             .disconnect_requested = disconnect_requested,
             .server = server,
             .io = io,
@@ -83,7 +96,50 @@ pub const Client = struct {
     }
 
     pub fn deinit(self: *Client) void {
+        self.stop_mailbox_delivery();
         self.connection.close(self.io);
+    }
+
+    /// Starts the coroutine that pushes pub/sub messages to this socket. Safe
+    /// to call repeatedly; SUBSCRIBE calls it on every subscription.
+    pub fn start_mailbox_delivery(self: *Client) void {
+        if (self.delivery_started) return;
+        self.mailbox_event.reset();
+        self.delivery_started = true;
+        self.delivery_group.async(self.io, delivery_task, .{self});
+    }
+
+    fn delivery_task(self: *Client) void {
+        self.delivery_loop() catch {};
+    }
+
+    fn stop_mailbox_delivery(self: *Client) void {
+        if (!self.delivery_started) return;
+        self.delivery_group.cancel(self.io);
+        self.delivery_started = false;
+    }
+
+    /// Waits for a message, then drains the mailbox. The mailbox lock makes the
+    /// reset race-free against `enqueue_to_handle`, which appends and signals
+    /// under the same lock.
+    fn delivery_loop(self: *Client) !void {
+        while (true) {
+            try self.mailbox_event.wait();
+            try self.drain_mailbox();
+            if (self.disconnect_requested.load(.acquire)) return;
+        }
+    }
+
+    fn drain_mailbox(self: *Client) !void {
+        while (true) {
+            try self.flush_mailbox();
+
+            self.mailbox.lock_atomic();
+            const empty = self.mailbox.pending_count == 0;
+            if (empty) self.mailbox_event.reset();
+            self.mailbox.unlock_atomic();
+            if (empty) return;
+        }
     }
 
     pub fn enter_pub_sub_mode(self: *Client) void {
@@ -216,6 +272,9 @@ pub const Client = struct {
     fn write_socket(self: *Client, bytes: []const u8) !void {
         if (bytes.len == 0) return;
 
+        self.write_mutex.lockUncancelable();
+        defer self.write_mutex.unlock();
+
         var writer_buffer: [1024 * 4]u8 = undefined;
         var socket_writer = self.connection.writer(self.io, &writer_buffer);
         // The peer may have gone away while the command ran; a failed write
@@ -264,6 +323,9 @@ pub const Client = struct {
         defer self.mailbox.free_nodes(self.allocator, head);
 
         if (head == null) return;
+
+        self.write_mutex.lockUncancelable();
+        defer self.write_mutex.unlock();
 
         var writer_buffer: [1024 * 4]u8 = undefined;
         var sw = self.connection.writer(self.io, &writer_buffer);

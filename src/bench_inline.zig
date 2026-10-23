@@ -6,15 +6,16 @@ const ClientMailbox = @import("client_mailbox.zig").ClientMailbox;
 const StackWriter = @import("stack_writer.zig").StackWriter;
 const Config = @import("config.zig");
 const Parser = @import("parser.zig").Value;
+const zio = @import("zio");
 
 const io = std.Io;
 
 /// Round-trip a single command through the real dispatch path
 /// (parse-free: pre-built RESP values -> registry.execute_command ->
 /// response writer) exactly as a client coroutine does after parsing, but
-/// without any socket I/O. This isolates the cost of inline command execution
-/// under the store lock — the path that used to bounce through a dedicated
-/// store thread (~3.6us/op measured previously).
+/// without any socket I/O. This isolates the cost of inline command execution —
+/// the path that used to bounce through a dedicated store thread (~3.6us/op
+/// measured previously).
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const server_io = init.io;
@@ -36,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
     // stream is enough to satisfy the Client type.
     const dummy_connection: io.net.Stream = .{ .socket = .{ .handle = -1, .address = undefined } };
     var mb = ClientMailbox.init(16);
+    var mailbox_event: zio.Event = .init;
     var disconnect = std.atomic.Value(bool).init(false);
 
     var client = Client.init(
@@ -47,6 +49,7 @@ pub fn main(init: std.process.Init) !void {
         &server.store,
         .{ .slot_index = 0, .generation = 0 },
         &mb,
+        &mailbox_event,
         &disconnect,
         server_io,
     );
