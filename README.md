@@ -1,6 +1,7 @@
 # Zedis
 
 [![Release](https://github.com/barddoo/zedis/actions/workflows/release.yml/badge.svg)](https://github.com/barddoo/zedis/actions/workflows/release.yml)
+<a href="https://hackergit.org/r/barddoo/zedis"><img src="https://hackergit.org/badge/barddoo/zedis.svg" alt="Hacker News" height="20"></a>
 
 A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), designed for learning and experimentation. Zedis implements the core Redis protocol and data structures with a focus on simplicity, performance, and thread safety.
 
