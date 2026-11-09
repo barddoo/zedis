@@ -124,6 +124,74 @@ pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_int(writer, @intFromBool(try result));
 }
 
+pub fn pexpire(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const milliseconds = args[2].as_int() catch {
+        return resp.write_error(writer, "ERR value is not an integer or out of range");
+    };
+
+    var nx = false;
+    var xx = false;
+    var gt = false;
+    var lt = false;
+    for (args[3..]) |arg| {
+        const option = arg.as_slice();
+        if (std.ascii.eqlIgnoreCase(option, "NX")) {
+            nx = true;
+        } else if (std.ascii.eqlIgnoreCase(option, "XX")) {
+            xx = true;
+        } else if (std.ascii.eqlIgnoreCase(option, "GT")) {
+            gt = true;
+        } else if (std.ascii.eqlIgnoreCase(option, "LT")) {
+            lt = true;
+        } else {
+            return error.SyntaxError;
+        }
+    }
+
+    if ((nx and (xx or gt or lt)) or (gt and lt)) {
+        return resp.write_error(writer, "ERR NX and XX, GT or LT options at the same time are not compatible");
+    }
+
+    if (!store.exists(key)) return resp.write_int(writer, 0);
+
+    const current_expiry = store.get_ttl(key);
+    if (nx and current_expiry != null) return resp.write_int(writer, 0);
+    if (xx and current_expiry == null) return resp.write_int(writer, 0);
+
+    const now = store.clock.now().toMilliseconds();
+
+    if (milliseconds <= 0) {
+        if (gt) {
+            if (current_expiry == null or now <= current_expiry.?) return resp.write_int(writer, 0);
+        }
+        if (lt) {
+            if (current_expiry) |expiry| {
+                if (now >= expiry) return resp.write_int(writer, 0);
+            }
+        }
+        return resp.write_int(writer, @intFromBool(store.delete(key)));
+    }
+
+    const new_expiry = std.math.add(i64, now, milliseconds) catch {
+        return resp.write_error(writer, "ERR invalid expire time in 'pexpire' command");
+    };
+
+    if (gt) {
+        if (current_expiry == null or new_expiry <= current_expiry.?) {
+            return resp.write_int(writer, 0);
+        }
+    }
+    if (lt) {
+        if (current_expiry) |expiry| {
+            if (new_expiry >= expiry) return resp.write_int(writer, 0);
+        }
+    }
+
+    const applied = try store.expire(key, new_expiry);
+    try resp.write_int(writer, @intFromBool(applied));
+}
+
 pub fn expire_at(writer: *Writer, store: *Store, args: []const Value) !void {
     const key = args[1].as_slice();
     const ts = store.clock.now();
@@ -1279,4 +1347,88 @@ test "GET command on minimum i64 value" {
     try get(&writer, &store, &args);
 
     try testing.expectEqualStrings("$20\r\n-9223372036854775808\r\n", writer.buffered());
+}
+
+test "PEXPIRE sets a millisecond expiry" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "PEXPIRE" },
+        .{ .data = "mykey" },
+        .{ .data = "5000" },
+    };
+
+    try pexpire(&writer, &store, &args);
+
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+    const expires_at = store.get_ttl("mykey").?;
+    const now = Io.Clock.real.now(testing.io).toMilliseconds();
+    try testing.expect(expires_at > now);
+    try testing.expect(expires_at <= now + 5000);
+}
+
+test "PEXPIRE with a non-positive TTL deletes the key" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "PEXPIRE" },
+        .{ .data = "mykey" },
+        .{ .data = "0" },
+    };
+
+    try pexpire(&writer, &store, &args);
+
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+    try testing.expect(!store.exists("mykey"));
+}
+
+test "PEXPIRE NX leaves an existing expiry unchanged" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+    const now = Io.Clock.real.now(testing.io).toMilliseconds();
+    _ = try store.expire("mykey", now + 10000);
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "PEXPIRE" },
+        .{ .data = "mykey" },
+        .{ .data = "5000" },
+        .{ .data = "NX" },
+    };
+
+    try pexpire(&writer, &store, &args);
+
+    try testing.expectEqualStrings(":0\r\n", writer.buffered());
+    try testing.expectEqual(now + 10000, store.get_ttl("mykey").?);
 }

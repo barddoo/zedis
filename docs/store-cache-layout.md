@@ -16,17 +16,22 @@ touches two structures: the contiguous slot array and the entry allocation, with
 key already inside the entry. The `entries[idx]` pointer hop remains; the indirection
 that was removed is the per-probe key dereference.
 
-Measured impact:
+Reproducible impact (`scripts/hashmap-ab.sh`, 1M keys, 128 B values):
 
-| Workload                        | Result                                    |
-| ------------------------------- | ----------------------------------------- |
-| Random `GET` over a large store | ~1.5x faster (working set exceeds L3)     |
-| Skewed hot-key `GET`            | ~1.5x faster                              |
-| `DEL`-heavy workloads           | ~2x faster (free-list reuse, no malloc)   |
-| Small, cache-resident store     | ~parity (std `HashMap` is well optimized) |
+| Workload                            | Result                                          |
+| ----------------------------------- | ----------------------------------------------- |
+| Sequential `GET` (insertion order)  | 1.6-1.8x faster                                 |
+| Uniform-random `GET`                | ~5% slower (extra `entries[idx]` hop, see §11)  |
+| Hot-set `GET` (1% of keys)          | parity                                          |
+| Cache-resident `GET` (10k keys)     | parity to ~10% faster                           |
+| `SET`+`DEL` churn                   | 1.2-1.6x faster (free-list reuse, no malloc)    |
+| Bulk `DEL`, 1M keys                 | ~1.3x faster                                    |
+| Bulk `DEL`, 10k keys                | slower than a cache-hot `free()` (see §12)      |
 
-The win is specifically for **large stores** — the realistic production case for a
-Redis-compatible database — where the working set no longer fits in cache.
+The layout pays off for sequential and delete-churn traffic. Uniform-random access
+does not benefit: it touches fewer cache lines but serializes `slots -> entries ->
+entry`. The original claim that this design is ~1.5x faster on random `GET` did not
+reproduce and has been removed.
 
 ---
 
@@ -143,7 +148,7 @@ pointers) — not data — yet it was a separate allocation from the key and val
 ```zig
 const Slot = struct {
     hash: u32,   // 32-bit hash fingerprint
-    idx:  u32,   // index into `entries` (or empty_slot / tomb_slot sentinel)
+    idx:  u32,   // index into `entries` (or the empty_slot sentinel)
 };               // 8 bytes, 8 slots per cache line
 
 const StoreEntry = struct {
@@ -203,7 +208,7 @@ fn findSlot(self, h32, key) ?usize {
     while (remaining > 0) : (remaining -= 1) {
         const s = slots[i];
         if (s.idx == empty_slot) return null;                  // stop at empty
-        if (s.idx != tomb_slot and s.hash == h32) {            // hash match only
+        if (s.hash == h32) {                                   // hash match only
             if (std.mem.eql(u8, entries[s.idx].key, key)) return i; // rare: real compare
         }
         i = (i + 1) & mask;
@@ -281,12 +286,13 @@ into the store.
 ### 5.5 Growth and shrinking
 
 `rebuildSlots(min_capacity)` allocates a power-of-two slot array and re-probes every
-live slot into it using the hash already cached in the slot (skipping tombstones).
-Both growing the table and rebuilding it clear tombstones.
+live slot into it using the hash already cached in the slot.
 
 - `maybe_resize` (before insert): grows at 80% load factor.
-- `maybe_maintenance` (after deletes): rate-limited to once every 50 ms; calls
-  `maintenance`, which rebuilds when waste > 50% or tombstones exceed 25%.
+- Deletes leave no tombstones: `shiftBackward` moves the rest of the probe cluster
+  down (see §9), so lookups still stop at the first empty slot.
+- `maybe_maintenance` (after deletes): runs at most once every 50 ms, and only when
+  a rebuild can actually shrink the table (`shrinkTarget(count) < slots.len`).
 - `reclaim_memory` (memory pressure): destroys pooled entries and shrinks
   `entries`/`slots` toward the live count. It is not periodic — it only runs when
   eviction cannot satisfy the KV budget.
@@ -298,7 +304,7 @@ don't reach into internals:
 
 ```zig
 pub const EntryView = struct { key: []const u8, object: *const ZedisObject, expires_at: ?i64 };
-pub const Iterator = struct { /* walks slots, skipping empty_slot/tomb_slot */ };
+pub const Iterator = struct { /* walks slots, skipping empty_slot */ };
 pub fn iterator(self: *const Store) Iterator;
 ```
 
@@ -320,42 +326,34 @@ i.e. 2 cache lines), but the **total bytes per short-key entry dropped** because
 key allocation and the map's per-bucket key-slice copy are gone. More importantly,
 the number of *distinct memory locations touched* per lookup dropped from 3–4 to 2.
 
-For the prototype's minimal entry (no expiry/LRU):
-
-| Prototype type | Size                       |
-| -------------- | -------------------------- |
-| `PointerEntry` | 56 B (entry + key + value) |
-| `InlineEntry`  | 64 B (single cache line)   |
-
 ---
 
-## 7. Prototype and measurements (historical)
+## 7. Measurements
 
-Before touching the real store, a standalone prototype benchmark compared the two
-designs head-to-head with a 1,000,000-key working set (≈ 64–150 MB, deliberately
-larger than L3) to expose memory-latency behavior. The prototype was a local,
-uncommitted benchmark and is no longer part of the tree; the numbers below are
-historical.
+`scripts/hashmap-ab.sh` builds a standalone A/B harness with the same entry sizes
+(96 B pointer map vs 128 B inline map) and the same 80% load factor, then reports
+wall clock and, when `perf` is available, `perf stat` counters. Representative
+results (1M keys, 128 B values, ReleaseFast):
 
-Representative results (ReleaseFast, Apple Silicon):
+| Operation                        | ptr map | inline table | ratio            |
+| -------------------------------- | ------- | ------------ | ---------------- |
+| GET sequential (insertion order) | 59.7 ns | 36.7 ns      | **1.6x faster**  |
+| GET uniform random               | 162 ns  | 174 ns       | ~7% slower       |
+| GET hot set (1% of keys)         | 57.5 ns | 65.4 ns      | ~14% slower      |
+| GET cache-resident (10k keys)    | 15.0 ns | 14.8 ns      | parity           |
+| SET+DEL churn (1M)               | 115 ns  | 71 ns        | **1.6x faster**  |
+| SET+DEL churn (10k)              | 39.6 ns | 35.4 ns      | 1.1x faster      |
+| DEL-only (1M)                    | 60.1 ns | 47.3 ns      | **1.3x faster**  |
+| DEL-only (10k)                   | 15.4 ns | 30.3 ns      | 2x slower        |
 
-| Operation            | PointerStore | InlineStore | Speedup |
-| -------------------- | ------------ | ----------- | ------- |
-| SET (populate)       | ~43 ns/op    | ~41 ns/op   | ~1.0x   |
-| GET (sequential)     | ~31 ns/op    | ~38 ns/op   | ~0.8x   |
-| GET (uniform random) | ~60 ns/op    | ~39 ns/op   | ~1.5x   |
-| GET (skewed hot-set) | ~27 ns/op    | ~18 ns/op   | ~1.5x   |
+The pattern is the design bet, not a universal speedup: insertion-order access
+streams the `entries` array and the inline keys, while random access pays for the
+serialized `slots -> entries -> *StoreEntry` chain. Delete churn wins on the free
+list; a bulk delete of a small, cache-resident table loses because shifting the
+cluster costs more than a cache-hot `free()`.
 
-Key observations:
-
-- **Random access** (the memory-latency-bound case) is where the layout wins — the
-  inline store touches fewer cache lines per lookup.
-- **Sequential access** is prefetch-friendly; the hardware predictor hides most of
-  the difference, so it's roughly parity.
-- **Insert** is parity — the general allocator's small-`malloc` is already fast.
-
-> Note: absolute numbers vary between runs (thermal state, load). The *ratios*
-> are the signal: random `GET` is consistently ~1.5x faster with inline layout.
+These numbers replace an earlier prototype table that claimed ~1.5x on random GET
+and ~0.8x on sequential GET; neither reproduced on x86-64 Linux or Apple Silicon.
 
 ---
 
@@ -367,9 +365,10 @@ Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 
 **Added**
 
-- `Slot`, `empty_slot` / `tomb_slot` / `no_entry` sentinels
+- `Slot`, `empty_slot` / `no_entry` sentinels
 - `Store` fields: `slots`, `entries`, `count`, `free_head`
 - `keyHash`, `findSlot`, `findInsertSlot`, `rebuildSlots`, `allocEntry`, `setEntryKey`
+- `shiftBackward` (tombstone-free deletion)
 - `iterator()` + `EntryView` / `Iterator`
 - `capacity()` (replaces test access to the old `.map.capacity()`)
 - `reclaim_memory()` (added later) — destroys pooled entries and compacts
@@ -392,33 +391,36 @@ Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 
 ---
 
-## 9. Correctness: the tombstone infinite loop
+## 9. Deletion without tombstones
 
-The first version of `findSlot` used `while (true)` and returned only on the
-`EMPTY` sentinel. Under delete-heavy workloads, deletions leave **tombstone** slots
-(occupied, but pointing to a freed entry). When a table filled with tombstones and
-no `EMPTY` slot remained, `findSlot` skipped tombstones forever and **hung**.
+The first version of the table used tombstones: `delete` marked the slot
+`tomb_slot` and relied on periodic rehashing to clear them. That had two failure
+modes:
 
-This was exposed by the `DEL` benchmark in `zig build bench:micro` (each iteration
-does `SET` then `DEL`, rapidly accumulating tombstones).
+1. **Probe degradation** — after a large delete burst the table was mostly
+   tombstones, so every lookup walked a long cluster.
+2. **An unbounded probe loop** — `findSlot` originally looped until it saw
+   `empty_slot`; a table full of tombstones with no empty slot hung the server.
+   The probe is still bounded by `slots.len` as a safety net.
 
-Two fixes:
+`delete` now calls `shiftBackward`, which removes the hole and shifts the rest of
+the cluster down whenever the hole is at or after the moved entry's home slot in
+probe order:
 
-1. **Bound the probe** — `findSlot` now scans at most `slots.len` positions and
-   returns `null` if it wraps around, guaranteeing termination:
+```zig
+fn shiftBackward(self: *Store, hole: usize) void {
+    ...
+    if (((j -% home) & mask) >= ((j -% h) & mask)) { ... }
+}
+```
 
-   ```zig
-   var remaining: usize = self.slots.len;
-   while (remaining > 0) : (remaining -= 1) { ... }
-   return null;
-   ```
+Every live entry therefore stays on a contiguous run from its home slot to its
+current slot, which is exactly the invariant `findSlot` relies on. There are no
+tombstones, no tombstone counter, and no maintenance schedule required for
+correctness. The price is that `delete` is O(cluster length) instead of O(1).
 
-2. **Clear tombstones when empty** — `maintenance` previously early-returned when
-   `count == 0`, leaving tombstones behind forever. It now rebuilds to the minimum
-   table when `count == 0` and there are pending deletions.
-
-`findInsertSlot` was already safe: the store grows at 80% load, so there is always
-an `EMPTY` or `TOMB` slot to reuse.
+Tests cover the invariant directly (`expectProbeChainsIntact`) and delete/reinsert
+cycles on a clustered table.
 
 ---
 
@@ -442,41 +444,36 @@ to the original.
 
 ---
 
-## 11. Performance evaluation (honest comparison)
+## 11. Performance evaluation
 
-Two benchmarks measure two different regimes, and they disagree — correctly.
+Two regimes, two answers. Both are reproducible with `scripts/hashmap-ab.sh`.
 
-### 11.1 `zig build bench:micro` (10k keys, cache-resident)
+### 11.1 Cache-resident (10k keys)
 
-The micro-benchmarks use a ~10,000-key working set that fits entirely in L3. In this
-regime the mature, heavily-optimized `std.HashMap` is hard to beat, and the custom
-table carries some overhead (bounded-probe counter, the `slots` → `entries` hop):
+`std.HashMap` is hard to beat when everything fits in L2/L3: measured parity to
+~10% in favor of the inline table, depending on run. The extra `entries` hop is
+not compensated by locality at this size.
 
-| Metric             | Pointer (old)  | Inline (new)    |
-| ------------------ | -------------- | --------------- |
-| Store.get (cached) | 31.4M ops/s    | 29.3M ops/s     |
-| Store.set          | 28.1M ops/s    | 25.8M ops/s     |
-| Store.exists       | 35.2M ops/s    | 30.9M ops/s     |
-| Store.delete       | 30.7M ops/s    | 34.5M ops/s     |
-| **Command: DEL**   | **5.9M ops/s** | **12.4M ops/s** |
+### 11.2 Large working set (1M keys, ~150 MB)
 
-The one clear win at this size is **`DEL`**: the free-list reuse avoids the
-`malloc`/`free` churn that the old store paid on every delete (~2.1x).
+This is where the layout pays:
 
-### 11.2 Prototype (1M keys, exceeds L3)
-
-The large-working-set prototype (section 7) is where the inline layout pays off:
-~1.5x on random `GET`, where every lookup is memory-latency-bound.
+- **Sequential `GET`: 1.6-1.8x faster.** `perf` reports 1.5 vs 3.7 cache
+  misses/op and 152 vs 276 cycles/op; the inline key removes a dereference on
+  every compare.
+- **Uniform-random `GET`: ~5% slower.** `perf` reports ~20% fewer cache misses
+  but slightly more cycles and worse CPI: the `slots -> entries -> *Entry` chain
+  serializes dependent loads.
+- **SET+DEL churn: 1.2-1.6x faster.** 16% fewer instructions because the free
+  list avoids `malloc`/`free`/`dupe` per cycle.
+- **Bulk `DEL`:** ~1.3x faster at 1M keys; slower at 10k, where shifting the
+  cluster costs more than a cache-hot `free()`.
 
 ### 11.3 What this means
 
-The cache-friendly layout is **not** a universal speedup. It is a bet that the
-realistic production case — a store with millions of keys that does not fit in
-cache — is dominated by memory latency, not by raw hash-map micro-ops. For that
-case, touching fewer cache lines per lookup wins. For a tiny cache-resident store,
-the standard library map is fine and marginally faster.
-
----
+The cache-friendly layout is a bet on sequential and churn-heavy traffic. It is
+not a universal speedup, and it does not help uniform-random reads. For a small
+cache-resident store, `std.HashMap` is fine and marginally faster.
 
 ## 12. Trade-offs and limitations
 
@@ -486,7 +483,10 @@ the standard library map is fine and marginally faster.
   value array. This is the price of keeping entry pointers stable (so the LRU lists
   and `get()`'s returned pointers don't break).
 - **Long keys/values** (> 23 bytes) still heap-allocate; they get no inline benefit.
-- **Small stores** see little or no gain (section 11.1).
+- **Small stores** see little or no gain (§11.1).
+- **Deletion is O(probe cluster)**: shifting keeps lookups contiguous, but a bulk
+  delete of a small dense table is slower than a tombstone or a cache-hot
+  `free()`. Interleaved deletes (eviction, expiry) shift only a few slots.
 - **32-bit hashes** with full key compare on match — collision cost is one extra
   entry read, not a correctness issue.
 
@@ -496,6 +496,7 @@ the standard library map is fine and marginally faster.
 
 - `src/storage/store.zig` — the store implementation
 - `src/persistence/zdb.zig` — RDB persistence, migrated to `Store.iterator()`
+- `scripts/hashmap-ab.sh` — reproducible A/B harness (ptr map vs inline table)
 - `docs/memory-architecture.md` — allocation domains and memory budget
 - `docs/server-architecture.md` — server structure
 
@@ -510,5 +511,5 @@ the standard library map is fine and marginally faster.
 - **Index-based LRU**: replace the four `?*StoreEntry` LRU pointers with `u32`
   indices. Only worthwhile if entries move into a contiguous value slab (currently
   they stay heap-allocated for pointer stability).
-- **Tombstone rehash tuning**: rehash more eagerly under sustained delete loads to
-  keep `findSlot` probes short without relying on the 50 ms rate limiter.
+- **Re-measure after layout changes**: `scripts/hashmap-ab.sh` covers GET, DEL and
+  churn at 10k and 1M keys. Keep this document's numbers tied to a run.

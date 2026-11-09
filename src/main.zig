@@ -54,7 +54,12 @@ pub fn main(init: std.process.Init) !void {
     defer allocator.destroy(redis_server);
     defer redis_server.deinit();
 
-    log.info("Zedis server listening on {s}:{d}", .{ cfg.bind, cfg.port });
+    if (cfg.port != 0) {
+        log.info("Zedis server listening on {s}:{d}", .{ cfg.bind, cfg.port });
+    }
+    if (cfg.tls_enabled()) {
+        log.info("Zedis TLS listener on {s}:{d}", .{ cfg.bind, cfg.tls_port });
+    }
 
     // Log config
     log.info("Configuration loaded:", .{});
@@ -90,9 +95,12 @@ test {
     _ = @import("commands/list.zig");
     _ = @import("commands/registry.zig");
     _ = @import("commands/search.zig");
+    _ = @import("commands/server.zig");
     _ = @import("commands/string.zig");
     _ = @import("util/compression/gorilla.zig");
     _ = @import("app/config.zig");
+    _ = @import("app/stats.zig");
+    _ = @import("app/tls.zig");
     _ = @import("storage/kv_allocator.zig");
     _ = @import("protocol/parser.zig");
     _ = @import("persistence/zdb.zig");

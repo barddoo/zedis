@@ -9,6 +9,12 @@ const PrimitiveValue = @import("../util/types.zig").PrimitiveValue;
 const Io = std.Io;
 const Writer = Io.Writer;
 
+/// Protocol version the reply being written must use (2 or 3). The registry
+/// sets it from the client before every command. A plain global is sound
+/// because commands run one at a time on a single executor and handlers never
+/// suspend, so nothing can interleave between that assignment and the writes.
+pub var version: u8 = 2;
+
 // --- RESP Writing Helpers ---
 
 /// Writes `msg` as a RESP error. `msg` must start with its error code
@@ -59,6 +65,33 @@ pub fn write_list_len(writer: *Writer, count: usize) !void {
 }
 
 pub fn write_tuple_as_array(writer: *Writer, items: anytype) !void {
+    try write_tuple(writer, '*', items);
+}
+
+/// Out-of-band frame: a RESP3 push, or a plain array under RESP2.
+pub fn write_push_len(writer: *Writer, count: usize) !void {
+    const prefix: u8 = if (version >= 3) '>' else '*';
+    try writer.print("{c}{d}\r\n", .{ prefix, count });
+}
+
+/// Like `write_tuple_as_array`, but framed as a push under RESP3.
+pub fn write_push_tuple(writer: *Writer, items: anytype) !void {
+    try write_tuple(writer, if (version >= 3) '>' else '*', items);
+}
+
+/// Writes a pre-serialized RESP2 array frame as a push when `protocol` is 3.
+/// Takes the version explicitly because it runs outside command execution,
+/// where `version` holds whatever the last command left behind.
+pub fn write_frame_for_protocol(writer: *Writer, frame: []const u8, protocol: u8) !void {
+    if (protocol >= 3 and frame.len > 0 and frame[0] == '*') {
+        try writer.writeByte('>');
+        try writer.writeAll(frame[1..]);
+    } else {
+        try writer.writeAll(frame);
+    }
+}
+
+fn write_tuple(writer: *Writer, prefix: u8, items: anytype) !void {
     const T = @TypeOf(items);
     const info = @typeInfo(T);
 
@@ -77,7 +110,7 @@ pub fn write_tuple_as_array(writer: *Writer, items: anytype) !void {
 
     const struct_info = info.@"struct";
 
-    try writer.print("*{d}\r\n", .{struct_info.field_names.len});
+    try writer.print("{c}{d}\r\n", .{ prefix, struct_info.field_names.len });
 
     // 4. Use 'inline for' to iterate over the tuple's elements at compile time.
     //    This loop is "unrolled" by the compiler, generating specific code
@@ -97,14 +130,35 @@ pub fn write_tuple_as_array(writer: *Writer, items: anytype) !void {
     }
 }
 
-pub fn write_null(writer: *Writer) !void {
-    try writer.writeAll("$-1\r\n");
+/// Header for `pairs` key/value pairs: a RESP3 map, or a flat array of twice
+/// as many elements under RESP2. The caller then writes key, value, key, ...
+pub fn write_map_len(writer: *Writer, pairs: usize) !void {
+    if (version >= 3) {
+        try writer.print("%{d}\r\n", .{pairs});
+    } else {
+        try writer.print("*{d}\r\n", .{pairs * 2});
+    }
 }
 
+/// Header for a set of `count` unique members: RESP3 set, or an array under RESP2.
+pub fn write_set_len(writer: *Writer, count: usize) !void {
+    const prefix: u8 = if (version >= 3) '~' else '*';
+    try writer.print("{c}{d}\r\n", .{ prefix, count });
+}
+
+pub fn write_null(writer: *Writer) !void {
+    try writer.writeAll(if (version >= 3) "_\r\n" else "$-1\r\n");
+}
+
+/// A RESP3 double, or its text in a bulk string under RESP2.
 pub fn write_double_bulk_string(writer: *Writer, value: f64) !void {
     var buf: [32]u8 = undefined;
     const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
-    try writer.print("${d}\r\n{s}\r\n", .{ formatted.len, formatted });
+    if (version >= 3) {
+        try writer.print(",{s}\r\n", .{formatted});
+    } else {
+        try writer.print("${d}\r\n{s}\r\n", .{ formatted.len, formatted });
+    }
 }
 
 pub fn write_primitive_value(writer: *Writer, value: PrimitiveValue) !void {
@@ -113,4 +167,62 @@ pub fn write_primitive_value(writer: *Writer, value: PrimitiveValue) !void {
         .short_string => |ss| try write_bulk_string(writer, ss.as_slice()),
         .int => |i| try write_int(writer, i),
     }
+}
+
+const RespCase = struct { version: u8, expected: []const u8 };
+
+fn expect_reply(comptime write: anytype, args: anytype, cases: []const RespCase) !void {
+    const saved = version;
+    defer version = saved;
+    for (cases) |case| {
+        version = case.version;
+        var buffer: [64]u8 = undefined;
+        var writer: Writer = .fixed(&buffer);
+        try @call(.auto, write, .{&writer} ++ args);
+        try std.testing.expectEqualStrings(case.expected, writer.buffered());
+    }
+}
+
+test "null reply uses the protocol's null type" {
+    try expect_reply(write_null, .{}, &.{
+        .{ .version = 2, .expected = "$-1\r\n" },
+        .{ .version = 3, .expected = "_\r\n" },
+    });
+}
+
+test "double reply is a RESP3 double or a RESP2 bulk string" {
+    try expect_reply(write_double_bulk_string, .{@as(f64, 1.5)}, &.{
+        .{ .version = 2, .expected = "$3\r\n1.5\r\n" },
+        .{ .version = 3, .expected = ",1.5\r\n" },
+    });
+    try expect_reply(write_double_bulk_string, .{std.math.inf(f64)}, &.{
+        .{ .version = 3, .expected = ",inf\r\n" },
+    });
+}
+
+test "map header is a RESP3 map or a flattened RESP2 array" {
+    try expect_reply(write_map_len, .{@as(usize, 3)}, &.{
+        .{ .version = 2, .expected = "*6\r\n" },
+        .{ .version = 3, .expected = "%3\r\n" },
+    });
+}
+
+test "set header is a RESP3 set or a RESP2 array" {
+    try expect_reply(write_set_len, .{@as(usize, 2)}, &.{
+        .{ .version = 2, .expected = "*2\r\n" },
+        .{ .version = 3, .expected = "~2\r\n" },
+    });
+}
+
+test "pub/sub frames are delivered as pushes only to RESP3 clients" {
+    const frame = "*3\r\n$7\r\nmessage\r\n$1\r\nc\r\n$1\r\nm\r\n";
+    var buffer: [64]u8 = undefined;
+
+    var writer: Writer = .fixed(&buffer);
+    try write_frame_for_protocol(&writer, frame, 2);
+    try std.testing.expectEqualStrings(frame, writer.buffered());
+
+    writer = .fixed(&buffer);
+    try write_frame_for_protocol(&writer, frame, 3);
+    try std.testing.expectEqualStrings(">" ++ frame[1..], writer.buffered());
 }

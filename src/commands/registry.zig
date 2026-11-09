@@ -103,6 +103,7 @@ pub const CommandRegistry = struct {
             error.QuerySyntax => "ERR invalid query syntax",
             error.UnknownField => "ERR unknown field",
             error.MissingParam => "ERR missing query parameter",
+            error.CommandTimeout => "TIMEOUT command exceeded the configured time limit",
             error.OutOfMemory => oom_error_message,
             else => blk: {
                 std.log.err("Handler for command '{s}' failed with error: {s}", .{
@@ -121,7 +122,7 @@ pub const CommandRegistry = struct {
         writer: *std.Io.Writer,
         args: []const Value,
     ) !void {
-        try self.execute_command(writer, client, client.get_current_store(), args);
+        _ = try self.execute_command(writer, client, client.get_current_store(), args);
 
         try writer.flush();
     }
@@ -133,21 +134,26 @@ pub const CommandRegistry = struct {
     ) !void {
         var dummy_client: Client = undefined;
         dummy_client.authenticated = true;
+        dummy_client.protocol_version = 2;
         var discarding = std.Io.Writer.Discarding.init(&.{});
         // We should only be calling this command from the aof, so auth is assumed.
         // We should not be calling commands that require a real client.
-        try self.execute_command(&discarding.writer, &dummy_client, store, args);
+        _ = try self.execute_command(&discarding.writer, &dummy_client, store, args);
     }
 
+    /// Returns true when the command ran, false when it was rejected or its
+    /// handler failed. The reply is always written; the return value feeds
+    /// `commandstats`/`errorstats` and the failure counters.
     pub fn execute_command(
         self: *CommandRegistry,
         writer: *std.Io.Writer,
         client: *Client,
         store: *Store,
         args: []const Value,
-    ) !void {
+    ) !bool {
         if (args.len == 0) {
-            return resp.write_error(writer, "ERR empty command");
+            resp.write_error(writer, "ERR empty command") catch {};
+            return false;
         }
 
         const command_name = args[0].as_slice();
@@ -156,22 +162,29 @@ pub const CommandRegistry = struct {
         if (command_name.len > buf.len) return error.CommandTooLong;
         const upper_name = std.ascii.upperString(&buf, command_name);
 
-        // Skip auth check for commands that don't need it
+        resp.version = client.protocol_version;
+
+        // Skip auth check for commands that don't need it. HELLO carries its
+        // own AUTH option and checks credentials itself.
         if (!std.mem.eql(u8, upper_name, "AUTH") and
+            !std.mem.eql(u8, upper_name, "HELLO") and
             !std.mem.eql(u8, upper_name, "PING") and
             !client.is_authenticated())
         {
-            return resp.write_error(writer, "NOAUTH Authentication required");
+            resp.write_error(writer, "NOAUTH Authentication required") catch {};
+            return false;
         }
 
         if (self.get(upper_name)) |cmd_info| {
             // Validate argument count
             if (args.len < cmd_info.min_args) {
-                return resp.write_error(writer, "ERR wrong number of arguments");
+                resp.write_error(writer, "ERR wrong number of arguments") catch {};
+                return false;
             }
             if (cmd_info.max_args) |max_args| {
                 if (args.len > max_args) {
-                    return resp.write_error(writer, "ERR wrong number of arguments");
+                    resp.write_error(writer, "ERR wrong number of arguments") catch {};
+                    return false;
                 }
             }
 
@@ -180,25 +193,27 @@ pub const CommandRegistry = struct {
                     // If we haven't provided a client, this is an invariant failure
                     handler(client, args, writer) catch |err| {
                         handle_command_error(writer, cmd_info.name, err);
-                        return;
+                        return false;
                     };
                 },
                 .store_handler => |handler| {
                     // If we haven't provided a store, this is an invariant failure
                     handler(writer, store, args) catch |err| {
                         handle_command_error(writer, cmd_info.name, err);
-                        return;
+                        return false;
                     };
                 },
                 .default => |handler| {
                     handler(writer, args) catch |err| {
                         handle_command_error(writer, cmd_info.name, err);
-                        return;
+                        return false;
                     };
                 },
             }
+            return true;
         } else {
             resp.write_error(writer, "ERR unknown command") catch {};
+            return false;
         }
     }
 };
@@ -237,10 +252,10 @@ test "write commands are logged to the AOF and reads are not" {
     var registry = try init_registry(std.testing.allocator);
     defer registry.deinit();
 
-    for ([_][]const u8{ "SET", "DEL", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET", "EXPIRE", "SETEX", "PEXPIREAT" }) |name| {
+    for ([_][]const u8{ "SET", "DEL", "UNLINK", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET", "EXPIRE", "PEXPIRE", "SETEX", "PEXPIREAT" }) |name| {
         try std.testing.expect(registry.should_write_to_aof(name));
     }
-    for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS" }) |name| {
+    for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS", "PTTL", "SCAN" }) |name| {
         try std.testing.expect(!registry.should_write_to_aof(name));
     }
 }

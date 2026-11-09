@@ -60,6 +60,13 @@ pub const Writer = struct {
 
         /// File offset up to which data is written, and under `always` also fsynced.
         durable_end: std.atomic.Value(u64),
+        /// File size when the writer started, for INFO's `aof_base_size`.
+        base_size: u64,
+        /// Last successful fsync: wall-clock seconds, duration in microseconds,
+        /// and a running count. Read by INFO/METRICS without taking the mutex.
+        last_fsync_seconds: std.atomic.Value(i64) = .init(0),
+        last_fsync_us: std.atomic.Value(u64) = .init(0),
+        fsync_count: std.atomic.Value(u64) = .init(0),
         /// Futex word bumped whenever `durable_end` advances or a failure is recorded.
         durable_seq: std.atomic.Value(u32) = .init(0),
 
@@ -116,6 +123,7 @@ pub const Writer = struct {
             .threaded = .init(alloc, .{}),
             .queued_end = start,
             .durable_end = .init(start),
+            .base_size = start,
         };
         errdefer shared.threaded.deinit();
         shared.thread = try std.Thread.spawn(.{}, run, .{ shared, start });
@@ -202,6 +210,38 @@ pub const Writer = struct {
         return .{ .fsync = kind == .fsync, .reason = std.mem.span(reason) };
     }
 
+    /// Bytes appended to the AOF file, including those still queued.
+    pub fn currentSize(self: *const Writer) u64 {
+        if (!self.enabled) return 0;
+        return self.shared.?.queued_end;
+    }
+
+    /// Bytes accepted but not yet written to the file.
+    pub fn pendingBytes(self: *const Writer) u64 {
+        if (!self.enabled) return 0;
+        const shared = self.shared.?;
+        return shared.queued_end -| shared.durable_end.load(.acquire);
+    }
+
+    pub fn baseSize(self: *const Writer) u64 {
+        if (!self.enabled) return 0;
+        return self.shared.?.base_size;
+    }
+
+    pub fn lastFsyncInfo(self: *const Writer) struct { seconds: i64, duration_us: u64, count: u64 } {
+        if (!self.enabled) return .{ .seconds = 0, .duration_us = 0, .count = 0 };
+        const shared = self.shared.?;
+        return .{
+            .seconds = shared.last_fsync_seconds.load(.acquire),
+            .duration_us = shared.last_fsync_us.load(.acquire),
+            .count = shared.fsync_count.load(.acquire),
+        };
+    }
+
+    pub fn fsyncFailed(self: *const Writer) bool {
+        return if (self.failure()) |aof_failure| aof_failure.fsync else false;
+    }
+
     fn encode_command(list: *std.ArrayList(u8), gpa: Allocator, args: []const Value) !void {
         try list.print(gpa, "*{d}\r\n", .{args.len});
         for (args) |arg| {
@@ -268,8 +308,16 @@ pub const Writer = struct {
                 .no => false,
             };
             if (sync_now) {
+                // Monotonic clock of the writer's own I/O backend: the server's
+                // cached wall clock belongs to the executor thread and is not
+                // safe here. Wall time is read separately below for display.
+                const fsync_start_ns = Io.Timestamp.now(io, .awake).toNanoseconds();
                 if (file.sync(io)) {
                     unsynced = false;
+                    const elapsed_ns = Io.Timestamp.now(io, .awake).toNanoseconds() - fsync_start_ns;
+                    shared.last_fsync_us.store(@intCast(@max(elapsed_ns, 0) / 1000), .release);
+                    shared.last_fsync_seconds.store(@divTrunc(Io.Timestamp.now(io, .real).toMilliseconds(), 1000), .release);
+                    _ = shared.fsync_count.fetchAdd(1, .monotonic);
                 } else |err| {
                     log.err("AOF fsync failed: {s}; rejecting write commands until restart", .{@errorName(err)});
                     fsync_failed = true;

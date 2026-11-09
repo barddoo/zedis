@@ -103,8 +103,7 @@ pub fn subscribe(client: *Client, args: []const Value, writer: *std.Io.Writer) !
             subscription_count,
         };
 
-        // Use a generic writer to send the tuple as a RESP array.
-        try resp.write_tuple_as_array(writer, response_tuple);
+        try resp.write_push_tuple(writer, response_tuple);
     }
 }
 
@@ -117,12 +116,15 @@ pub fn unsubscribe(client: *Client, args: []const Value, writer: *std.Io.Writer)
         }
 
         if (names.len == 0) {
-            try writer.writeAll("*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n");
+            try resp.write_push_len(writer, 3);
+            try resp.write_bulk_string(writer, "unsubscribe");
+            try resp.write_null(writer);
+            try resp.write_int(writer, 0);
         } else {
             for (names) |name| {
                 if (client.subscription_count > 0) client.subscription_count -= 1;
                 const count: i64 = @intCast(client.subscription_count);
-                try resp.write_tuple_as_array(writer, .{ "unsubscribe", name, count });
+                try resp.write_push_tuple(writer, .{ "unsubscribe", name, count });
             }
         }
     } else {
@@ -131,7 +133,7 @@ pub fn unsubscribe(client: *Client, args: []const Value, writer: *std.Io.Writer)
             const removed = try client.pubsub_context.unsubscribe(channel_name, client.slot_handle);
             if (removed and client.subscription_count > 0) client.subscription_count -= 1;
             const count: i64 = @intCast(client.subscription_count);
-            try resp.write_tuple_as_array(writer, .{ "unsubscribe", channel_name, count });
+            try resp.write_push_tuple(writer, .{ "unsubscribe", channel_name, count });
         }
     }
 
@@ -487,4 +489,27 @@ test "unsubscribe with no arguments removes every channel" {
     );
     try testing.expectEqual(@as(usize, 0), client.subscription_count);
     try testing.expectEqual(@as(usize, 0), ctx.mock.subscriptions.items.len);
+}
+
+test "subscribe and unsubscribe replies are pushes under RESP3" {
+    var ctx: TestContext = undefined;
+    try ctx.init(testing.allocator);
+    defer ctx.deinit();
+    resp.version = 3;
+    defer resp.version = 2;
+
+    var client = ctx.makeClient(0);
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+
+    try subscribe(&client, &.{ .{ .data = "SUBSCRIBE" }, .{ .data = "news" } }, &writer);
+    try unsubscribe(&client, &.{ .{ .data = "UNSUBSCRIBE" }, .{ .data = "news" } }, &writer);
+    try unsubscribe(&client, &.{.{ .data = "UNSUBSCRIBE" }}, &writer);
+
+    try testing.expectEqualStrings(
+        ">3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n" ++
+            ">3\r\n$11\r\nunsubscribe\r\n$4\r\nnews\r\n:0\r\n" ++
+            ">3\r\n$11\r\nunsubscribe\r\n_\r\n:0\r\n",
+        writer.buffered(),
+    );
 }

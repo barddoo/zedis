@@ -9,6 +9,8 @@ const KeyValueAllocator = @This();
 
 base_allocator: mem.Allocator,
 memory_used: std.atomic.Value(usize),
+/// High-water mark of `memory_used`, reported as `used_memory_peak`.
+peak: std.atomic.Value(usize),
 memory_budget: usize,
 eviction_policy: Config.EvictionPolicy,
 store: ?*Store = null,
@@ -22,6 +24,7 @@ pub fn init(base_allocator: mem.Allocator, budget: usize, eviction_policy: Confi
     return .{
         .base_allocator = base_allocator,
         .memory_used = .init(0),
+        .peak = .init(0),
         .memory_budget = budget,
         .eviction_policy = eviction_policy,
         .store = null,
@@ -116,8 +119,16 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: mem.Alignment, ret_addr: usize)
     if (!self.ensure_budget(len)) return null;
 
     const ptr = self.base_allocator.rawAlloc(len, ptr_align, ret_addr) orelse return null;
-    _ = self.memory_used.fetchAdd(len, .monotonic);
+    const used = self.memory_used.fetchAdd(len, .monotonic) + len;
+    self.notePeak(used);
     return ptr;
+}
+
+fn notePeak(self: *KeyValueAllocator, used: usize) void {
+    var peak = self.peak.load(.monotonic);
+    while (used > peak) {
+        peak = self.peak.cmpxchgWeak(peak, used, .acq_rel, .monotonic) orelse return;
+    }
 }
 
 fn resize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, ret_addr: usize) bool {
@@ -130,7 +141,8 @@ fn resize(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, new_len: usize, 
     if (!self.base_allocator.rawResize(buf, buf_align, new_len, ret_addr)) return false;
 
     if (new_len > buf.len) {
-        _ = self.memory_used.fetchAdd(new_len - buf.len, .monotonic);
+        const used = self.memory_used.fetchAdd(new_len - buf.len, .monotonic) + (new_len - buf.len);
+        self.notePeak(used);
     } else {
         _ = self.memory_used.fetchSub(buf.len - new_len, .monotonic);
     }
@@ -146,6 +158,10 @@ fn free(ctx: *anyopaque, buf: []u8, buf_align: mem.Alignment, ret_addr: usize) v
 
 pub fn get_memory_usage(self: *KeyValueAllocator) usize {
     return self.memory_used.load(.acquire);
+}
+
+pub fn get_peak_usage(self: *KeyValueAllocator) usize {
+    return self.peak.load(.acquire);
 }
 
 pub fn get_memory_budget(self: *KeyValueAllocator) usize {

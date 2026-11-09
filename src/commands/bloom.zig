@@ -171,7 +171,7 @@ pub fn bf_info(writer: *Writer, store: *Store, args: []const Value) !void {
     const total_entries = bf_ptr.get_total_entries();
     const memory_usage = bf_ptr.get_memory_usage();
 
-    try resp.write_list_len(writer, 10); // 5 key-value pairs
+    try resp.write_map_len(writer, 5);
 
     // Capacity
     try resp.write_bulk_string(writer, "Capacity");
@@ -659,11 +659,13 @@ test "BF.INFO command" {
 
     try bf_info(&writer2, &store, &args);
 
-    // Should return info array with key-value pairs
-    // Format: *10\r\n$8\r\nCapacity\r\n:[number]\r\n$4\r\nSize\r\n:[number]\r\n...
-    const result = writer2.buffered();
-    try testing.expect(result.len > 0);
-    try testing.expect(result[0] == '*'); // Starts with array
+    try testing.expect(std.mem.startsWith(u8, writer2.buffered(), "*10\r\n$8\r\nCapacity\r\n"));
+
+    resp.version = 3;
+    defer resp.version = 2;
+    writer2 = Writer.fixed(&buffer2);
+    try bf_info(&writer2, &store, &args);
+    try testing.expect(std.mem.startsWith(u8, writer2.buffered(), "%5\r\n$8\r\nCapacity\r\n"));
 }
 
 test "BF.INSERT command with new bloom filter" {

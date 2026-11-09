@@ -50,6 +50,9 @@ pub const Command = struct {
     allocator: Allocator,
     // False when arg data borrows the reader's buffer instead of `allocator`.
     owns_args: bool = true,
+    /// Bytes this command occupied on the wire, including RESP framing.
+    /// Used for INFO's `total_net_input_bytes`.
+    wire_bytes: usize = 0,
 
     pub fn init(allocator: Allocator) Command {
         return .{
@@ -149,6 +152,13 @@ pub fn init(allocator: Allocator) Parser {
     return .{ .allocator = allocator };
 }
 
+fn digitCount(value: usize) usize {
+    var v = value;
+    var digits: usize = 1;
+    while (v >= 10) : (v /= 10) digits += 1;
+    return digits;
+}
+
 /// Parses a RESP length (array count or bulk length): ASCII digits only, no
 /// sign, prefix or separators. Returns null on anything else or overflow.
 /// Hand-rolled because std.fmt.parseInt's generality (base detection, '_')
@@ -186,7 +196,9 @@ pub fn parse_buffered(self: *Parser, buffered: []const u8) !?BufferedCommand {
         if (line[0] == '$' or line[0] == '+' or line[0] == '-' or line[0] == ':') {
             return error.InvalidProtocol;
         }
-        return .{ .command = try self.parse_inline_command(line, true), .consumed = header_end + 1 };
+        var command = try self.parse_inline_command(line, true);
+        command.wire_bytes = header_end + 1;
+        return .{ .command = command, .consumed = header_end + 1 };
     }
 
     const count = parse_length(line[1..]) orelse return error.InvalidProtocol;
@@ -218,6 +230,7 @@ pub fn parse_buffered(self: *Parser, buffered: []const u8) !?BufferedCommand {
         pos = data_end + 2;
     }
 
+    command.wire_bytes = pos;
     return .{ .command = command, .consumed = pos };
 }
 
@@ -245,7 +258,9 @@ pub fn parse(self: *Parser, reader: *Reader) !Command {
 
     // Inline command: any line that doesn't start with a RESP type indicator
     if (line[0] != '$' and line[0] != '+' and line[0] != '-' and line[0] != ':') {
-        return self.parse_inline_command(line, false);
+        var command = try self.parse_inline_command(line, false);
+        command.wire_bytes = line.len + 2;
+        return command;
     }
 
     return error.InvalidProtocol;
@@ -262,6 +277,9 @@ fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
 
     try command.ensure_capacity(initial_capacity);
 
+    // RESP framing: *<count>\r\n then $<len>\r\n<data>\r\n per argument.
+    var wire_bytes: usize = 1 + digitCount(count) + 2;
+
     for (0..count) |_| {
         const bulk_line = try Parser.read_line(reader);
         if (bulk_line.len == 0 or bulk_line[0] != '$') {
@@ -270,8 +288,10 @@ fn parse_resp_array(self: *Parser, reader: *Reader, line: []const u8) !Command {
 
         const data = try self.read_bulk_data(reader, bulk_line);
         try command.add_arg(.{ .data = data });
+        wire_bytes += 1 + digitCount(data.len) + 2 + data.len + 2;
     }
 
+    command.wire_bytes = wire_bytes;
     return command;
 }
 

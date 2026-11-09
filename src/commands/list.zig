@@ -239,6 +239,17 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
     }
 
     const count = actual_stop - actual_start + 1;
+
+    // Preflight the deadline before writing any RESP bytes: aborting after the
+    // array length is emitted would leave a partial reply on the wire.
+    var probe = list.list.first;
+    var probe_index: usize = 0;
+    while (probe) |node| : (probe_index += 1) {
+        if (probe_index % 1024 == 0 and store.commandExpired()) return error.CommandTimeout;
+        if (probe_index >= actual_stop) break;
+        probe = node.next;
+    }
+
     try resp.write_list_len(writer, count);
 
     // Stream items directly without intermediate allocation

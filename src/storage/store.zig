@@ -6,6 +6,8 @@ const Io = std.Io;
 const Clock = @import("../app/clock.zig");
 const Config = @import("../app/config.zig");
 const string_match = @import("../util/string_match.zig").string_match;
+const Stats = @import("../app/stats.zig");
+const StoreCounters = Stats.StoreCounters;
 const ScalableBloomFilter = @import("bloom/bloom.zig").BloomFilter;
 const SearchIndex = @import("search/index.zig").SearchIndex;
 pub const ShortString = @import("../util/types.zig").ShortString;
@@ -55,8 +57,9 @@ pub const ZedisObject = struct {
 };
 
 // Open-addressing hash table slot: stored hash (fast probing) + entry index.
+// Deletion shifts the rest of the probe cluster down (see `shiftBackward`), so
+// there are no tombstones.
 const empty_slot: u32 = std.math.maxInt(u32);
-const tomb_slot: u32 = std.math.maxInt(u32) - 1;
 const no_entry: u32 = std.math.maxInt(u32);
 
 const Slot = struct {
@@ -76,6 +79,13 @@ const StoreEntry = struct {
     next_volatile: ?*StoreEntry = null,
     next_free: u32 = no_entry,
 };
+
+/// Smallest power-of-two slot count that keeps `count` at or below 50% load.
+fn shrinkTarget(count: usize) usize {
+    var target: usize = 16;
+    while (target < count * 2) target *= 2;
+    return target;
+}
 
 pub const StoreOptions = struct {
     initial_capacity: u32 = 100,
@@ -97,11 +107,42 @@ pub const Iterator = struct {
         while (self.slot_index < self.store.slots.len) {
             const s = self.store.slots[self.slot_index];
             self.slot_index += 1;
-            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            if (s.idx == empty_slot) continue;
             const entry = self.store.entries[s.idx];
             return .{
                 .key = entry.key,
                 .object = &entry.object,
+                .expires_at = entry.expires_at,
+            };
+        }
+        return null;
+    }
+};
+
+pub const ScanEntryView = struct {
+    /// Slot the entry was read from; pass `ScanIterator.slot_index` back as the
+    /// next SCAN cursor to resume after it.
+    slot: usize,
+    key: []const u8,
+    value_type: ValueType,
+    expires_at: ?i64,
+};
+
+pub const ScanIterator = struct {
+    store: *const Store,
+    slot_index: usize,
+
+    pub fn next(self: *ScanIterator) ?ScanEntryView {
+        while (self.slot_index < self.store.slots.len) {
+            const slot = self.slot_index;
+            self.slot_index += 1;
+            const s = self.store.slots[slot];
+            if (s.idx == empty_slot) continue;
+            const entry = self.store.entries[s.idx];
+            return .{
+                .slot = slot,
+                .key = entry.key,
+                .value_type = std.meta.activeTag(entry.object.value),
                 .expires_at = entry.expires_at,
             };
         }
@@ -130,10 +171,21 @@ pub const Store = struct {
     allkeys_sample_cursor: ?*StoreEntry,
     volatile_sample_cursor: ?*StoreEntry,
 
-    deletions_since_rehash: usize,
     last_maintenance_check: i64,
     eviction_policy: Config.EvictionPolicy,
     maxmemory_samples: usize,
+
+    /// Hits/misses and expiry/eviction counts for INFO and METRICS. Plain u64:
+    /// the single executor owns all store mutations.
+    counters: StoreCounters = .{},
+    /// Set by the server while a read-only command runs with a configured
+    /// `command-timeout-ms`; see `commandExpired`.
+    command_deadline_ns: ?u64 = null,
+
+    pub fn commandExpired(self: *const Store) bool {
+        const deadline = self.command_deadline_ns orelse return false;
+        return Stats.nowNs(self.io) >= deadline;
+    }
 
     inline fn keyHash(key: []const u8) u32 {
         return @truncate(std.hash.Wyhash.hash(0, key));
@@ -147,7 +199,7 @@ pub const Store = struct {
         while (remaining > 0) : (remaining -= 1) {
             const s = self.slots[i];
             if (s.idx == empty_slot) return null;
-            if (s.idx != tomb_slot and s.hash == h32) {
+            if (s.hash == h32) {
                 const entry = self.entries[s.idx];
                 if (std.mem.eql(u8, entry.key, key)) return i;
             }
@@ -159,7 +211,7 @@ pub const Store = struct {
     fn findInsertSlot(self: *const Store, h32: u32) usize {
         const mask = self.slots.len - 1;
         var i: usize = @as(usize, h32) & mask;
-        while (self.slots[i].idx != empty_slot and self.slots[i].idx != tomb_slot) {
+        while (self.slots[i].idx != empty_slot) {
             i = (i + 1) & mask;
         }
         return i;
@@ -173,9 +225,9 @@ pub const Store = struct {
         if (self.slots.len > 0) {
             const mask = cap - 1;
             for (self.slots) |s| {
-                if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+                if (s.idx == empty_slot) continue;
                 var i: usize = @as(usize, s.hash) & mask;
-                while (new_slots[i].idx != empty_slot and new_slots[i].idx != tomb_slot) i = (i + 1) & mask;
+                while (new_slots[i].idx != empty_slot) i = (i + 1) & mask;
                 new_slots[i] = s;
             }
             self.allocator.free(self.slots);
@@ -246,7 +298,6 @@ pub const Store = struct {
             .volatile_lru_tail = null,
             .allkeys_sample_cursor = null,
             .volatile_sample_cursor = null,
-            .deletions_since_rehash = 0,
             .last_maintenance_check = 0,
             .eviction_policy = options.eviction_policy,
             .maxmemory_samples = @max(@as(usize, @intCast(options.maxmemory_samples)), 1),
@@ -259,7 +310,7 @@ pub const Store = struct {
 
     pub fn deinit(self: *Store) void {
         for (self.slots) |s| {
-            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            if (s.idx == empty_slot) continue;
             self.free_entry_contents(self.entries[s.idx]);
         }
         for (self.entries) |entry| {
@@ -280,6 +331,10 @@ pub const Store = struct {
         return .{ .store = self, .slot_index = 0 };
     }
 
+    pub fn scanIterator(self: *const Store, start: usize) ScanIterator {
+        return .{ .store = self, .slot_index = start };
+    }
+
     pub inline fn size(self: Store) u32 {
         return @intCast(self.count);
     }
@@ -288,15 +343,37 @@ pub const Store = struct {
         return self.slots.len;
     }
 
+    /// Removes `hole` from its probe cluster and shifts the entries behind it
+    /// down, so a lookup can still stop at the first empty slot. An entry at
+    /// `j` may move into the hole when the hole is not before its home slot
+    /// in probe order; otherwise the gap is still part of its probe chain.
+    fn shiftBackward(self: *Store, hole: usize) void {
+        const mask = self.slots.len - 1;
+        var h = hole;
+        var j = (h + 1) & mask;
+        self.slots[h] = .{ .hash = 0, .idx = empty_slot };
+        var remaining: usize = self.slots.len;
+        while (remaining > 0) : (remaining -= 1) {
+            const s = self.slots[j];
+            if (s.idx == empty_slot) return;
+            const home = @as(usize, s.hash) & mask;
+            if (((j -% home) & mask) >= ((j -% h) & mask)) {
+                self.slots[h] = s;
+                h = j;
+                self.slots[j] = .{ .hash = 0, .idx = empty_slot };
+            }
+            j = (j + 1) & mask;
+        }
+    }
+
     fn delete_at_slot(self: *Store, slot: usize) void {
         const idx = self.slots[slot].idx;
         const entry = self.entries[idx];
-        self.slots[slot] = .{ .hash = 0, .idx = tomb_slot };
+        self.shiftBackward(slot);
         self.count -= 1;
         self.free_entry_contents(entry);
         entry.next_free = self.free_head;
         self.free_head = idx;
-        self.deletions_since_rehash += 1;
         self.maybe_maintenance();
     }
 
@@ -448,17 +525,23 @@ pub const Store = struct {
     }
 
     fn resolve_entry(self: *Store, key: []const u8, touch: bool) ?*StoreEntry {
-        const slot = self.findSlot(keyHash(key), key) orelse return null;
+        const slot = self.findSlot(keyHash(key), key) orelse {
+            self.counters.keyspace_misses += 1;
+            return null;
+        };
         const entry = self.entries[self.slots[slot].idx];
 
         if (entry.expires_at) |expiration_time| {
             const now = self.clock.now().toMilliseconds();
             if (now > expiration_time) {
+                self.counters.expired_keys += 1;
+                self.counters.keyspace_misses += 1;
                 self.delete_at_slot(slot);
                 return null;
             }
         }
 
+        self.counters.keyspace_hits += 1;
         if (touch) self.touch_entry(entry);
         return entry;
     }
@@ -555,8 +638,12 @@ pub const Store = struct {
     pub fn keys(self: Store, allocator: std.mem.Allocator, pattern: []const u8) ![][]const u8 {
         var result: std.ArrayList([]const u8) = .empty;
 
-        for (self.slots) |s| {
-            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+        for (self.slots, 0..) |s, index| {
+            if (index % 1024 == 0 and self.commandExpired()) {
+                result.deinit(allocator);
+                return error.CommandTimeout;
+            }
+            if (s.idx == empty_slot) continue;
             const key = self.entries[s.idx].key;
             if (pattern.len == 0 or string_match(pattern, key)) {
                 try result.append(allocator, key);
@@ -698,7 +785,7 @@ pub const Store = struct {
 
         var current_idx: usize = 0;
         for (self.slots) |s| {
-            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            if (s.idx == empty_slot) continue;
             if (current_idx == random_idx) {
                 return self.entries[s.idx].key;
             }
@@ -736,7 +823,7 @@ pub const Store = struct {
 
             var write: usize = 0;
             for (self.slots) |*slot| {
-                if (slot.idx == empty_slot or slot.idx == tomb_slot) continue;
+                if (slot.idx == empty_slot) continue;
                 new_entries[write] = self.entries[slot.idx];
                 slot.idx = @intCast(write);
                 write += 1;
@@ -755,7 +842,6 @@ pub const Store = struct {
             self.entries = new_entries[0..self.count];
             self.entries_capacity = needed_capacity;
             self.free_head = no_entry;
-            self.deletions_since_rehash = 0;
             reclaimed = true;
         }
 
@@ -770,7 +856,7 @@ pub const Store = struct {
 
     pub inline fn flush_db(self: *Store) void {
         for (self.slots) |s| {
-            if (s.idx == empty_slot or s.idx == tomb_slot) continue;
+            if (s.idx == empty_slot) continue;
             self.free_entry_contents(self.entries[s.idx]);
         }
         for (self.slots) |*s| s.* = .{ .hash = 0, .idx = empty_slot };
@@ -786,7 +872,6 @@ pub const Store = struct {
         self.volatile_lru_tail = null;
         self.allkeys_sample_cursor = null;
         self.volatile_sample_cursor = null;
-        self.deletions_since_rehash = 0;
     }
 
     fn evict_expired_volatile(self: *Store) bool {
@@ -803,6 +888,7 @@ pub const Store = struct {
             };
 
             if (self.clock.now().toMilliseconds() > expiration_time) {
+                self.counters.expired_keys += 1;
                 return self.delete(entry.key);
             }
 
@@ -870,12 +956,16 @@ pub const Store = struct {
             .allkeys_lru => {
                 if (self.evict_expired_volatile()) return true;
                 const victim = self.sample_global_victim() orelse return false;
-                return self.delete(victim.key);
+                const removed = self.delete(victim.key);
+                if (removed) self.counters.evicted_keys += 1;
+                return removed;
             },
             .volatile_lru => {
                 if (self.evict_expired_volatile()) return true;
                 const victim = self.sample_volatile_victim() orelse return false;
-                return self.delete(victim.key);
+                const removed = self.delete(victim.key);
+                if (removed) self.counters.evicted_keys += 1;
+                return removed;
             },
         }
     }
@@ -900,8 +990,9 @@ pub const Store = struct {
         }
 
         // Look the old key up only now: the allocation (eviction) and the delete
-        // (maintenance rehash) above can both move or remove slots. The entry
-        // still carries its old key here, so this finds it unless it was evicted.
+        // (and its backward-shift) above can both move or remove slots. The
+        // entry still carries its old key here, so this finds it unless it was
+        // evicted.
         const old_slot = self.findSlot(keyHash(old_key), old_key) orelse {
             if (new_heap) |key| self.allocator.free(key);
             return false;
@@ -917,13 +1008,13 @@ pub const Store = struct {
             entry.key = entry.inline_key_data[0..new_key.len];
         }
 
-        self.slots[old_slot] = .{ .hash = 0, .idx = tomb_slot };
-        self.count -= 1;
+        // Remove the old mapping without touching the entry: it is re-inserted
+        // under the new key below, so the live count does not change.
+        self.shiftBackward(old_slot);
 
         const new_h32 = keyHash(new_key);
         const slot = self.findInsertSlot(new_h32);
         self.slots[slot] = .{ .hash = new_h32, .idx = idx };
-        self.count += 1;
 
         self.touch_entry(entry);
         return true;
@@ -939,48 +1030,28 @@ pub const Store = struct {
     }
 
     pub inline fn maybe_maintenance(self: *Store) void {
+        if (self.slots.len <= 16) return;
+
+        // Only rehash when the table can actually shrink; checking that first
+        // keeps the common delete path from reading the clock or rehashing for
+        // no gain.
+        if (shrinkTarget(self.count) >= self.slots.len) return;
+
         const now = self.clock.now().toMilliseconds();
         if (now - self.last_maintenance_check < 50) return;
         self.last_maintenance_check = now;
+        self.maintenance();
+    }
 
+    /// Rebuilds the table into the smallest power-of-two capacity that keeps
+    /// the load factor at or below 50%. Deletions leave no tombstones (see
+    /// `shiftBackward`), so this only reclaims capacity.
+    pub fn maintenance(self: *Store) void {
         const cap = self.slots.len;
         if (cap == 0) return;
 
-        const entry_count = self.count;
-        const waste = cap - entry_count;
-
-        if ((waste > cap / 2) or (self.deletions_since_rehash > cap / 4)) {
-            self.maintenance();
-        }
-    }
-
-    pub fn maintenance(self: *Store) void {
-        const cap = self.slots.len;
-        const entry_count = self.count;
-
-        if (cap == 0) {
-            self.deletions_since_rehash = 0;
-            return;
-        }
-
-        if (entry_count == 0) {
-            if (self.deletions_since_rehash > 0) {
-                self.rebuildSlots(16) catch return;
-            }
-            self.deletions_since_rehash = 0;
-            return;
-        }
-
-        const estimated_waste_ratio = @as(f64, @floatFromInt(cap - entry_count)) /
-            @as(f64, @floatFromInt(cap));
-
-        const should_rehash = (estimated_waste_ratio > 0.5) or
-            (self.deletions_since_rehash > cap / 4);
-
-        if (should_rehash) {
-            self.rebuildSlots(entry_count * 2) catch return;
-            self.deletions_since_rehash = 0;
-        }
+        const target = shrinkTarget(self.count);
+        if (target < cap) self.rebuildSlots(target) catch return;
     }
 };
 
@@ -1182,6 +1253,32 @@ test "Store multiple keys with different types" {
     try testing.expectEqualStrings("world", store.get("str2").?.value.short_string.as_slice());
     try testing.expectEqual(@as(i64, 123), store.get("int1").?.value.int);
     try testing.expectEqual(@as(i64, -456), store.get("int2").?.value.int);
+}
+
+test "Store counts keyspace hits and misses" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    try store.set("present", "v");
+    _ = store.get("present");
+    _ = store.get("missing");
+
+    try testing.expectEqual(@as(u64, 1), store.counters.keyspace_hits);
+    try testing.expectEqual(@as(u64, 1), store.counters.keyspace_misses);
+}
+
+test "Store counts a key found past its expiry as expired and missed" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    try store.set("stale", "v");
+    _ = try store.expire("stale", clock.now().toMilliseconds() - 1);
+    _ = store.get("stale");
+
+    try testing.expectEqual(@as(u64, 1), store.counters.expired_keys);
+    try testing.expectEqual(@as(u64, 1), store.counters.keyspace_misses);
 }
 
 test "Store empty string values" {
@@ -1452,8 +1549,8 @@ test "Store maintenance() rehashes and reduces capacity" {
     // Size should remain the same
     try testing.expectEqual(@as(usize, 500), size_after);
 
-    // Capacity should be reduced or at least not larger
-    try testing.expect(capacity_after <= capacity_before);
+    // Capacity should be reduced.
+    try testing.expect(capacity_after < capacity_before);
 
     i = 500;
     while (i < 1000) : (i += 1) {
@@ -1465,25 +1562,88 @@ test "Store maintenance() rehashes and reduces capacity" {
     }
 }
 
-test "Store maintenance() resets deletion counter" {
+/// Every used slot must be reachable from its home slot without crossing an
+/// empty slot; otherwise a lookup would stop at the gap.
+fn expectProbeChainsIntact(store: *const Store) !void {
+    const mask = store.slots.len - 1;
+    for (store.slots, 0..) |s, i| {
+        if (s.idx == empty_slot) continue;
+        const home = @as(usize, s.hash) & mask;
+        var j = home;
+        while (j != i) : (j = (j + 1) & mask) {
+            try testing.expect(store.slots[j].idx != empty_slot);
+        }
+    }
+}
+
+test "Store delete keeps probe chains contiguous" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    const key_count: usize = 500;
+    var i: usize = 0;
+    while (i < key_count) : (i += 1) {
+        const key = try testing.allocator.print("key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+
+    // Deleting every third key leaves gaps inside probe clusters.
+    i = 0;
+    while (i < key_count) : (i += 3) {
+        const key = try testing.allocator.print("key{d}", .{i});
+        defer testing.allocator.free(key);
+        try testing.expect(store.delete(key));
+    }
+
+    try expectProbeChainsIntact(&store);
+
+    i = 0;
+    while (i < key_count) : (i += 1) {
+        const key = try testing.allocator.print("key{d}", .{i});
+        defer testing.allocator.free(key);
+        try testing.expectEqual(i % 3 != 0, store.get(key) != null);
+    }
+
+    // Re-inserting into the shifted clusters must still find the keys.
+    i = 0;
+    while (i < key_count) : (i += 3) {
+        const key = try testing.allocator.print("key{d}", .{i});
+        defer testing.allocator.free(key);
+        try store.set(key, "value");
+    }
+    try testing.expectEqual(@as(u32, @intCast(key_count)), store.size());
+    try expectProbeChainsIntact(&store);
+}
+
+test "Store rename_key moves the entry between probe chains" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
     var i: usize = 0;
-    while (i < 100) : (i += 1) {
+    while (i < 200) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
-        _ = store.delete(key);
     }
 
-    try testing.expect(store.deletions_since_rehash > 0);
+    try testing.expect(try store.rename_key("key7", "renamed"));
+    try testing.expect(store.get("key7") == null);
+    try testing.expectEqualStrings("value", store.get("renamed").?.value.short_string.as_slice());
+    try testing.expectEqual(@as(u32, 200), store.size());
+    try expectProbeChainsIntact(&store);
 
-    store.maintenance();
+    // Renaming onto an existing key replaces it.
+    try testing.expect(try store.rename_key("renamed", "key8"));
+    try testing.expect(store.get("renamed") == null);
+    try testing.expectEqualStrings("value", store.get("key8").?.value.short_string.as_slice());
+    try testing.expectEqual(@as(u32, 199), store.size());
+    try expectProbeChainsIntact(&store);
 
-    // Deletion counter should be reset
-    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+    try testing.expect(!try store.rename_key("missing", "nope"));
+    try testing.expect(try store.rename_key("key8", "key8"));
 }
 
 test "Store maybe_maintenance() respects rate limiting" {
@@ -1498,7 +1658,11 @@ test "Store maybe_maintenance() respects rate limiting" {
         try store.set(key, "value");
     }
 
-    // Delete many keys to exceed threshold
+    // Block the automatic maintenance calls inside delete() so this test can
+    // deterministically exercise the explicit maybe_maintenance() call.
+    store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
+
+    // Delete enough keys that a rebuild can actually shrink the table.
     i = 0;
     while (i < 700) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
@@ -1508,31 +1672,27 @@ test "Store maybe_maintenance() respects rate limiting" {
 
     const capacity_before = store.capacity();
 
-    // Reset last_maintenance_check to ensure our explicit call isn't rate-limited
-    // (delete() calls maybe_maintenance() automatically, which may have updated it recently)
     store.last_maintenance_check = 0;
     const last_check_before = store.last_maintenance_check;
 
-    // Call maybe_maintenance multiple times in quick succession
     store.maybe_maintenance();
     const capacity_after_first = store.capacity();
     const last_check_after_first = store.last_maintenance_check;
 
-    // First call should trigger maintenance
-    try testing.expect(capacity_after_first <= capacity_before);
+    // First call should trigger maintenance.
+    try testing.expect(capacity_after_first < capacity_before);
     try testing.expect(last_check_after_first > last_check_before);
 
-    // Immediately call again (within 50ms)
+    // Immediately call again (within 50ms); it must be rate-limited.
     store.maybe_maintenance();
     const capacity_after_second = store.capacity();
     const last_check_after_second = store.last_maintenance_check;
 
-    // Second call should be rate-limited (no maintenance)
     try testing.expectEqual(capacity_after_first, capacity_after_second);
     try testing.expectEqual(last_check_after_first, last_check_after_second);
 }
 
-test "Store maybe_maintenance() triggers on 50% waste threshold" {
+test "Store maintenance() shrinks a half-empty table" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -1546,94 +1706,55 @@ test "Store maybe_maintenance() triggers on 50% waste threshold" {
 
     const capacity_before = store.capacity();
 
-    // Delete more than 50% of capacity to trigger waste threshold
-    // (capacity - count) > capacity / 2
-    const target_deletions = (capacity_before / 2) + 10;
     i = 0;
-    while (i < target_deletions) : (i += 1) {
+    while (i < 600) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         _ = store.delete(key);
     }
 
-    // Reset last_maintenance_check to avoid rate limiting
     store.last_maintenance_check = 0;
+    store.maintenance();
 
-    // This should trigger maintenance due to waste threshold
-    store.maybe_maintenance();
+    try testing.expect(store.capacity() < capacity_before);
+    try testing.expectEqual(@as(u32, 400), store.size());
 
-    // Deletion counter should be reset after maintenance
-    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
+    i = 600;
+    while (i < 1000) : (i += 1) {
+        const key = try testing.allocator.print("key{d}", .{i});
+        defer testing.allocator.free(key);
+        try testing.expect(store.get(key) != null);
+    }
 }
 
-test "Store maybe_maintenance() triggers on 25% deletions threshold" {
+test "Store maintenance() keeps capacity while the table is not half empty" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
 
     var i: usize = 0;
-    while (i < 500) : (i += 1) {
+    while (i < 1000) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         try store.set(key, "value");
     }
 
-    const capacity = store.capacity();
-    const threshold = capacity / 4;
+    const capacity_before = store.capacity();
 
-    // Block the implicit maintenance calls inside delete() so this test can
-    // deterministically verify the explicit maybe_maintenance() invocation.
-    store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
-
-    // Delete exactly threshold + 1 keys to trigger maintenance
+    // 900 live entries in the same table still need the same slot count, so
+    // maintenance must not rehash for nothing.
     i = 0;
-    while (i < threshold + 1) : (i += 1) {
+    while (i < 100) : (i += 1) {
         const key = try testing.allocator.print("key{d}", .{i});
         defer testing.allocator.free(key);
         _ = store.delete(key);
     }
 
-    try testing.expectEqual(threshold + 1, store.deletions_since_rehash);
-
-    // Reset last_maintenance_check to avoid rate limiting
     store.last_maintenance_check = 0;
+    store.maintenance();
 
-    // This should trigger maintenance due to deletion threshold
-    store.maybe_maintenance();
-
-    // Deletion counter should be reset after maintenance
-    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
-}
-
-test "Store deletion tracking increments counter" {
-    var clock = Clock.init(testing.io, 0);
-    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
-    defer store.deinit();
-
-    // Initially, deletion counter should be 0
-    try testing.expectEqual(@as(usize, 0), store.deletions_since_rehash);
-
-    try store.set("key1", "value1");
-    try store.set("key2", "value2");
-    try store.set("key3", "value3");
-
-    // Keep delete() from auto-triggering maintenance so we can verify the
-    // raw deletion counter behavior directly.
-    store.last_maintenance_check = store.clock.now().toMilliseconds() + 60_000;
-
-    _ = store.delete("key1");
-    try testing.expect(store.deletions_since_rehash >= 1);
-
-    _ = store.delete("key2");
-    try testing.expect(store.deletions_since_rehash >= 2);
-
-    _ = store.delete("key3");
-    try testing.expect(store.deletions_since_rehash >= 3);
-
-    // Deleting non-existent key should not increment
-    const before_failed_delete = store.deletions_since_rehash;
-    _ = store.delete("nonexistent");
-    try testing.expectEqual(before_failed_delete, store.deletions_since_rehash);
+    try testing.expectEqual(capacity_before, store.capacity());
+    try testing.expectEqual(@as(u32, 900), store.size());
 }
 
 test "Store evict_one allkeys_lru evicts least recently used key" {
@@ -1652,6 +1773,7 @@ test "Store evict_one allkeys_lru evicts least recently used key" {
     _ = store.get("key1");
 
     try testing.expect(store.evict_one(.allkeys_lru));
+    try testing.expectEqual(@as(u64, 1), store.counters.evicted_keys);
     try testing.expect(store.get("key2") == null);
     try testing.expect(store.get("key1") != null);
     try testing.expect(store.get("key3") != null);

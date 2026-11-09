@@ -27,6 +27,7 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "auto-aof-rewrite-percentage" },
     .{ .name = "bind" },
     .{ .name = "clock-update-ms" },
+    .{ .name = "command-timeout-ms", .mutable = true },
     .{ .name = "daemonize" },
     .{ .name = "dbfilename" },
     .{ .name = "dir" },
@@ -36,6 +37,7 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "lazyfree-lazy-expire" },
     .{ .name = "lazyfree-lazy-server-del" },
     .{ .name = "lazyfree-lazy-user-del" },
+    .{ .name = "latency-monitor-threshold", .mutable = true },
     .{ .name = "lazyfree-lazy-user-flush" },
     .{ .name = "logfile" },
     .{ .name = "loglevel" },
@@ -65,6 +67,8 @@ const config_parameters = [_]ConfigParameter{
     .{ .name = "replica-serve-stale-data", .mutable = true },
     .{ .name = "requirepass", .mutable = true },
     .{ .name = "save" },
+    .{ .name = "slowlog-log-slower-than", .mutable = true },
+    .{ .name = "slowlog-max-len", .mutable = true },
     .{ .name = "stop-writes-on-bgsave-error", .mutable = true },
     .{ .name = "tcp-backlog" },
     .{ .name = "tcp-keepalive", .mutable = true },
@@ -76,6 +80,7 @@ const Clock = @import("../app/clock.zig");
 const Store = @import("../storage/store.zig").Store;
 const KeyValueAllocator = @import("../storage/kv_allocator.zig");
 const Server = @import("../app/server.zig");
+const Stats = @import("../app/stats.zig");
 const Io = std.Io;
 const testing = std.testing;
 
@@ -125,6 +130,149 @@ pub fn auth(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
     }
 }
 
+const server_version = Server.server_version;
+
+/// HELLO [protover [AUTH username password] [SETNAME clientname]]
+///
+/// Every option is validated before any state changes, so a failed HELLO
+/// leaves the connection on its previous protocol and auth state.
+pub fn hello(client: *Client, args: []const Value, writer: *Writer) !void {
+    var proto: u8 = client.protocol_version;
+    var authenticate = false;
+    var set_name: ?[]const u8 = null;
+
+    if (args.len > 1) {
+        const requested = args[1].as_int() catch {
+            return resp.write_error(writer, "ERR Protocol version is not an integer or out of range");
+        };
+        if (requested < 2 or requested > 3) {
+            return resp.write_error(writer, "NOPROTO unsupported protocol version");
+        }
+        proto = @intCast(requested);
+
+        var i: usize = 2;
+        while (i < args.len) {
+            const option = args[i].as_slice();
+            const remaining = args.len - i - 1;
+            if (std.ascii.eqlIgnoreCase(option, "AUTH") and remaining >= 2) {
+                const username = args[i + 1].as_slice();
+                const password = args[i + 2].as_slice();
+                const expected = client.server.config.requirepass orelse return error.AuthNoPasswordSet;
+                if (!std.mem.eql(u8, username, "default") or !std.mem.eql(u8, password, expected)) {
+                    return resp.write_error(writer, "WRONGPASS invalid username-password pair or user is disabled.");
+                }
+                authenticate = true;
+                i += 3;
+            } else if (std.ascii.eqlIgnoreCase(option, "SETNAME") and remaining >= 1) {
+                set_name = args[i + 1].as_slice();
+                i += 2;
+            } else {
+                try writer.print("-ERR Syntax error in HELLO option '{s}'\r\n", .{option});
+                return;
+            }
+        }
+    }
+
+    if (!authenticate and !client.is_authenticated()) {
+        return resp.write_error(
+            writer,
+            "NOAUTH HELLO must be called with the client already authenticated, " ++
+                "otherwise the HELLO <proto> AUTH <user> <pass> option can be used to " ++
+                "authenticate the client and select the RESP protocol version at the same time",
+        );
+    }
+
+    if (authenticate) client.authenticated = true;
+    if (set_name) |name| try client.setName(name);
+    client.protocol_version = proto;
+    // The registry set this before dispatch; the reply below must use the new version.
+    resp.version = proto;
+
+    try resp.write_map_len(writer, 7);
+    try resp.write_bulk_string(writer, "server");
+    try resp.write_bulk_string(writer, "zedis");
+    try resp.write_bulk_string(writer, "version");
+    try resp.write_bulk_string(writer, server_version);
+    try resp.write_bulk_string(writer, "proto");
+    try resp.write_int(writer, proto);
+    try resp.write_bulk_string(writer, "id");
+    try resp.write_int(writer, client.client_id);
+    try resp.write_bulk_string(writer, "mode");
+    try resp.write_bulk_string(writer, "standalone");
+    try resp.write_bulk_string(writer, "role");
+    try resp.write_bulk_string(writer, "master");
+    try resp.write_bulk_string(writer, "modules");
+    try resp.write_list_len(writer, 0);
+}
+
+/// SELECT exists only for client compatibility: Zedis runs a single logical
+/// database, so index 0 is always the current one.
+pub fn select(_: *Client, args: []const Value, writer: *Writer) !void {
+    const index = args[1].as_int() catch {
+        return resp.write_error(writer, "ERR value is not an integer or out of range");
+    };
+    if (index != 0) {
+        return resp.write_error(writer, "ERR DB index is out of range");
+    }
+    try resp.write_ok(writer);
+}
+
+pub fn client_cmd(client: *Client, args: []const Value, writer: *Writer) !void {
+    const subcommand = args[1].as_slice();
+
+    if (std.ascii.eqlIgnoreCase(subcommand, "ID")) {
+        if (args.len != 2) return unknown_client_subcommand(writer, subcommand);
+        return resp.write_int(writer, client.client_id);
+    }
+
+    if (std.ascii.eqlIgnoreCase(subcommand, "SETNAME")) {
+        if (args.len != 3) return unknown_client_subcommand(writer, subcommand);
+        const name = args[2].as_slice();
+        if (!is_valid_client_name(name)) {
+            return resp.write_error(writer, "ERR Client names cannot contain spaces, newlines or special characters.");
+        }
+        try client.setName(name);
+        return resp.write_ok(writer);
+    }
+
+    if (std.ascii.eqlIgnoreCase(subcommand, "GETNAME")) {
+        if (args.len != 2) return unknown_client_subcommand(writer, subcommand);
+        if (client.name) |name| {
+            return resp.write_bulk_string(writer, name);
+        }
+        return resp.write_null(writer);
+    }
+
+    if (std.ascii.eqlIgnoreCase(subcommand, "SETINFO")) {
+        if (args.len != 4) return unknown_client_subcommand(writer, subcommand);
+        const attribute = args[2].as_slice();
+        if (!std.ascii.eqlIgnoreCase(attribute, "LIB-NAME") and
+            !std.ascii.eqlIgnoreCase(attribute, "LIB-VER"))
+        {
+            writer.print("-ERR Unrecognized option '{s}'\r\n", .{attribute}) catch {};
+            return;
+        }
+        try client.setLibInfo(attribute, args[3].as_slice());
+        return resp.write_ok(writer);
+    }
+
+    return unknown_client_subcommand(writer, subcommand);
+}
+
+fn is_valid_client_name(name: []const u8) bool {
+    for (name) |c| {
+        if (c <= ' ' or c == 0x7f) return false;
+    }
+    return true;
+}
+
+fn unknown_client_subcommand(writer: *Writer, subcommand: []const u8) !void {
+    try writer.print(
+        "-ERR Unknown subcommand or wrong number of arguments for '{s}'. Try CLIENT HELP.\r\n",
+        .{subcommand},
+    );
+}
+
 pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
     const subcommand = args[1].as_slice();
 
@@ -151,6 +299,24 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
             try resp.write_error(writer, "ERR wrong number of arguments for CONFIG RESETSTAT");
             return;
         }
+        client.server.stats.reset();
+        try resp.write_ok(writer);
+        return;
+    }
+
+    if (std.ascii.eqlIgnoreCase(subcommand, "REWRITE")) {
+        if (args.len != 2) {
+            try resp.write_error(writer, "ERR wrong number of arguments for CONFIG REWRITE");
+            return;
+        }
+        const path = client.server.config.config_file orelse {
+            try resp.write_error(writer, "ERR The server is running without a config file");
+            return;
+        };
+        Config.rewrite_file(client.allocator, client.server.io, path, client.server.config) catch |err| {
+            try writer.print("-ERR Rewriting config file: {s}\r\n", .{@errorName(err)});
+            return;
+        };
         try resp.write_ok(writer);
         return;
     }
@@ -178,7 +344,7 @@ fn config_get(client: *Client, pattern: []const u8, writer: *Writer) !void {
         }
     }
 
-    try resp.write_list_len(writer, count * 2);
+    try resp.write_map_len(writer, count);
 
     for (config_parameters) |param| {
         if (!parameter_matches_pattern(param, lowered_pattern)) continue;
@@ -215,7 +381,8 @@ fn config_help(writer: *Writer) !void {
     const lines = [_][]const u8{
         "CONFIG GET <pattern> -- Return configuration parameters matching a glob pattern.",
         "CONFIG SET <name> <value> [name value ...] -- Update supported runtime configuration parameters.",
-        "CONFIG RESETSTAT -- Reset statistics counters. Zedis currently treats this as a no-op.",
+        "CONFIG RESETSTAT -- Reset statistics counters.",
+        "CONFIG REWRITE -- Persist runtime configuration changes to the config file.",
         "CONFIG HELP -- Show this help.",
     };
 
@@ -260,6 +427,14 @@ fn write_config_value(client: *Client, writer: *Writer, name: []const u8) !void 
         try resp.write_bulk_string(writer, server_config.bind);
     } else if (std.mem.eql(u8, name, "clock-update-ms")) {
         try write_config_int(writer, server_config.clock_update_ms);
+    } else if (std.mem.eql(u8, name, "command-timeout-ms")) {
+        try write_config_int(writer, server_config.command_timeout_ms);
+    } else if (std.mem.eql(u8, name, "latency-monitor-threshold")) {
+        try write_config_int(writer, server_config.latency_monitor_threshold);
+    } else if (std.mem.eql(u8, name, "slowlog-log-slower-than")) {
+        try write_config_int(writer, server_config.slowlog_log_slower_than);
+    } else if (std.mem.eql(u8, name, "slowlog-max-len")) {
+        try write_config_int(writer, server_config.slowlog_max_len);
     } else if (std.mem.eql(u8, name, "daemonize")) {
         try write_config_bool(writer, server_config.daemonize);
     } else if (std.mem.eql(u8, name, "dbfilename")) {
@@ -446,6 +621,29 @@ fn apply_config_set(client: *Client, name: []const u8, value: []const u8) Config
         client.server.config.timeout = parse_config_int(u32, value) catch return error.InvalidValue;
         return;
     }
+    if (std.mem.eql(u8, param.name, "command-timeout-ms")) {
+        client.server.config.command_timeout_ms = parse_config_int(u64, value) catch return error.InvalidValue;
+        return;
+    }
+    if (std.mem.eql(u8, param.name, "latency-monitor-threshold")) {
+        const threshold = parse_config_int(u64, value) catch return error.InvalidValue;
+        client.server.config.latency_monitor_threshold = threshold;
+        client.server.latency.threshold_ms = threshold;
+        return;
+    }
+    if (std.mem.eql(u8, param.name, "slowlog-log-slower-than")) {
+        const threshold = parse_config_int(i64, value) catch return error.InvalidValue;
+        if (threshold < -1) return error.InvalidValue;
+        client.server.config.slowlog_log_slower_than = threshold;
+        client.server.slowlog.threshold_us = threshold;
+        return;
+    }
+    if (std.mem.eql(u8, param.name, "slowlog-max-len")) {
+        const max_len = parse_config_int(usize, value) catch return error.InvalidValue;
+        client.server.slowlog.resize(max_len) catch return error.InvalidValue;
+        client.server.config.slowlog_max_len = max_len;
+        return;
+    }
 
     return error.ImmutableParameter;
 }
@@ -534,13 +732,25 @@ const TestContext = struct {
             .maxmemory_samples = 5,
         });
         self.server.kv_allocator = try KeyValueAllocator.init(allocator, 4096, .allkeys_lru);
+        self.server.io = testing.io;
+        self.server.stats = Stats.ServerStats.init(allocator, testing.io);
+        self.server.slowlog = try Stats.SlowLog.init(allocator, 0);
+        self.server.latency = .{};
 
         self.client = undefined;
         self.client.allocator = allocator;
         self.client.server = &self.server;
+        self.client.name = null;
+        self.client.lib_name = null;
+        self.client.lib_ver = null;
+        self.client.transaction = null;
+        self.client.client_id = 1;
+        self.client.protocol_version = 2;
     }
 
     fn deinit(self: *TestContext) void {
+        self.server.stats.deinit();
+        self.server.slowlog.deinit();
         self.server.store.deinit();
         if (self.server.config.requirepass) |password| {
             self.allocator.free(password);
@@ -684,4 +894,248 @@ test "CONFIG SET rejects immutable parameters" {
 
     try testing.expectEqualStrings("-ERR CONFIG SET does not support runtime updates for 'appendonly'\r\n", writer.buffered());
     try testing.expect(!ctx.server.config.appendonly);
+}
+
+const hello_body = "$6\r\nserver\r\n$5\r\nzedis\r\n$7\r\nversion\r\n$5\r\n" ++ server_version ++
+    "\r\n$5\r\nproto\r\n";
+const hello_tail = "$4\r\nmode\r\n$10\r\nstandalone\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$7\r\nmodules\r\n*0\r\n";
+
+fn run_hello(ctx: *TestContext, buffer: []u8, argv: []const []const u8) ![]const u8 {
+    var args: [8]Value = undefined;
+    for (argv, 0..) |arg, i| args[i] = .{ .data = arg };
+    var writer = Writer.fixed(buffer);
+    try hello(&ctx.client, args[0..argv.len], &writer);
+    return writer.buffered();
+}
+
+fn init_hello_client(ctx: *TestContext) void {
+    ctx.client.authenticated = false;
+    ctx.client.protocol_version = 2;
+    ctx.client.client_id = 7;
+}
+
+test "HELLO 3 switches the client to RESP3 and replies with a map" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    init_hello_client(&ctx);
+    defer resp.version = 2;
+
+    var buffer: [512]u8 = undefined;
+    const reply = try run_hello(&ctx, &buffer, &.{ "HELLO", "3" });
+
+    try testing.expectEqual(@as(u8, 3), ctx.client.protocol_version);
+    try testing.expectEqualStrings("%7\r\n" ++ hello_body ++ ":3\r\n$2\r\nid\r\n:7\r\n" ++ hello_tail, reply);
+}
+
+test "HELLO 2 replies with a flat array and returns the client to RESP2" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    init_hello_client(&ctx);
+    ctx.client.protocol_version = 3;
+    defer resp.version = 2;
+
+    var buffer: [512]u8 = undefined;
+    const reply = try run_hello(&ctx, &buffer, &.{ "HELLO", "2" });
+
+    try testing.expectEqual(@as(u8, 2), ctx.client.protocol_version);
+    try testing.expectEqualStrings("*14\r\n" ++ hello_body ++ ":2\r\n$2\r\nid\r\n:7\r\n" ++ hello_tail, reply);
+}
+
+test "HELLO with no version describes the server without changing protocol" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    init_hello_client(&ctx);
+    ctx.client.protocol_version = 3;
+    defer resp.version = 2;
+
+    var buffer: [512]u8 = undefined;
+    const reply = try run_hello(&ctx, &buffer, &.{"HELLO"});
+
+    try testing.expectEqual(@as(u8, 3), ctx.client.protocol_version);
+    try testing.expect(std.mem.startsWith(u8, reply, "%7\r\n"));
+}
+
+test "HELLO rejects bad requests without changing protocol" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    init_hello_client(&ctx);
+
+    const cases = [_]struct { argv: []const []const u8, expected: []const u8 }{
+        .{ .argv = &.{ "HELLO", "4" }, .expected = "-NOPROTO unsupported protocol version\r\n" },
+        .{ .argv = &.{ "HELLO", "1" }, .expected = "-NOPROTO unsupported protocol version\r\n" },
+        .{ .argv = &.{ "HELLO", "three" }, .expected = "-ERR Protocol version is not an integer or out of range\r\n" },
+        .{ .argv = &.{ "HELLO", "3", "BOGUS" }, .expected = "-ERR Syntax error in HELLO option 'BOGUS'\r\n" },
+        .{ .argv = &.{ "HELLO", "3", "AUTH", "default" }, .expected = "-ERR Syntax error in HELLO option 'AUTH'\r\n" },
+    };
+    for (cases) |case| {
+        var buffer: [256]u8 = undefined;
+        try testing.expectEqualStrings(case.expected, try run_hello(&ctx, &buffer, case.argv));
+        try testing.expectEqual(@as(u8, 2), ctx.client.protocol_version);
+    }
+}
+
+test "HELLO AUTH authenticates, selects the protocol, and sets the connection name" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    init_hello_client(&ctx);
+    ctx.server.config.requirepass = try arena.allocator().dupe(u8, "secret");
+    defer resp.version = 2;
+
+    var buffer: [512]u8 = undefined;
+    const unauthenticated = try run_hello(&ctx, &buffer, &.{ "HELLO", "3" });
+    try testing.expect(std.mem.startsWith(u8, unauthenticated, "-NOAUTH HELLO must be called"));
+    try testing.expectEqual(@as(u8, 2), ctx.client.protocol_version);
+
+    const wrong = try run_hello(&ctx, &buffer, &.{ "HELLO", "3", "AUTH", "default", "nope" });
+    try testing.expectEqualStrings("-WRONGPASS invalid username-password pair or user is disabled.\r\n", wrong);
+    try testing.expect(!ctx.client.authenticated);
+    try testing.expectEqual(@as(u8, 2), ctx.client.protocol_version);
+
+    const ok = try run_hello(&ctx, &buffer, &.{ "HELLO", "3", "AUTH", "default", "secret", "SETNAME", "app" });
+    try testing.expect(std.mem.startsWith(u8, ok, "%7\r\n"));
+    try testing.expect(ctx.client.authenticated);
+    try testing.expectEqual(@as(u8, 3), ctx.client.protocol_version);
+    try testing.expectEqualStrings("app", ctx.client.name.?);
+}
+
+test "CLIENT SETNAME stores a name and an empty name clears it" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const set_args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "SETNAME" }, .{ .data = "worker-1" } };
+    try client_cmd(&ctx.client, &set_args, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+    try testing.expectEqualStrings("worker-1", ctx.client.name.?);
+
+    writer = Writer.fixed(&buffer);
+    const clear_args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "SETNAME" }, .{ .data = "" } };
+    try client_cmd(&ctx.client, &clear_args, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+    try testing.expect(ctx.client.name == null);
+}
+
+test "CLIENT SETNAME rejects names with spaces" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "SETNAME" }, .{ .data = "two words" } };
+    try client_cmd(&ctx.client, &args, &writer);
+
+    try testing.expectEqualStrings(
+        "-ERR Client names cannot contain spaces, newlines or special characters.\r\n",
+        writer.buffered(),
+    );
+    try testing.expect(ctx.client.name == null);
+}
+
+test "CLIENT SETINFO stores library metadata" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const name_args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "SETINFO" }, .{ .data = "LIB-NAME" }, .{ .data = "app" } };
+    try client_cmd(&ctx.client, &name_args, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+    try testing.expectEqualStrings("app", ctx.client.lib_name.?);
+
+    writer = Writer.fixed(&buffer);
+    const version_args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "SETINFO" }, .{ .data = "LIB-VER" }, .{ .data = "2.0" } };
+    try client_cmd(&ctx.client, &version_args, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+    try testing.expectEqualStrings("2.0", ctx.client.lib_ver.?);
+}
+
+test "CLIENT ID returns the connection id" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+
+    var buffer: [64]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{ .{ .data = "CLIENT" }, .{ .data = "ID" } };
+    try client_cmd(&ctx.client, &args, &writer);
+
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+}
+
+test "SELECT accepts database zero and rejects others" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const zero = [_]Value{ .{ .data = "SELECT" }, .{ .data = "0" } };
+    try select(&ctx.client, &zero, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+
+    writer = Writer.fixed(&buffer);
+    const one = [_]Value{ .{ .data = "SELECT" }, .{ .data = "1" } };
+    try select(&ctx.client, &one, &writer);
+    try testing.expectEqualStrings("-ERR DB index is out of range\r\n", writer.buffered());
+
+    writer = Writer.fixed(&buffer);
+    const invalid = [_]Value{ .{ .data = "SELECT" }, .{ .data = "abc" } };
+    try select(&ctx.client, &invalid, &writer);
+    try testing.expectEqualStrings("-ERR value is not an integer or out of range\r\n", writer.buffered());
+}
+
+test "CONFIG GET replies with a map under RESP3" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var ctx: TestContext = undefined;
+    try ctx.init(arena.allocator());
+    defer ctx.deinit();
+    resp.version = 3;
+    defer resp.version = 2;
+
+    var buffer: [256]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+    const args = [_]Value{ .{ .data = "CONFIG" }, .{ .data = "GET" }, .{ .data = "appendonly" } };
+    try config(&ctx.client, &args, &writer);
+
+    try testing.expectEqualStrings("%1\r\n$10\r\nappendonly\r\n$2\r\nno\r\n", writer.buffered());
 }

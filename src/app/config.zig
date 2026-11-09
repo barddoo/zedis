@@ -27,6 +27,13 @@ pub const MemoryBudgetSource = enum {
     default,
 };
 
+/// TLS client-certificate policy, matching Redis' `tls-auth-clients`.
+pub const TlsAuthClients = enum {
+    no,
+    optional,
+    yes,
+};
+
 pub const MemoryStats = struct {
     fixed_memory_used: usize,
     kv_memory_used: usize,
@@ -51,6 +58,18 @@ tcp_backlog: u32 = 511,
 timeout: u32 = 0,
 /// TCP keepalive interval in seconds.
 tcp_keepalive: u32 = 300,
+/// Port for TLS connections. `0` disables TLS. Set `port 0` to serve TLS only.
+tls_port: u16 = 0,
+/// PEM certificate chain presented to TLS clients.
+tls_cert_file: []const u8 = "",
+/// PEM private key for `tls_cert_file`.
+tls_key_file: []const u8 = "",
+/// PEM CA bundle used to verify client certificates.
+tls_ca_cert_file: []const u8 = "",
+/// Whether clients must present a certificate signed by `tls_ca_cert_file`.
+tls_auth_clients: TlsAuthClients = .yes,
+/// Space-separated TLS versions to negotiate (TLSv1.2, TLSv1.3).
+tls_protocols: []const u8 = "",
 
 // General
 /// Run as a daemon process.
@@ -68,6 +87,17 @@ clock_update_ms: u32 = 100,
 /// Number of candidates sampled during approximate LRU eviction.
 /// Higher values are more accurate and more expensive.
 maxmemory_samples: u32 = 5,
+/// Log commands that take at least this many microseconds (-1 disables).
+slowlog_log_slower_than: i64 = 10_000,
+/// Maximum number of slow commands kept.
+slowlog_max_len: usize = 128,
+/// Record a latency event when a command takes at least this many
+/// milliseconds. 0 disables the monitor.
+latency_monitor_threshold: u64 = 0,
+/// Abort read-only commands that run longer than this. 0 disables the limit.
+command_timeout_ms: u64 = 0,
+/// Path of the config file the server was started with, for CONFIG REWRITE.
+config_file: ?[]const u8 = null,
 
 // Snapshotting
 /// Stop accepting writes if RDB snapshot fails.
@@ -193,6 +223,10 @@ pub fn requires_auth(self: Config) bool {
     return self.requirepass != null;
 }
 
+pub fn tls_enabled(self: Config) bool {
+    return self.tls_port != 0;
+}
+
 /// Runtime options that must be known before the zio runtime is initialized.
 /// Read from the config file with blocking I/O at startup; the main async
 /// config parse happens afterwards against the already-running runtime.
@@ -215,10 +249,11 @@ pub fn find_config_file(allocator: std.mem.Allocator, args: std.process.Args) ?[
 }
 
 pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.Args) !Config {
-    var config = if (find_config_file(allocator, args)) |file_name|
-        try read_file(allocator, io, file_name)
-    else
-        Config{};
+    var config = if (find_config_file(allocator, args)) |file_name| blk: {
+        var parsed = try read_file(allocator, io, file_name);
+        parsed.config_file = try allocator.dupe(u8, file_name);
+        break :blk parsed;
+    } else Config{};
 
     // Bounded by default: size the budget from the container/host limit unless
     // the config file set one explicitly.
@@ -269,6 +304,91 @@ fn read_file(allocator: std.mem.Allocator, io: std.Io, file_name: []const u8) !C
     defer allocator.free(content);
 
     return parse_config_text(allocator, content);
+}
+
+/// Runtime-mutable directives that CONFIG REWRITE persists. These are written
+/// in canonical form; aliases (`kv-memory-budget`, `eviction-policy`) are
+/// replaced so a later parse cannot apply a stale duplicate last.
+const managed_directives = [_][]const u8{
+    "maxmemory",
+    "maxmemory-policy",
+    "maxmemory-samples",
+    "slowlog-log-slower-than",
+    "slowlog-max-len",
+    "latency-monitor-threshold",
+    "command-timeout-ms",
+};
+
+fn managedDirectiveIndex(key: []const u8) ?usize {
+    for (managed_directives, 0..) |name, index| {
+        if (eql(u8, key, name)) return index;
+        if (index == 0 and eql(u8, key, "kv-memory-budget")) return index;
+        if (index == 1 and eql(u8, key, "eviction-policy")) return index;
+    }
+    return null;
+}
+
+pub fn rewrite_file(allocator: std.mem.Allocator, io: std.Io, path: []const u8, config: Config) !void {
+    const content = Dir.cwd().readFileAlloc(io, path, allocator, .limited(max_config_bytes)) catch |err| switch (err) {
+        error.FileNotFound => "",
+        else => return err,
+    };
+    defer allocator.free(content);
+
+    var output: std.ArrayList(u8) = .empty;
+    defer output.deinit(allocator);
+
+    var seen: [managed_directives.len]bool = @splat(false);
+    var lines = std.mem.splitScalar(u8, std.mem.trimEnd(u8, content, "\r\n"), '\n');
+    var first = true;
+    while (lines.next()) |line| {
+        if (!first) try output.append(allocator, '\n');
+        first = false;
+
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 0 and trimmed[0] != '#') {
+            var parts = std.mem.tokenizeAny(u8, trimmed, " \t");
+            if (parts.next()) |key| {
+                if (managedDirectiveIndex(key)) |index| {
+                    try writeManagedDirective(&output, allocator, config, index);
+                    seen[index] = true;
+                    continue;
+                }
+            }
+        }
+        try output.appendSlice(allocator, line);
+    }
+
+    for (managed_directives, 0..) |_, index| {
+        if (seen[index]) continue;
+        if (output.items.len > 0 and output.items[output.items.len - 1] != '\n') {
+            try output.append(allocator, '\n');
+        }
+        try writeManagedDirective(&output, allocator, config, index);
+        try output.append(allocator, '\n');
+    }
+
+    const temporary = try std.fmt.allocPrint(allocator, "{s}.tmp", .{path});
+    defer allocator.free(temporary);
+    try Dir.cwd().writeFile(io, .{ .sub_path = temporary, .data = output.items });
+    try Dir.cwd().rename(temporary, Dir.cwd(), path, io);
+}
+
+fn writeManagedDirective(output: *std.ArrayList(u8), allocator: std.mem.Allocator, config: Config, index: usize) !void {
+    switch (index) {
+        0 => try output.print(allocator, "maxmemory {d}", .{config.kv_memory_budget}),
+        1 => try output.print(allocator, "maxmemory-policy {s}", .{switch (config.eviction_policy) {
+            .noeviction => "noeviction",
+            .allkeys_lru => "allkeys-lru",
+            .volatile_lru => "volatile-lru",
+        }}),
+        2 => try output.print(allocator, "maxmemory-samples {d}", .{config.maxmemory_samples}),
+        3 => try output.print(allocator, "slowlog-log-slower-than {d}", .{config.slowlog_log_slower_than}),
+        4 => try output.print(allocator, "slowlog-max-len {d}", .{config.slowlog_max_len}),
+        5 => try output.print(allocator, "latency-monitor-threshold {d}", .{config.latency_monitor_threshold}),
+        6 => try output.print(allocator, "command-timeout-ms {d}", .{config.command_timeout_ms}),
+        else => unreachable,
+    }
 }
 
 fn parse_config_text(allocator: std.mem.Allocator, content: []const u8) !Config {
@@ -322,6 +442,25 @@ fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const
         config.timeout = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "tcp-keepalive")) {
         config.tcp_keepalive = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "tls-port")) {
+        config.tls_port = try parseInt(u16, trimmed_value, 10);
+    } else if (eql(u8, key, "tls-cert-file")) {
+        config.tls_cert_file = try allocator.dupe(u8, trimmed_value);
+    } else if (eql(u8, key, "tls-key-file")) {
+        config.tls_key_file = try allocator.dupe(u8, trimmed_value);
+    } else if (eql(u8, key, "tls-ca-cert-file")) {
+        config.tls_ca_cert_file = try allocator.dupe(u8, trimmed_value);
+    } else if (eql(u8, key, "tls-auth-clients")) {
+        config.tls_auth_clients = if (eql(u8, trimmed_value, "yes"))
+            .yes
+        else if (eql(u8, trimmed_value, "no"))
+            .no
+        else if (eql(u8, trimmed_value, "optional"))
+            .optional
+        else
+            return error.InvalidTlsAuthClients;
+    } else if (eql(u8, key, "tls-protocols")) {
+        config.tls_protocols = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "maxmemory-samples")) {
         config.maxmemory_samples = try parseInt(u32, trimmed_value, 10);
     }
@@ -336,6 +475,14 @@ fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const
         config.logfile = try allocator.dupe(u8, trimmed_value);
     } else if (eql(u8, key, "clock-update-ms")) {
         config.clock_update_ms = try parseInt(u32, trimmed_value, 10);
+    } else if (eql(u8, key, "slowlog-log-slower-than")) {
+        config.slowlog_log_slower_than = try parseInt(i64, trimmed_value, 10);
+    } else if (eql(u8, key, "slowlog-max-len")) {
+        config.slowlog_max_len = try parseInt(usize, trimmed_value, 10);
+    } else if (eql(u8, key, "latency-monitor-threshold")) {
+        config.latency_monitor_threshold = try parseInt(u64, trimmed_value, 10);
+    } else if (eql(u8, key, "command-timeout-ms")) {
+        config.command_timeout_ms = try parseInt(u64, trimmed_value, 10);
     }
     // Snapshotting
     else if (eql(u8, key, "stop-writes-on-bgsave-error")) {
@@ -533,7 +680,7 @@ fn detect_memory_limit(allocator: std.mem.Allocator, io: std.Io) MemoryLimit {
     // to discover.
     if (builtin.target.os.tag != .linux) return .host;
 
-    const proc_cgroup = Dir.cwd().readFileAlloc(io, "/proc/self/cgroup", allocator, .limited(64 * 1024)) catch |err| switch (err) {
+    const proc_cgroup = read_special_file(allocator, io, "/proc/self/cgroup", 64 * 1024) catch |err| switch (err) {
         error.FileNotFound => return .host,
         else => return .unknown,
     };
@@ -615,9 +762,20 @@ fn read_cgroup_limit(allocator: std.mem.Allocator, io: std.Io, base: []const u8,
 }
 
 fn read_cgroup_limit_file(allocator: std.mem.Allocator, io: std.Io, path: []const u8) !?u64 {
-    const text = try Dir.cwd().readFileAlloc(io, path, allocator, .limited(64));
+    const text = try read_special_file(allocator, io, path, 64);
     defer allocator.free(text);
     return parse_cgroup_limit(text);
+}
+
+/// Reads a procfs/sysfs file. `Dir.readFileAlloc` takes a sendfile-style fast
+/// path, and those filesystems report size 0 and do not support sendfile, so it
+/// returns an empty buffer instead of the contents. Stream instead.
+fn read_special_file(allocator: std.mem.Allocator, io: std.Io, path: []const u8, limit: usize) ![]u8 {
+    var file = try Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
+    var buffer: [4096]u8 = undefined;
+    var reader = file.readerStreaming(io, &buffer);
+    return reader.interface.allocRemaining(allocator, .limited(limit));
 }
 
 fn parse_cgroup_limit(text: []const u8) ?u64 {
@@ -690,6 +848,39 @@ test "unsupported maxmemory-policy is rejected" {
     try testing.expectError(
         error.InvalidEvictionPolicy,
         parse_config_text(arena.allocator(), "maxmemory-policy allkeys-lfu\n"),
+    );
+}
+
+test "TLS directives are parsed" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const config = try parse_config_text(arena.allocator(),
+        \\tls-port 6380
+        \\tls-cert-file "/etc/zedis/server.crt"
+        \\tls-key-file "/etc/zedis/server.key"
+        \\tls-ca-cert-file "/etc/zedis/ca.crt"
+        \\tls-auth-clients optional
+        \\tls-protocols "TLSv1.2 TLSv1.3"
+        \\
+    );
+
+    try testing.expect(config.tls_enabled());
+    try testing.expectEqual(6380, config.tls_port);
+    try testing.expectEqualStrings("/etc/zedis/server.crt", config.tls_cert_file);
+    try testing.expectEqualStrings("/etc/zedis/server.key", config.tls_key_file);
+    try testing.expectEqualStrings("/etc/zedis/ca.crt", config.tls_ca_cert_file);
+    try testing.expectEqual(TlsAuthClients.optional, config.tls_auth_clients);
+    try testing.expectEqualStrings("TLSv1.2 TLSv1.3", config.tls_protocols);
+}
+
+test "unsupported tls-auth-clients value is rejected" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try testing.expectError(
+        error.InvalidTlsAuthClients,
+        parse_config_text(arena.allocator(), "tls-auth-clients maybe\n"),
     );
 }
 
@@ -787,6 +978,42 @@ test "stock redis.conf parses as a config file" {
     try testing.expectEqualStrings("everysec", config.appendfsync);
 }
 
+test "config rewrite updates managed directives and preserves comments" {
+    const root = "config_rewrite_test_dir";
+    Dir.cwd().deleteTree(testing.io, root) catch {};
+    defer Dir.cwd().deleteTree(testing.io, root) catch {};
+    try Dir.cwd().createDirPath(testing.io, root);
+
+    const path = root ++ "/zedis.conf";
+    try Dir.cwd().writeFile(testing.io, .{
+        .sub_path = path,
+        .data = "# keep me\n" ++
+            "port 1234\n" ++
+            "kv-memory-budget 1mb\n",
+    });
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var config = try read_file(arena.allocator(), testing.io, path);
+    config.kv_memory_budget = 2 * 1024 * 1024;
+    config.eviction_policy = .noeviction;
+
+    try rewrite_file(testing.allocator, testing.io, path, config);
+
+    const rewritten = try Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .limited(max_config_bytes));
+    defer testing.allocator.free(rewritten);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "# keep me") != null);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "port 1234") != null);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "maxmemory 2097152") != null);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "maxmemory-policy noeviction") != null);
+    try testing.expect(std.mem.indexOf(u8, rewritten, "kv-memory-budget") == null);
+
+    const reparsed = try read_file(arena.allocator(), testing.io, path);
+    try testing.expectEqual(@as(usize, 2 * 1024 * 1024), reparsed.kv_memory_budget);
+    try testing.expectEqual(EvictionPolicy.noeviction, reparsed.eviction_policy);
+    try testing.expectEqual(@as(u16, 1234), reparsed.port);
+}
+
 test "shipped config files parse" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -795,4 +1022,12 @@ test "shipped config files parse" {
         const config = try read_file(arena.allocator(), testing.io, path);
         try testing.expectEqual(6379, config.port);
     }
+}
+
+test "Linux cgroup files are not truncated by the sendfile fast path" {
+    if (builtin.target.os.tag != .linux) return error.SkipZigTest;
+
+    const text = try read_special_file(testing.allocator, testing.io, "/proc/self/cgroup", 64 * 1024);
+    defer testing.allocator.free(text);
+    try testing.expect(text.len > 0);
 }

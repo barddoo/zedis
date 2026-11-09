@@ -21,5 +21,8 @@ pub fn save(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
     defer zdb.deinit();
     try zdb.write_file();
 
+    client.server.stats.rdb_changes_since_last_save = 0;
+    client.server.stats.rdb_last_save_time = @divTrunc(client.server.clock.now().toMilliseconds(), 1000);
+
     try resp.write_ok(writer);
 }

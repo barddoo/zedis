@@ -20,8 +20,77 @@ const free_message_list = @import("../util/client_mailbox.zig").free_message_lis
 const Config = @import("config.zig");
 const resp = @import("../protocol/resp.zig");
 const ClientHandle = @import("../util/types.zig").ClientHandle;
+const tls_mod = @import("tls.zig");
 
 const log = std.log.scoped(.client);
+
+/// Plain TCP or TLS socket used by a client connection.
+pub const Transport = union(enum) {
+    plain: Stream,
+    tls: struct {
+        stream: Stream,
+        connection: *tls_mod.Connection,
+    },
+
+    pub fn reader(self: Transport, io: std.Io, buffer: []u8) Reader {
+        return switch (self) {
+            .plain => |stream| .{ .plain = stream.reader(io, buffer) },
+            .tls => |t| .{ .tls = tls_mod.Reader.init(t.connection, buffer) },
+        };
+    }
+
+    pub fn writer(self: Transport, io: std.Io, buffer: []u8) Writer {
+        return switch (self) {
+            .plain => |stream| .{ .plain = stream.writer(io, buffer) },
+            .tls => |t| .{ .tls = tls_mod.Writer.init(t.connection, buffer) },
+        };
+    }
+
+    pub fn close(self: Transport, io: std.Io) void {
+        switch (self) {
+            .plain => |stream| stream.close(io),
+            .tls => |t| {
+                t.connection.closeNotify();
+                t.connection.destroy();
+                t.stream.close(io);
+            },
+        }
+    }
+
+    /// Wakes a coroutine blocked reading this connection. Used by shutdown and
+    /// CLIENT KILL; closing the socket from another coroutine would race the
+    /// owner's `close`, so only the kernel-level shutdown is issued.
+    pub fn shutdown(self: Transport, io: std.Io) void {
+        switch (self) {
+            .plain => |stream| stream.shutdown(io, .both) catch {},
+            .tls => |t| t.stream.shutdown(io, .both) catch {},
+        }
+    }
+
+    pub const Reader = union(enum) {
+        plain: Stream.Reader,
+        tls: tls_mod.Reader,
+
+        pub fn interface(self: *Reader) *std.Io.Reader {
+            return switch (self.*) {
+                .plain => &self.plain.interface,
+                .tls => &self.tls.interface,
+            };
+        }
+    };
+
+    pub const Writer = union(enum) {
+        plain: Stream.Writer,
+        tls: tls_mod.Writer,
+
+        pub fn interface(self: *Writer) *std.Io.Writer {
+            return switch (self.*) {
+                .plain => &self.plain.interface,
+                .tls => &self.tls.interface,
+            };
+        }
+    };
+};
 
 /// Flush a reply batch once it grows past this many bytes, bounding
 /// per-connection memory for very long pipelines or large replies.
@@ -33,13 +102,47 @@ const parse_arena_retain_bytes = 64 * 1024;
 
 var next_client_id: std.atomic.Value(u64) = .init(1);
 
+/// Number of connections accepted since startup.
+pub fn total_connections_received() u64 {
+    return next_client_id.load(.monotonic) - 1;
+}
+
+pub const QueuedCommand = struct {
+    args: []const Value,
+};
+
+/// Commands buffered between MULTI and EXEC. The arena owns the copied
+/// argument bytes so they stay valid after the parser reuses its buffers.
+pub const Transaction = struct {
+    arena: std.heap.ArenaAllocator,
+    commands: std.ArrayList(QueuedCommand) = .empty,
+    /// Set when a queued command could not be validated; EXEC then aborts.
+    dirty: bool = false,
+
+    pub fn init(allocator: Allocator) Transaction {
+        return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+    }
+
+    pub fn deinit(self: *Transaction, allocator: Allocator) void {
+        self.commands.deinit(allocator);
+        self.arena.deinit();
+    }
+};
+
 pub const Client = struct {
     allocator: std.mem.Allocator,
     authenticated: bool,
+    /// RESP version replies use, switched by HELLO.
+    protocol_version: u8 = 2,
+    name: ?[]u8 = null,
+    lib_name: ?[]u8 = null,
+    lib_ver: ?[]u8 = null,
+    /// MULTI/EXEC state; null when the client is not in a transaction.
+    transaction: ?*Transaction = null,
     client_id: u64,
     slot_handle: ClientHandle,
     command_registry: *CommandRegistry,
-    connection: Stream,
+    connection: Transport,
     store: *Store,
     is_in_pubsub_mode: bool,
     pubsub_context: *PubSubContext,
@@ -64,7 +167,7 @@ pub const Client = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        connection: Stream,
+        connection: Transport,
         pubsub_context: *PubSubContext,
         registry: *CommandRegistry,
         server: *Server,
@@ -97,7 +200,66 @@ pub const Client = struct {
 
     pub fn deinit(self: *Client) void {
         self.stop_mailbox_delivery();
+        self.freeTransaction();
+        if (self.name) |name| self.allocator.free(name);
+        if (self.lib_name) |name| self.allocator.free(name);
+        if (self.lib_ver) |version| self.allocator.free(version);
         self.connection.close(self.io);
+    }
+
+    pub fn setName(self: *Client, name: ?[]const u8) !void {
+        if (name == null or name.?.len == 0) {
+            if (self.name) |old| self.allocator.free(old);
+            self.name = null;
+            return;
+        }
+
+        const owned = try self.allocator.dupe(u8, name.?);
+        errdefer self.allocator.free(owned);
+
+        if (self.name) |old| self.allocator.free(old);
+        self.name = owned;
+    }
+
+    pub fn setLibInfo(self: *Client, attribute: []const u8, value: []const u8) !void {
+        const owned = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(owned);
+
+        const slot = if (std.ascii.eqlIgnoreCase(attribute, "lib-name"))
+            &self.lib_name
+        else if (std.ascii.eqlIgnoreCase(attribute, "lib-ver"))
+            &self.lib_ver
+        else
+            return error.InvalidArgument;
+
+        if (slot.*) |old| self.allocator.free(old);
+        slot.* = owned;
+    }
+
+    pub fn beginTransaction(self: *Client) !void {
+        if (self.transaction != null) return error.AlreadyExists;
+        const transaction = try self.allocator.create(Transaction);
+        transaction.* = Transaction.init(self.allocator);
+        self.transaction = transaction;
+    }
+
+    pub fn freeTransaction(self: *Client) void {
+        if (self.transaction) |transaction| {
+            transaction.deinit(self.allocator);
+            self.allocator.destroy(transaction);
+            self.transaction = null;
+        }
+    }
+
+    pub fn queueTransactionCommand(self: *Client, args: []const Value) !void {
+        const transaction = self.transaction orelse return error.NoTransaction;
+        const arena = transaction.arena.allocator();
+
+        const copied = try arena.alloc(Value, args.len);
+        for (args, 0..) |arg, i| {
+            copied[i] = .{ .data = try arena.dupe(u8, arg.data) };
+        }
+        try transaction.commands.append(self.allocator, .{ .args = copied });
     }
 
     /// Starts the coroutine that pushes pub/sub messages to this socket. Safe
@@ -162,8 +324,8 @@ pub const Client = struct {
 
     pub fn handle(self: *Client) !void {
         var reader_buffer: [1024 * 16]u8 = undefined;
-        var sr = self.connection.reader(self.io, &reader_buffer);
-        const reader = &sr.interface;
+        var transport_reader = self.connection.reader(self.io, &reader_buffer);
+        const reader = transport_reader.interface();
 
         // Per-command arena for args that don't fit in the reader buffer (and
         // for >6-arg lists). Commands that are fully buffered borrow their args
@@ -276,11 +438,13 @@ pub const Client = struct {
         defer self.write_mutex.unlock();
 
         var writer_buffer: [1024 * 4]u8 = undefined;
-        var socket_writer = self.connection.writer(self.io, &writer_buffer);
+        var transport_writer = self.connection.writer(self.io, &writer_buffer);
+        const socket_writer = transport_writer.interface();
         // The peer may have gone away while the command ran; a failed write
         // just ends this connection.
-        try socket_writer.interface.writeAll(bytes);
-        try socket_writer.interface.flush();
+        try socket_writer.writeAll(bytes);
+        self.server.stats.total_net_output_bytes +%= bytes.len;
+        try socket_writer.flush();
     }
 
     /// Next command for this batch. A command that is already fully buffered is
@@ -291,10 +455,13 @@ pub const Client = struct {
     fn next_command(self: *Client, parser: *Parser, reader: *std.Io.Reader, may_block: bool) CommandReadError!?Command {
         if (try parser.parse_buffered(std.Io.Reader.buffered(reader))) |parsed| {
             reader.toss(parsed.consumed);
+            self.server.stats.total_net_input_bytes +%= parsed.consumed;
             return parsed.command;
         }
         if (!may_block) return null;
-        return try self.read_command(parser, reader);
+        const command = try self.read_command(parser, reader);
+        self.server.stats.total_net_input_bytes +%= command.wire_bytes;
+        return command;
     }
 
     /// Parse one command, enforcing the configured idle `timeout` (in seconds)
@@ -313,6 +480,17 @@ pub const Client = struct {
         return self.authenticated or !self.server.config.requires_auth();
     }
 
+    /// Peer address formatted for SLOWLOG's client_addr field.
+    pub fn peerAddress(self: *Client, buf: []u8) []const u8 {
+        const stream = switch (self.connection) {
+            .plain => |s| s,
+            .tls => |t| t.stream,
+        };
+        var writer: std.Io.Writer = .fixed(buf);
+        stream.socket.address.format(&writer) catch return "";
+        return writer.buffered();
+    }
+
     // Helper to get the store
     pub fn get_current_store(self: *Client) *Store {
         return self.store;
@@ -328,14 +506,15 @@ pub const Client = struct {
         defer self.write_mutex.unlock();
 
         var writer_buffer: [1024 * 4]u8 = undefined;
-        var sw = self.connection.writer(self.io, &writer_buffer);
-        const writer = &sw.interface;
+        var transport_writer = self.connection.writer(self.io, &writer_buffer);
+        const writer = transport_writer.interface();
 
         var current = head;
         while (current) |node| : (current = node.next) {
-            try writer.writeAll(node.bytes);
+            try resp.write_frame_for_protocol(writer, node.bytes, self.protocol_version);
         }
 
+        self.server.stats.total_net_output_bytes +%= writer.buffered().len;
         try writer.flush();
     }
 };

@@ -1,9 +1,11 @@
 const std = @import("std");
 const storeModule = @import("../storage/store.zig");
 const Store = storeModule.Store;
+const ValueType = storeModule.ValueType;
 const Client = @import("../app/client.zig").Client;
 const Value = @import("../protocol/parser.zig").Value;
 const resp = @import("../protocol/resp.zig");
+const string_match = @import("../util/string_match.zig").string_match;
 const Io = std.Io;
 const Writer = Io.Writer;
 const Clock = @import("../app/clock.zig");
@@ -49,6 +51,106 @@ pub fn ttl(writer: *Writer, store: *Store, args: []const Value) !void {
     const expires_at = store.get_ttl(key) orelse return resp.write_int(writer, -1);
     const remaining_ms = @max(expires_at - store.clock.now().toMilliseconds(), 0);
     try resp.write_int(writer, @divTrunc(remaining_ms + 500, 1000));
+}
+
+pub fn pttl(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+
+    if (!store.exists(key)) {
+        try resp.write_int(writer, -2);
+        return;
+    }
+
+    const expires_at = store.get_ttl(key) orelse return resp.write_int(writer, -1);
+    const remaining_ms = @max(expires_at - store.clock.now().toMilliseconds(), 0);
+    try resp.write_int(writer, remaining_ms);
+}
+
+pub fn scan(writer: *Writer, store: *Store, args: []const Value) !void {
+    const cursor = args[1].as_u64() catch {
+        return resp.write_error(writer, "ERR invalid cursor");
+    };
+
+    var pattern: []const u8 = "*";
+    var count: usize = 10;
+    var type_filter: ?[]const u8 = null;
+
+    var i: usize = 2;
+    while (i < args.len) {
+        const option = args[i].as_slice();
+        if (std.ascii.eqlIgnoreCase(option, "MATCH") and i + 1 < args.len) {
+            pattern = args[i + 1].as_slice();
+            i += 2;
+        } else if (std.ascii.eqlIgnoreCase(option, "COUNT") and i + 1 < args.len) {
+            count = args[i + 1].as_usize() catch {
+                return error.SyntaxError;
+            };
+            if (count == 0) return error.SyntaxError;
+            i += 2;
+        } else if (std.ascii.eqlIgnoreCase(option, "TYPE") and i + 1 < args.len) {
+            type_filter = args[i + 1].as_slice();
+            i += 2;
+        } else {
+            return error.SyntaxError;
+        }
+    }
+
+    const start: usize = if (cursor > std.math.maxInt(usize))
+        store.capacity()
+    else
+        @intCast(cursor);
+
+    var results: std.ArrayList([]const u8) = .empty;
+    defer results.deinit(store.allocator);
+
+    var next_cursor: u64 = 0;
+    if (start < store.capacity()) {
+        const now = store.clock.now().toMilliseconds();
+        var iterator = store.scanIterator(start);
+        var scanned: usize = 0;
+
+        while (scanned < count) : (scanned += 1) {
+            if (scanned % 1024 == 0 and store.commandExpired()) {
+                return error.CommandTimeout;
+            }
+            const entry = iterator.next() orelse {
+                next_cursor = 0;
+                break;
+            };
+            next_cursor = if (iterator.slot_index >= store.capacity()) 0 else @intCast(iterator.slot_index);
+
+            if (entry.expires_at) |expires_at| {
+                if (now > expires_at) continue;
+            }
+            if (!string_match(pattern, entry.key)) continue;
+            if (type_filter) |expected| {
+                if (!scanTypeMatches(entry.value_type, expected)) continue;
+            }
+            try results.append(store.allocator, entry.key);
+        }
+    }
+
+    var cursor_buffer: [20]u8 = undefined;
+    const cursor_text = std.fmt.bufPrint(&cursor_buffer, "{d}", .{next_cursor}) catch unreachable;
+    try resp.write_list_len(writer, 2);
+    try resp.write_bulk_string(writer, cursor_text);
+    try resp.write_list_len(writer, results.items.len);
+    for (results.items) |key| {
+        try resp.write_bulk_string(writer, key);
+    }
+}
+
+fn scanTypeMatches(value_type: ValueType, expected: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(expected, "string")) {
+        return value_type == .string or value_type == .short_string or value_type == .int;
+    }
+    if (std.ascii.eqlIgnoreCase(expected, "list")) return value_type == .list;
+    if (std.ascii.eqlIgnoreCase(expected, "tseries-type") or std.ascii.eqlIgnoreCase(expected, "TSDB-TYPE")) {
+        return value_type == .time_series;
+    }
+    if (std.ascii.eqlIgnoreCase(expected, "bloom_filter")) return value_type == .bloom_filter;
+    if (std.ascii.eqlIgnoreCase(expected, "search_index")) return value_type == .search_index;
+    return false;
 }
 
 pub fn persist(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -473,6 +575,21 @@ test "RANDOMKEY command with empty store" {
     try testing.expectEqualStrings("$-1\r\n", writer.buffered());
 }
 
+test "KEYS aborts once the read-only command deadline has passed" {
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(testing.allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    try store.set("apple", "fruit");
+    var buffer: [256]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+    const args = [_]Value{ .{ .data = "KEYS" }, .{ .data = "*" } };
+
+    store.command_deadline_ns = 0;
+
+    try testing.expectError(error.CommandTimeout, keys(&writer, &store, &args));
+}
+
 test "KEYS command returns all keys when pattern is wildcard" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -569,4 +686,128 @@ test "RENAME preserves list ownership" {
         .int => |value| try testing.expectEqual(@as(i64, 42), value),
         else => return error.TestUnexpectedResult,
     }
+}
+
+test "SCAN MATCH filters keys and finishes at cursor zero" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("alpha", "1");
+    try store.set("beta", "2");
+    try store.set("apple", "3");
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "SCAN" },
+        .{ .data = "0" },
+        .{ .data = "MATCH" },
+        .{ .data = "a*" },
+        .{ .data = "COUNT" },
+        .{ .data = "100" },
+    };
+
+    try scan(&writer, &store, &args);
+
+    const output = writer.buffered();
+    try testing.expect(mem.startsWith(u8, output, "*2\r\n$1\r\n0\r\n*2\r\n"));
+    try testing.expect(mem.indexOf(u8, output, "alpha") != null);
+    try testing.expect(mem.indexOf(u8, output, "apple") != null);
+    try testing.expect(mem.indexOf(u8, output, "beta") == null);
+}
+
+test "SCAN TYPE filters by value type" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("name", "value");
+    _ = try store.create_list("items");
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "SCAN" },
+        .{ .data = "0" },
+        .{ .data = "TYPE" },
+        .{ .data = "list" },
+        .{ .data = "COUNT" },
+        .{ .data = "100" },
+    };
+
+    try scan(&writer, &store, &args);
+
+    const output = writer.buffered();
+    try testing.expect(mem.startsWith(u8, output, "*2\r\n$1\r\n0\r\n*1\r\n"));
+    try testing.expect(mem.indexOf(u8, output, "items") != null);
+    try testing.expect(mem.indexOf(u8, output, "name") == null);
+}
+
+test "SCAN rejects an invalid cursor" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
+    defer store.deinit();
+
+    var buffer: [4096]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "SCAN" },
+        .{ .data = "not-a-number" },
+    };
+
+    try scan(&writer, &store, &args);
+
+    try testing.expectEqualStrings("-ERR invalid cursor\r\n", writer.buffered());
+}
+
+test "PTTL reports remaining milliseconds and the missing-key sentinel" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+    const now = Io.Clock.real.now(testing.io).toMilliseconds();
+    _ = try store.expire("mykey", now + 10000);
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    const args = [_]Value{
+        .{ .data = "PTTL" },
+        .{ .data = "mykey" },
+    };
+
+    try pttl(&writer, &store, &args);
+
+    const remaining = try std.fmt.parseInt(i64, mem.trim(u8, writer.buffered(), ":\r\n"), 10);
+    try testing.expect(remaining > 0);
+    try testing.expect(remaining <= 10000);
+
+    writer = Writer.fixed(&buffer);
+    const missing = [_]Value{
+        .{ .data = "PTTL" },
+        .{ .data = "missing" },
+    };
+    try pttl(&writer, &store, &missing);
+    try testing.expectEqualStrings(":-2\r\n", writer.buffered());
 }

@@ -104,6 +104,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "UNLINK",
+        .handler = .{ .store_handler = string.del },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Delete keys without blocking",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
         .name = "SAVE",
         .handler = .{ .client_handler = rdb.save },
         .min_args = 1,
@@ -150,9 +159,18 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "PEXPIRE",
+        .handler = .{ .store_handler = string.pexpire },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Set a key's expiry in milliseconds",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
         .name = "PEXPIREAT",
         // Same handler as EXPIREAT, which takes milliseconds here. The AOF logs
-        // EXPIRE and SETEX TTLs as PEXPIREAT (see Server.log_absolute_ttl).
+        // EXPIRE, PEXPIRE, and SETEX TTLs as PEXPIREAT (see Server.log_absolute_ttl).
         .handler = .{ .store_handler = string.expire_at },
         .min_args = 3,
         .max_args = 3,
@@ -175,6 +193,60 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .min_args = 2,
         .max_args = 2,
         .description = "Authenticate to the server",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HELLO",
+        .handler = .{ .client_handler = connection_commands.hello },
+        .min_args = 1,
+        .max_args = null,
+        .description = "Switch the connection's RESP version and describe the server",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "CLIENT",
+        .handler = .{ .client_handler = connection_commands.client_cmd },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Manage client connections",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SELECT",
+        .handler = .{ .client_handler = connection_commands.select },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Select the logical database (only 0 is available)",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "MULTI",
+        .handler = .{ .client_handler = server_commands.multi },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Start a transaction",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "EXEC",
+        .handler = .{ .client_handler = server_commands.exec },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Execute all commands queued after MULTI",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "DISCARD",
+        .handler = .{ .client_handler = server_commands.discard },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Discard all commands queued after MULTI",
         .write_to_aof = false,
     });
 
@@ -380,6 +452,24 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "PTTL",
+        .handler = .{ .store_handler = key.pttl },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get remaining time to live of a key in milliseconds",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SCAN",
+        .handler = .{ .store_handler = key.scan },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Incrementally iterate over keys",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
         .name = "PERSIST",
         .handler = .{ .store_handler = key.persist },
         .min_args = 2,
@@ -489,6 +579,60 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     // Server commands
+
+    try registry.register(.{
+        .name = "INFO",
+        .handler = .{ .client_handler = server_commands.info_cmd },
+        .min_args = 1,
+        .max_args = 2,
+        .description = "Get server information and statistics",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "METRICS",
+        .handler = .{ .client_handler = server_commands.metrics_cmd },
+        .min_args = 1,
+        .max_args = 2,
+        .description = "Return Prometheus text exposition metrics",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SLOWLOG",
+        .handler = .{ .client_handler = server_commands.slowlog_cmd },
+        .min_args = 1,
+        .max_args = 3,
+        .description = "Inspect the slow command log",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "LATENCY",
+        .handler = .{ .client_handler = server_commands.latency_cmd },
+        .min_args = 1,
+        .max_args = null,
+        .description = "Inspect latency events",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SHUTDOWN",
+        .handler = .{ .client_handler = server_commands.shutdown_cmd },
+        .min_args = 1,
+        .max_args = 2,
+        .description = "Stop the server, flushing the AOF",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "COMMAND",
+        .handler = .{ .client_handler = server_commands.command_cmd },
+        .min_args = 1,
+        .max_args = null,
+        .description = "Get information about available commands",
+        .write_to_aof = false,
+    });
 
     try registry.register(.{
         .name = "DBSIZE",

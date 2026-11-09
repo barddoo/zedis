@@ -48,6 +48,39 @@ Socket I/O and `appendfsync always` durability waits can suspend, but only outsi
 command execution. If a handler ever needs to suspend, it must not mutate the store
 around that suspension (or the single-executor/no-lock invariant no longer holds).
 
+## Observability
+
+`Server` owns a `stats.ServerStats`, a fixed-size `SLOWLOG` ring and a
+`LATENCY` monitor. Durations come from the monotonic `.awake` clock, not the
+cached wall clock used for TTLs and log timestamps.
+
+- Every command is timed around `execute_locked`, including commands run by
+  `EXEC`. `INFO commandstats`, `INFO stats`, and `SLOWLOG` share the same
+  counters.
+- The store tracks hits, misses, expired keys and evicted keys; the KV
+  allocator tracks its memory high-water mark.
+- `METRICS` renders the same counters as Prometheus text; `INFO` remains the
+  source for `redis_exporter`-style scraping.
+- `slowlog-log-slower-than`, `slowlog-max-len`, `latency-monitor-threshold`,
+  and `command-timeout-ms` are runtime-mutable with `CONFIG SET`.
+
+## Shutdown
+
+`SIGINT` and `SIGTERM` run a coroutine per signal. On receipt, `requestShutdown`
+sets an atomic flag, wakes idle clients with a socket shutdown, and the accept
+coroutines are cancelled. `listen` waits for the client group, then `main`
+returns through `Server.deinit`: the AOF writer drains its queue, fsyncs, and
+closes the file before the listeners are released. `SHUTDOWN [NOSAVE|SAVE]`
+uses the same path.
+
+## Bounded commands
+
+`command-timeout-ms` applies only to read-only commands. Handlers check a
+deadline every ~1024 iterations and return `-TIMEOUT`; mutating commands are
+never aborted mid-flight. This bounds a stall but does not make execution
+concurrent: with one executor, a long `KEYS` still blocks other clients for its
+duration. Use `SCAN` instead of `KEYS` for large keyspaces.
+
 ## Coordination Primitives
 
 - `ClientMailbox`: spinlock-protected queue for pub/sub delivery (not lock-free),
