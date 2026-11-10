@@ -100,6 +100,7 @@ test {
     _ = @import("commands/server.zig");
     _ = @import("commands/string.zig");
     _ = @import("util/compression/gorilla.zig");
+    _ = @import("util/crc64.zig");
     _ = @import("app/config.zig");
     _ = @import("app/stats.zig");
     _ = @import("app/tls.zig");

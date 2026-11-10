@@ -13,8 +13,7 @@ const mem = std.mem;
 const eql = mem.eql;
 const Clock = @import("../app/clock.zig");
 
-/// Redis RDB/AOF checksum (CRC-64/Jones); std ships the exact catalog entry.
-const Crc64 = std.hash.crc.@"CRC-64/REDIS";
+const Crc64 = @import("../util/crc64.zig");
 
 const DEFAULT_FILE_NAME = "test.rdb";
 
@@ -58,7 +57,7 @@ pub const Writer = struct {
     }
 
     inline fn write_byte(self: *Writer, byte: u8) !void {
-        self.checksum.update(&.{byte});
+        self.checksum.updateByte(byte);
         try self.buffered_writer.interface.writeByte(byte);
     }
 
