@@ -167,7 +167,7 @@ appenddirname: []const u8 = "appendonlydir", // (not implemented — use dir ins
 /// AOF fsync policy (always, everysec, no).
 appendfsync: []const u8 = "everysec",
 /// Disable fsync during BGSAVE or BGREWRITEAOF.
-no_appendfsync_on_rewrite: bool = false, // (not implemented — rewrites run inline, not beside the writer)
+no_appendfsync_on_rewrite: bool = false, // (not implemented — rewrites run on their own thread and do not slow the writer's fsyncs)
 /// Rewrite the AOF when it has grown by this percentage since the last
 /// rewrite (or startup). 0 disables automatic rewrites.
 auto_aof_rewrite_percentage: u32 = 100,
