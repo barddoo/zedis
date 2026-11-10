@@ -5,8 +5,6 @@
 
 A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), designed for learning and experimentation. Zedis implements the core Redis protocol and data structures with a focus on simplicity, performance, and thread safety.
 
-**Not intended for production use yet.**
-
 ## Features
 
 - **Redis Protocol Compatibility**: Supports the Redis Serialization Protocol (RESP),
