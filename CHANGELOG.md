@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-10
+
 ### Added
 
 - AOF rewrite on a background thread: `BGREWRITEAOF` and automatic rewrites (`auto-aof-rewrite-percentage`, `auto-aof-rewrite-min-size`) replace the AOF with a snapshot of the live dataset, so it no longer grows without bound, and the server keeps serving while it runs. The store has no locks, so the rewrite thread never touches it: it replays the existing AOF into a private store (what a restart would load), writes strings (with TTLs), lists and time series as commands to a temp file, copies the log written meanwhile, and the writer thread splices on the last bytes, fsyncs, and atomically renames it into place. On 400k keys it took about 0.5 s with `PING` latency unchanged. It needs memory for a second copy of the dataset while it runs, outside `maxmemory`; because evictions are not logged to the AOF, that copy can also hold keys the live store has evicted (as a restart would). It is refused, leaving the AOF untouched, while the dataset holds bloom filters or search indexes, which commands cannot recreate. `INFO` reports `aof_rewrite_in_progress`, `aof_rewrites`, `aof_last_rewrite_time` and `aof_last_bgrewrite_status`; `METRICS` reports `zedis_aof_rewrites_total`.
@@ -283,7 +285,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/barddoo/zedis/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/barddoo/zedis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bardoo/zedis/compare/0.1.3...v0.2.0
 [0.1.3]: https://github.com/bardoo/zedis/compare/0.1.2...0.1.3
