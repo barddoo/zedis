@@ -46,22 +46,22 @@ pub const CommandInfo = struct {
 
 // Command registry that maps command names to their handlers
 pub const CommandRegistry = struct {
-    commands: std.StringHashMap(CommandInfo),
+    commands: std.StringHashMapUnmanaged(CommandInfo),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) CommandRegistry {
         return .{
-            .commands = std.StringHashMap(CommandInfo).init(allocator),
+            .commands = .{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *CommandRegistry) void {
-        self.commands.deinit();
+        self.commands.deinit(self.allocator);
     }
 
     pub fn register(self: *CommandRegistry, info: CommandInfo) !void {
-        try self.commands.put(info.name, info);
+        try self.commands.put(self.allocator, info.name, info);
     }
 
     pub fn get(self: *CommandRegistry, name: []const u8) ?CommandInfo {

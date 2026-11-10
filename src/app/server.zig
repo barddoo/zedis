@@ -74,7 +74,7 @@ client_slots: []ClientSlot,
 free_list_head: std.atomic.Value(u64),
 
 // Map of channel_name -> subscriber handles
-pubsub_map: std.StringHashMap([]ClientHandle),
+pubsub_map: std.StringHashMapUnmanaged([]ClientHandle),
 pubsub_mutex: std.atomic.Mutex = .unlocked,
 
 // Command execution needs no store lock: the zio runtime always runs exactly
@@ -173,7 +173,7 @@ pub fn init_with_config(
         .io = io,
         .client_slots = &.{},
         .free_list_head = .init(0),
-        .pubsub_map = .init(base_allocator),
+        .pubsub_map = .{},
         .kv_allocator = undefined,
         .clock = undefined,
         .store = undefined,
@@ -347,7 +347,7 @@ pub fn deinit(self: *Server) void {
         self.base_allocator.free(entry.key_ptr.*);
         self.base_allocator.free(entry.value_ptr.*);
     }
-    self.pubsub_map.deinit();
+    self.pubsub_map.deinit(self.base_allocator);
 
     for (self.client_slots) |*slot| {
         slot.mailbox.deinit(self.base_allocator);
@@ -898,7 +898,7 @@ fn find_or_create_channel_locked(self: *Server, channel_name: []const u8) !*[]Cl
     const subscribers = try self.base_allocator.alloc(ClientHandle, 0);
     errdefer self.base_allocator.free(subscribers);
 
-    try self.pubsub_map.put(owned_key, subscribers);
+    try self.pubsub_map.put(self.base_allocator, owned_key, subscribers);
     return self.pubsub_map.getPtr(channel_name).?;
 }
 
@@ -1158,7 +1158,7 @@ fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
         .io = testing.io,
         .client_slots = client_slots,
         .free_list_head = .init(pack_free_list_head(if (client_slots.len == 0) invalid_client_slot_index else 0, 0)),
-        .pubsub_map = .init(allocator),
+        .pubsub_map = .{},
         .pubsub_mutex = .unlocked,
         .kv_allocator = undefined,
         .clock = Clock.init(testing.io, 0),
@@ -1186,7 +1186,7 @@ fn deinit_test_server(server: *Server) void {
         server.base_allocator.free(entry.key_ptr.*);
         server.base_allocator.free(entry.value_ptr.*);
     }
-    server.pubsub_map.deinit();
+    server.pubsub_map.deinit(server.base_allocator);
 
     for (server.client_slots) |*slot| {
         slot.mailbox.deinit(server.base_allocator);
@@ -1318,7 +1318,7 @@ fn init_memory_test_server(allocator: Allocator, budget: usize, policy: Config.E
         .io = testing.io,
         .client_slots = &.{},
         .free_list_head = .init(invalid_client_slot_index),
-        .pubsub_map = .init(allocator),
+        .pubsub_map = .{},
         .kv_allocator = undefined,
         .clock = undefined,
         .store = undefined,
@@ -1355,7 +1355,7 @@ fn deinit_memory_test_server(server: *Server) void {
     server.stats.deinit();
     server.store.deinit();
     server.registry.deinit();
-    server.pubsub_map.deinit();
+    server.pubsub_map.deinit(server.base_allocator);
     server.clock.deinit();
     server.base_allocator.destroy(server);
 }

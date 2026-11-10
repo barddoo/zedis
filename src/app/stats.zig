@@ -48,18 +48,18 @@ pub const ServerStats = struct {
     instantaneous_ops_per_sec: u64 = 0,
     last_ops_sample_ns: u64 = 0,
     last_ops_sample_commands: u64 = 0,
-    per_command: std.StringHashMap(CommandStat),
+    per_command: std.StringHashMapUnmanaged(CommandStat),
 
     pub fn init(allocator: Allocator, io: std.Io) ServerStats {
         return .{
             .allocator = allocator,
-            .per_command = std.StringHashMap(CommandStat).init(allocator),
+            .per_command = .{},
             .last_ops_sample_ns = nowNs(io),
         };
     }
 
     pub fn deinit(self: *ServerStats) void {
-        self.per_command.deinit();
+        self.per_command.deinit(self.allocator);
     }
 
     /// Recomputes the ops/sec window. Called from the command path and from
@@ -79,7 +79,7 @@ pub const ServerStats = struct {
         self.commands_processed +%= 1;
         if (failed) self.commands_failed +%= 1;
 
-        const entry = self.per_command.getOrPut(name) catch return;
+        const entry = self.per_command.getOrPut(self.allocator, name) catch return;
         if (!entry.found_existing) entry.value_ptr.* = .{};
         entry.value_ptr.calls +%= 1;
         entry.value_ptr.usec +%= duration_ns / 1000;
