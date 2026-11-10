@@ -92,6 +92,7 @@ test {
     _ = @import("util/client_mailbox.zig");
     _ = @import("commands/bloom.zig");
     _ = @import("commands/connection.zig");
+    _ = @import("commands/hash.zig");
     _ = @import("commands/keys.zig");
     _ = @import("commands/list.zig");
     _ = @import("commands/registry.zig");

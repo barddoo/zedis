@@ -1,5 +1,6 @@
 const std = @import("std");
 const ZedisList = @import("list.zig").ZedisList;
+const ZedisHash = @import("hash.zig").ZedisHash;
 const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const Io = std.Io;
@@ -26,12 +27,13 @@ const testing = std.testing;
 
 pub const ValueType = enum(u8) {
     string = 0,
-    int,
+    int = 1,
     list,
     short_string,
     time_series,
     bloom_filter,
     search_index,
+    hash_map = 7,
 
     pub fn to_rdb_opcode(self: ValueType) u8 {
         return @backingInt(self);
@@ -50,6 +52,7 @@ pub const ZedisValue = union(ValueType) {
     time_series: *TimeSeries,
     bloom_filter: *ScalableBloomFilter,
     search_index: *SearchIndex,
+    hash_map: *ZedisHash,
 };
 
 pub const ZedisObject = struct {
@@ -406,6 +409,7 @@ pub const Store = struct {
             .time_series => {},
             .bloom_filter => {},
             .search_index => {},
+            .hash_map => {},
         }
         return cloned;
     }
@@ -433,6 +437,7 @@ pub const Store = struct {
                 si_ptr.deinit();
                 self.allocator.destroy(si_ptr);
             },
+            .hash_map => |h_ptr| h_ptr.deinit(),
         }
     }
 
@@ -728,6 +733,27 @@ pub const Store = struct {
         const list = try self.get_list(key);
         if (list == null) return try self.create_list(key);
         return list.?;
+    }
+
+    pub fn get_hash(self: *Store, key: []const u8) !?*ZedisHash {
+        assert(key.len > 0);
+        const entry = self.resolve_entry(key, true) orelse return null;
+        switch (entry.object.value) {
+            .hash_map => |h| return h,
+            else => return error.WrongType,
+        }
+    }
+
+    pub fn create_hash(self: *Store, key: []const u8) !*ZedisHash {
+        assert(key.len > 0);
+        const h = try ZedisHash.init(self.allocator);
+        errdefer h.deinit();
+        try self.put_object(key, .{ .value = .{ .hash_map = h } });
+        return self.resolve_entry(key, true).?.object.value.hash_map;
+    }
+
+    pub fn get_or_create_hash(self: *Store, key: []const u8) !*ZedisHash {
+        return (try self.get_hash(key)) orelse try self.create_hash(key);
     }
 
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {

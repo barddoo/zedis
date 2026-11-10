@@ -30,7 +30,7 @@ pub fn get(writer: *Writer, store: *Store, args: []const Value) !void {
             .int => |i| {
                 try resp.write_int_bulk_string(writer, i);
             },
-            .list, .time_series, .bloom_filter, .search_index => return error.WrongType,
+            .list, .time_series, .bloom_filter, .search_index, .hash_map => return error.WrongType,
         }
     } else {
         try resp.write_null(writer);

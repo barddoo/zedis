@@ -4,6 +4,7 @@ const Store = store_mod.Store;
 const ZedisValue = store_mod.ZedisValue;
 const ZedisList = @import("../storage/list.zig").ZedisList;
 const ZedisListNode = @import("../storage/list.zig").ZedisListNode;
+const ZedisHash = @import("../storage/hash.zig").ZedisHash;
 const TimeSeries = @import("../storage/time_series.zig").TimeSeries;
 const Io = std.Io;
 
@@ -38,7 +39,7 @@ fn check_supported(store: *const Store) error{UnsupportedType}!void {
     var it = store.iterator();
     while (it.next()) |entry| {
         switch (entry.object.value) {
-            .string, .short_string, .int, .list, .time_series => {},
+            .string, .short_string, .int, .list, .time_series, .hash_map => {},
             .bloom_filter, .search_index => {
                 log.warn("AOF rewrite cannot express {s} key '{s}'", .{ @tagName(entry.object.value), entry.key });
                 return error.UnsupportedType;
@@ -55,6 +56,7 @@ fn write_value(writer: *Io.Writer, key: []const u8, value: ZedisValue) !void {
         .int => |i| try put(writer, &.{ "SET", key, int_text(&buf, i) }),
         .list => |list| try write_list(writer, key, list),
         .time_series => |ts| try write_time_series(writer, key, ts),
+        .hash_map => |h| try write_hash(writer, key, h),
         .bloom_filter, .search_index => unreachable,
     }
 }
@@ -129,6 +131,35 @@ fn write_time_series(writer: *Io.Writer, key: []const u8, ts: *const TimeSeries)
             sample.value,
         });
     }
+}
+
+/// Pairs per HSET command when chunking a large hash.
+const hash_chunk = 64;
+
+fn write_hash(writer: *Io.Writer, key: []const u8, h: *const ZedisHash) !void {
+    // Each command is: HSET key [field value] * N
+    // Max args = 2 + hash_chunk * 2.
+    var parts: [2 + hash_chunk * 2][]const u8 = undefined;
+    var int_bufs: [hash_chunk][24]u8 = undefined;
+    parts[0] = "HSET";
+    parts[1] = key;
+
+    var n: usize = 0;
+    var it = h.iterator();
+    while (it.next()) |entry| {
+        parts[2 + n * 2] = entry.key_ptr.*;
+        parts[2 + n * 2 + 1] = switch (entry.value_ptr.*) {
+            .string => |s| s,
+            .short_string => |*ss| ss.as_slice(),
+            .int => |i| int_text(&int_bufs[n], i),
+        };
+        n += 1;
+        if (n == hash_chunk) {
+            try put(writer, parts[0 .. 2 + n * 2]);
+            n = 0;
+        }
+    }
+    if (n > 0) try put(writer, parts[0 .. 2 + n * 2]);
 }
 
 fn put(writer: *Io.Writer, parts: []const []const u8) Io.Writer.Error!void {

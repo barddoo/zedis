@@ -175,6 +175,7 @@ pub fn type_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
         .time_series => "tseries-type",
         .bloom_filter => "bloom_filter",
         .search_index => "search_index",
+        .hash_map => "hash",
     } else "none";
 
     try resp.write_bulk_string(writer, type_str);

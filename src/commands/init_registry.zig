@@ -4,6 +4,7 @@ const CommandRegistry = @import("registry.zig").CommandRegistry;
 const connection_commands = @import("connection.zig");
 const string = @import("string.zig");
 const list = @import("list.zig");
+const hash = @import("hash.zig");
 const rdb = @import("rdb.zig");
 const pubsub = @import("pubsub.zig");
 const ts = @import("time_series.zig");
@@ -736,6 +737,96 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = true,
     });
 
+    try registry.register(.{
+        .name = "HSET",
+        .handler = .{ .store_handler = hash.hset },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Set hash field(s)",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "HMSET",
+        .handler = .{ .store_handler = hash.hmset },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Set multiple hash fields (deprecated alias for HSET)",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "HGET",
+        .handler = .{ .store_handler = hash.hget },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Get hash field value",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HMGET",
+        .handler = .{ .store_handler = hash.hmget },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Get multiple hash field values",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HGETALL",
+        .handler = .{ .store_handler = hash.hgetall },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get all hash fields and values",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HDEL",
+        .handler = .{ .store_handler = hash.hdel },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Delete hash fields",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "HEXISTS",
+        .handler = .{ .store_handler = hash.hexists },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Check if hash field exists",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HKEYS",
+        .handler = .{ .store_handler = hash.hkeys },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get all hash field names",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HVALS",
+        .handler = .{ .store_handler = hash.hvals },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get all hash values",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HLEN",
+        .handler = .{ .store_handler = hash.hlen },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get number of fields in a hash",
+        .write_to_aof = false,
+    });
+
     // Redis' CMD_DENYOOM: commands that may allocate store memory and are
     // rejected with -OOM when the budget is exhausted. Commands that only free
     // memory (DEL, LPOP, RPOP, FLUSHDB, ...) and commands that don't touch the
@@ -746,6 +837,7 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",     "LSET",
         "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY", "TS.ALTER",
         "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT",
+        "HSET",        "HMSET",
     };
     for (denyoom_commands) |name| {
         const info = registry.commands.getPtr(name) orelse {
