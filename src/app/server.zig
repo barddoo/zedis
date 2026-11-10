@@ -1428,6 +1428,7 @@ test "memory gate evicts at the command boundary under allkeys-lru" {
 
 fn initCommandTestClient(server: *Server) Client {
     var client: Client = undefined;
+    client.connection = .none;
     client.allocator = server.base_allocator;
     client.authenticated = true;
     client.protocol_version = 2;

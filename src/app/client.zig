@@ -31,11 +31,14 @@ pub const Transport = union(enum) {
         stream: Stream,
         connection: *tls_mod.Connection,
     },
+    /// Sentinel used by in-process test clients that have no real socket.
+    none: void,
 
     pub fn reader(self: Transport, io: std.Io, buffer: []u8) Reader {
         return switch (self) {
             .plain => |stream| .{ .plain = stream.reader(io, buffer) },
             .tls => |t| .{ .tls = tls_mod.Reader.init(t.connection, buffer) },
+            .none => unreachable,
         };
     }
 
@@ -43,6 +46,7 @@ pub const Transport = union(enum) {
         return switch (self) {
             .plain => |stream| .{ .plain = stream.writer(io, buffer) },
             .tls => |t| .{ .tls = tls_mod.Writer.init(t.connection, buffer) },
+            .none => unreachable,
         };
     }
 
@@ -54,6 +58,7 @@ pub const Transport = union(enum) {
                 t.connection.destroy();
                 t.stream.close(io);
             },
+            .none => {},
         }
     }
 
@@ -64,6 +69,7 @@ pub const Transport = union(enum) {
         switch (self) {
             .plain => |stream| stream.shutdown(io, .both) catch {},
             .tls => |t| t.stream.shutdown(io, .both) catch {},
+            .none => {},
         }
     }
 
@@ -485,6 +491,7 @@ pub const Client = struct {
         const stream = switch (self.connection) {
             .plain => |s| s,
             .tls => |t| t.stream,
+            .none => return "",
         };
         var writer: std.Io.Writer = .fixed(buf);
         stream.socket.address.format(&writer) catch return "";
