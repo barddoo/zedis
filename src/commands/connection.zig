@@ -316,8 +316,10 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
             return;
         };
         // Blocking I/O, like SAVE: the rewrite must not suspend the command
-        // path and let another client change the config mid-write.
-        const io = std.Io.Threaded.global_single_threaded.io();
+        // path and let another client change the config mid-write. A local
+        // single-threaded instance is preferred over the debugging global.
+        var threaded: std.Io.Threaded = .init_single_threaded;
+        const io = threaded.io();
         Config.rewrite_file(client.allocator, io, path, client.server.config) catch |err| {
             try writer.print("-ERR Rewriting config file: {s}\r\n", .{@errorName(err)});
             return;

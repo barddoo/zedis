@@ -267,9 +267,11 @@ pub fn read_config(allocator: std.mem.Allocator, io: std.Io, args: std.process.A
 pub fn read_runtime_prefs(allocator: std.mem.Allocator, args: std.process.Args) RuntimePrefs {
     const file_name = find_config_file(allocator, args) orelse return .{};
 
-    // Blocking startup read (pre-runtime): the global single-threaded Io does
-    // file I/O synchronously without needing a zio runtime.
-    const io = std.Io.Threaded.global_single_threaded.io();
+    // Blocking startup read (pre-runtime): a local single-threaded Io does
+    // file I/O synchronously without needing a zio runtime. Do not use
+    // `global_single_threaded`; std reserves it for debugging.
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
     const content = read_config_bytes(allocator, io, file_name) catch return .{};
     defer allocator.free(content);
 

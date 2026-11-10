@@ -14,7 +14,13 @@ pub fn save(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
     // so a suspension here would let another client run while the snapshot
     // walks the store. Blocking I/O stalls the single executor for the
     // duration, which is what Redis' SAVE does to the server too.
-    const io = std.Io.Threaded.global_single_threaded.io();
+    //
+    // A local `init_single_threaded` instance is the intended way to get a
+    // blocking Io; std documents `global_single_threaded` as a debugging
+    // escape hatch. The instance stays on this stack frame and `io` is not
+    // retained past `write_file`.
+    var threaded: std.Io.Threaded = .init_single_threaded;
+    const io = threaded.io();
 
     // SAVE command persists the single store
     var zdb = try ZDB.Writer.init(client.allocator, client.get_current_store(), client.server.config.dbfilename, client.server.config, io);
