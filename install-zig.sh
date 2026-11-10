@@ -1,11 +1,11 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Install Zig from the community mirrors, falling back to ziglang.org.
 # Follows https://ziglang.org/download/community-mirrors/: every tarball is verified against
 # the ZSF minisign key and the signature's trusted-comment "file" field must match the name
 # we asked for (downgrade protection). A mirror that fails any step is skipped.
 #
 # usage: install-zig.sh VERSION MINISIGN_PUBKEY [DEST]
-set -euo pipefail
+set -eu
 
 version=${1:?zig version required}
 pubkey=${2:?minisign public key required}
@@ -22,7 +22,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 mirror_list=https://ziglang.org/download/community-mirrors.txt
-mirrors=$(curl -fsSL --retry 3 "$mirror_list" | shuf || true)
+mirrors=$(curl -fsSL --retry 3 "$mirror_list" | awk 'BEGIN{srand()} {print rand(), $0}' | sort -n | cut -d' ' -f2- || true)
 if [ -z "$mirrors" ]; then
   echo "could not fetch $mirror_list; using ziglang.org only" >&2
 fi
