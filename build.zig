@@ -7,30 +7,16 @@ pub fn build(b: *std.Build) void {
     const zio = b.dependency("zio", .{ .target = target, .optimize = optimize });
     const zio_mod = zio.module("zio");
 
-    const mbedtls = b.dependency("mbedtls", .{ .target = target, .optimize = optimize });
-    const mbedtls_lib = mbedtls.artifact("mbedtls");
-
-    // Zig 0.17 dropped @cImport; the translate-c package turns the Mbed TLS
-    // headers into a normal Zig module. `linkLibrary` also exposes the
-    // artifact's installed header tree to the translator.
-    const Translator = @import("translate_c").Translator;
-    const translate_c_dep = b.dependency("translate_c", .{ .target = target, .optimize = optimize });
-    const mbedtls_translate: Translator = .init(translate_c_dep, .{
-        .name = "mbedtls_c",
-        .c_source_file = b.path("src/app/mbedtls_c.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    mbedtls_translate.linkLibrary(mbedtls_lib);
-    // The package installs the public headers only; translate-c also reaches
-    // internal headers (tf-psa-crypto's built-in drivers) through these paths.
-    for (mbedtls_lib.root_module.include_dirs.items) |include_dir| switch (include_dir) {
-        .path, .path_after => |path| mbedtls_translate.addIncludePath(path),
-        .path_system => |path| mbedtls_translate.addSystemIncludePath(path),
-        .other_step => |other| mbedtls_translate.addIncludePath(other.getEmittedIncludeTree()),
-        else => {},
-    };
-    const mbedtls_c = mbedtls_translate.mod;
+    const openssl_prefix = b.option(
+        []const u8,
+        "openssl-prefix",
+        "OpenSSL installation prefix (defaults to Homebrew on macOS, system elsewhere)",
+    ) orelse defaultOpenSslPrefix(b, target);
+    const openssl_static = b.option(
+        bool,
+        "openssl-static",
+        "Link OpenSSL statically (disable with -Dopenssl-static=false)",
+    ) orelse true;
 
     // --- Main executable ---
     const exe = b.addExecutable(.{
@@ -42,11 +28,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("zio", zio_mod);
-    exe.root_module.addImport("mbedtls_c", mbedtls_c);
-    exe.root_module.linkLibrary(mbedtls_lib);
-    addMbedtlsIncludes(exe.root_module, mbedtls_lib);
-    exe.root_module.addCSourceFile(.{ .file = b.path("src/app/mbedtls_debug_helpers.c"), .flags = &.{} });
-    exe.root_module.link_libc = true;
+    addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -71,11 +53,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .debug,
     });
     test_mod.addImport("zio", zio_mod);
-    test_mod.addImport("mbedtls_c", mbedtls_c);
-    test_mod.linkLibrary(mbedtls_lib);
-    addMbedtlsIncludes(test_mod, mbedtls_lib);
-    test_mod.addCSourceFile(.{ .file = b.path("src/app/mbedtls_debug_helpers.c"), .flags = &.{} });
-    test_mod.link_libc = true;
+    addTlsSources(b, test_mod, openssl_prefix, openssl_static);
 
     const unit_tests = b.addTest(.{
         .name = "test-unit",
@@ -147,13 +125,42 @@ pub fn build(b: *std.Build) void {
     bench_all_step.dependOn(&run_bench_micro.step);
 }
 
-/// The mbedtls package only installs public headers; the C shim and the
-/// translate-c unit also need the private include directories.
-fn addMbedtlsIncludes(module: *std.Build.Module, lib: *std.Build.Step.Compile) void {
-    for (lib.root_module.include_dirs.items) |include_dir| switch (include_dir) {
-        .path, .path_after => |path| module.addIncludePath(path),
-        .path_system => |path| module.addSystemIncludePath(path),
-        .other_step => |other| module.addIncludePath(other.getEmittedIncludeTree()),
-        else => {},
+/// Adds the OpenSSL glue and links libssl/libcrypto. `prefix` is only needed
+/// for keg-only installs such as Homebrew's OpenSSL.
+fn addTlsSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8, static: bool) void {
+    module.addCSourceFile(.{ .file = b.path("src/app/openssl_glue.c"), .flags = &.{} });
+    module.addIncludePath(b.path("src/app"));
+    module.link_libc = true;
+
+    if (prefix) |root| {
+        module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include" }) });
+        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "lib" }) });
+    }
+
+    const link_mode: std.builtin.LinkMode = if (static) .static else .dynamic;
+    module.linkSystemLibrary("ssl", .{ .preferred_link_mode = link_mode });
+    module.linkSystemLibrary("crypto", .{ .preferred_link_mode = link_mode });
+}
+
+/// macOS keeps OpenSSL in a keg-only Homebrew prefix; Linux installs it on the
+/// system search path, so only macOS needs probing.
+fn defaultOpenSslPrefix(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
+    if (target.result.os.tag != .macos) return null;
+
+    const candidates = [_][]const u8{
+        "/opt/homebrew/opt/openssl@4",
+        "/opt/homebrew/opt/openssl@3",
+        "/usr/local/opt/openssl@4",
+        "/usr/local/opt/openssl@3",
     };
+    for (candidates) |root| {
+        const header = b.pathJoin(&.{ root, "include", "openssl", "ssl.h" });
+        if (exists(b, header)) return root;
+    }
+    return null;
+}
+
+fn exists(b: *std.Build, path: []const u8) bool {
+    std.Io.Dir.accessAbsolute(b.graph.io, path, .{}) catch return false;
+    return true;
 }

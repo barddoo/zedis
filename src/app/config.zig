@@ -167,19 +167,22 @@ appenddirname: []const u8 = "appendonlydir", // (not implemented — use dir ins
 /// AOF fsync policy (always, everysec, no).
 appendfsync: []const u8 = "everysec",
 /// Disable fsync during BGSAVE or BGREWRITEAOF.
-no_appendfsync_on_rewrite: bool = false, // (not implemented)
-/// Trigger AOF rewrite when size grows by this percentage.
-auto_aof_rewrite_percentage: u32 = 100, // (not implemented)
+no_appendfsync_on_rewrite: bool = false, // (not implemented — rewrites run inline, not beside the writer)
+/// Rewrite the AOF when it has grown by this percentage since the last
+/// rewrite (or startup). 0 disables automatic rewrites.
+auto_aof_rewrite_percentage: u32 = 100,
 /// Minimum AOF size to trigger auto rewrite.
-auto_aof_rewrite_min_size: []const u8 = "64mb", // (not implemented)
-/// Load truncated AOF file on startup.
-aof_load_truncated: bool = true, // (not implemented)
-/// Allow loading corrupted AOF with warnings.
-aof_load_broken: bool = false, // (not implemented)
-/// Max size of broken AOF file to load (bytes).
-aof_load_broken_max_size: u32 = 4096, // (not implemented)
+auto_aof_rewrite_min_size: []const u8 = "64mb",
+/// On startup, accept an AOF whose last command was cut off by a crash and
+/// truncate it. When off, a truncated AOF stops startup.
+aof_load_truncated: bool = true,
+/// On startup, also accept a corrupt AOF tail of up to `aof-load-broken-max-size`
+/// bytes, discarding it. Other corruption stops startup.
+aof_load_broken: bool = false,
+/// Largest corrupt AOF tail (bytes) that `aof-load-broken` will discard.
+aof_load_broken_max_size: u32 = 4096,
 /// Use RDB preamble in AOF for faster restarts.
-aof_use_rdb_preamble: bool = true, // (not implemented)
+aof_use_rdb_preamble: bool = true, // (not implemented — a rewrite emits commands; the RDB format cannot hold every value type)
 
 // Legacy fields
 timeout_seconds: u64 = 0,

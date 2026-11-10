@@ -164,6 +164,8 @@ fn writeMetrics(server: *Server, writer: *std.Io.Writer) !void {
             "zedis_aof_fsync_count_total {d}\n" ++
             "# TYPE zedis_aof_last_fsync_duration_us gauge\n" ++
             "zedis_aof_last_fsync_duration_us {d}\n" ++
+            "# TYPE zedis_aof_rewrites_total counter\n" ++
+            "zedis_aof_rewrites_total {d}\n" ++
             "# TYPE zedis_slowlog_entries gauge\n" ++
             "zedis_slowlog_entries {d}\n",
         .{
@@ -191,6 +193,7 @@ fn writeMetrics(server: *Server, writer: *std.Io.Writer) !void {
             @intFromBool(server.aof_writer.failure() == null),
             aof_fsync.count,
             aof_fsync.duration_us,
+            server.aof_writer.rewriteInfo().count,
             server.slowlog.lenCount(),
         },
     );
@@ -229,6 +232,7 @@ fn writeInfo(server: *Server, writer: *std.Io.Writer, filter: []const u8) !void 
     const memory = server.get_memory_stats();
     const counters = server.store.counters;
     const aof_fsync = server.aof_writer.lastFsyncInfo();
+    const rewrite = server.aof_writer.rewriteInfo();
 
     server.stats.updateOps(server.io);
 
@@ -323,9 +327,9 @@ fn writeInfo(server: *Server, writer: *std.Io.Writer, filter: []const u8) !void 
                 "rdb_last_save_time:{d}\r\n" ++
                 "rdb_last_bgsave_status:ok\r\n" ++
                 "aof_enabled:{d}\r\n" ++
-                "aof_rewrite_in_progress:0\r\n" ++
+                "aof_rewrite_in_progress:{d}\r\n" ++
                 "aof_rewrite_scheduled:0\r\n" ++
-                "aof_last_bgrewrite_status:ok\r\n" ++
+                "aof_last_bgrewrite_status:{s}\r\n" ++
                 "aof_last_write_status:{s}\r\n" ++
                 "aof_current_size:{d}\r\n" ++
                 "aof_base_size:{d}\r\n" ++
@@ -333,11 +337,15 @@ fn writeInfo(server: *Server, writer: *std.Io.Writer, filter: []const u8) !void 
                 "aof_last_fsync_status:{s}\r\n" ++
                 "aof_last_fsync_time:{d}\r\n" ++
                 "aof_last_fsync_duration_us:{d}\r\n" ++
-                "aof_fsync_count:{d}\r\n\r\n",
+                "aof_fsync_count:{d}\r\n" ++
+                "aof_rewrites:{d}\r\n" ++
+                "aof_last_rewrite_time:{d}\r\n\r\n",
             .{
                 server.stats.rdb_changes_since_last_save,
                 server.stats.rdb_last_save_time,
                 @intFromBool(server.aof_writer.enabled),
+                @intFromBool(rewrite.active),
+                if (rewrite.last_ok) "ok" else "err",
                 if (server.aof_writer.failure() != null) "err" else "ok",
                 server.aof_writer.currentSize(),
                 server.aof_writer.baseSize(),
@@ -346,6 +354,8 @@ fn writeInfo(server: *Server, writer: *std.Io.Writer, filter: []const u8) !void 
                 aof_fsync.seconds,
                 aof_fsync.duration_us,
                 aof_fsync.count,
+                rewrite.count,
+                rewrite.last_seconds,
             },
         );
     }
@@ -682,6 +692,25 @@ pub fn shutdown_cmd(client: *Client, args: []const Value, writer: *std.Io.Writer
 
     try resp.write_ok(writer);
     client.server.requestShutdown(client.slot_handle);
+}
+
+// --- BGREWRITEAOF ---
+
+/// Starts rewriting the AOF as a snapshot of the dataset on a background
+/// thread. The reply only says it started; progress and the outcome are in
+/// `INFO persistence` (`aof_rewrite_in_progress`, `aof_last_bgrewrite_status`).
+pub fn bgrewriteaof(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
+    _ = args;
+    client.server.start_aof_rewrite() catch |err| {
+        try resp.write_error(writer, switch (err) {
+            error.AofDisabled => "ERR appendonly is disabled",
+            error.RewriteInProgress => "ERR Background append only file rewriting already in progress",
+            error.AofFailing => "ERR the AOF is failing; a rewrite cannot start",
+            else => "ERR could not start the AOF rewrite",
+        });
+        return;
+    };
+    try resp.write_simple_string(writer, "Background append only file rewriting started");
 }
 
 // --- COMMAND ---

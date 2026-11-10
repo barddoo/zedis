@@ -96,6 +96,8 @@ createdTime: i64,
 
 // AOF logging
 aof_writer: aof.Writer,
+/// Parsed `auto-aof-rewrite-min-size`, so the per-write size check stays cheap.
+aof_rewrite_min_size: u64 = 0,
 
 // Observability
 stats: ServerStats,
@@ -246,16 +248,6 @@ pub fn init_with_config(
     const now = server.clock.now().toMilliseconds();
     server.createdTime = now;
 
-    // AOF
-    server.aof_writer = try aof.Writer.init(
-        base_allocator,
-        io,
-        config.appendonly,
-        config.appendfilename,
-        config.dir,
-        std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
-    );
-
     // Rebind self-references against the stable, final location.
     server.store.clock = &server.clock;
     server.kv_allocator.attach_store(&server.store);
@@ -277,14 +269,26 @@ pub fn init_with_config(
     // Load AOF file if it exists
     // 'true' to be replaced with user option (use aof/rdb on boot)
     if (true) {
-        if (aof.Reader.init(base_allocator, &server.store, &server.registry, io, config.dir, config.appendfilename)) |reader_value| {
+        const load_options: aof.LoadOptions = .{
+            .load_truncated = config.aof_load_truncated,
+            .load_broken = config.aof_load_broken,
+            .broken_max_size = config.aof_load_broken_max_size,
+            // Only an AOF this server will keep appending to may be edited.
+            .repair = config.appendonly,
+        };
+        if (aof.Reader.init(base_allocator, &server.store, &server.registry, io, config.dir, config.appendfilename, load_options)) |reader_value| {
             var reader = reader_value;
             log.info("Loading AOF into store", .{});
             reader.read() catch |err| {
-                log.warn("Failed to read AOF: {s}", .{@errorName(err)});
+                log.err("Refusing to start: the AOF could not be loaded safely ({s})", .{@errorName(err)});
+                return err;
             };
-        } else |err| {
-            log.debug("AOF not available: {s}", .{@errorName(err)});
+        } else |err| switch (err) {
+            error.FileNotFound => log.debug("No AOF to load", .{}),
+            else => {
+                log.err("Refusing to start: cannot open the AOF ({s})", .{@errorName(err)});
+                return err;
+            },
         }
     } else {
         if (Reader.rdb_file_exists()) {
@@ -303,6 +307,18 @@ pub fn init_with_config(
             }
         }
     }
+
+    // After loading: the writer starts appending at the file's length, which a
+    // repaired AOF has just changed.
+    server.aof_writer = try aof.Writer.init(
+        base_allocator,
+        io,
+        config.appendonly,
+        config.appendfilename,
+        config.dir,
+        std.meta.stringToEnum(aof.Writer.FsyncPolicy, config.appendfsync) orelse .everysec,
+    );
+    server.aof_rewrite_min_size = try Config.parse_memory_size(config.auto_aof_rewrite_min_size);
 
     log.info("Server initialized - Fixed: {}MB, KV: {}MB", .{
         config.fixed_memory_size() / (1024 * 1024),
@@ -445,7 +461,23 @@ pub fn execute_locked(self: *Server, client: *Client, args: []const Value, respo
     const ok = self.process_command_direct(client, args, response_writer);
 
     if (logging == .absolute_ttl) self.log_absolute_ttl(client, args, existed);
+    if (logging != .none) self.maybe_rewrite_aof();
     return ok;
+}
+
+/// Starts rewriting the AOF on a background thread; see `aof.Writer.start_rewrite`.
+pub fn start_aof_rewrite(self: *Server) !void {
+    try self.aof_writer.start_rewrite(&self.registry);
+}
+
+/// Starts a background AOF rewrite once the file has outgrown its last one,
+/// after the command that grew it has run and been logged.
+fn maybe_rewrite_aof(self: *Server) void {
+    const now_s = @divTrunc(self.clock.now().toMilliseconds(), 1000);
+    if (!self.aof_writer.rewrite_due(self.aof_rewrite_min_size, self.config.auto_aof_rewrite_percentage, now_s)) return;
+
+    log.info("AOF is {d} bytes; rewriting it in the background", .{self.aof_writer.currentSize()});
+    self.start_aof_rewrite() catch |err| log.warn("Could not start an AOF rewrite: {s}", .{@errorName(err)});
 }
 
 /// Logs the state an EXPIRE or SETEX left behind: `SET key value` for SETEX,

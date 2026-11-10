@@ -68,6 +68,13 @@ pub const CommandRegistry = struct {
         return self.commands.get(name);
     }
 
+    /// Whether `name` (any case) is a registered command.
+    pub fn knows_command(self: *CommandRegistry, name: []const u8) bool {
+        var buf: [32]u8 = undefined;
+        if (name.len > buf.len) return false;
+        return self.commands.contains(std.ascii.upperString(&buf, name));
+    }
+
     pub fn should_write_to_aof(self: *CommandRegistry, name: []const u8) bool {
         var buf: [32]u8 = undefined;
         if (name.len > buf.len) return false;

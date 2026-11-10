@@ -617,6 +617,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "BGREWRITEAOF",
+        .handler = .{ .client_handler = server_commands.bgrewriteaof },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Rewrite the append-only file as a snapshot of the dataset",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
         .name = "SHUTDOWN",
         .handler = .{ .client_handler = server_commands.shutdown_cmd },
         .min_args = 1,

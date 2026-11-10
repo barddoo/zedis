@@ -23,7 +23,7 @@ A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), 
   for allocating commands, and cgroup-aware auto-sizing inside containers.
 - **Pub/Sub**: Decoupled communication between services, with push delivery to idle
   subscribers.
-- **TLS**: Optional TLS 1.2/1.3 listener (Mbed TLS) with certificate/key/CA
+- **TLS**: Optional TLS 1.2/1.3 listener (OpenSSL) with certificate/key/CA
   configuration and optional mutual TLS via `tls-auth-clients`.
 - **Observability**: Real `INFO` counters (connections, ops/sec, hit rate,
   memory, AOF state), `SLOWLOG`, `LATENCY`, and a `METRICS` command exposing
@@ -152,6 +152,12 @@ See `docs/server-architecture.md` for the current server thread model and reques
 See `docs/memory-architecture.md` for the current allocator layout, memory budgets, and runtime allocation behavior. See `docs/store-cache-layout.md` for the store's hash-table layout and cache behavior.
 
 ### Building for Development
+
+TLS support links OpenSSL. On macOS install it with `brew install openssl@4`
+(the build auto-detects the Homebrew keg); on Debian/Ubuntu install
+`libssl-dev`, and on Alpine install `openssl-dev openssl-libs-static`.
+OpenSSL is linked statically by default; pass `-Dopenssl-static=false` for a
+dynamic link, or `-Dopenssl-prefix=/path` for a non-standard prefix.
 
 ```bash
 # Build in debug mode (default)

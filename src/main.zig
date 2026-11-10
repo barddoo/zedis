@@ -84,6 +84,7 @@ pub fn main(init: std.process.Init) !void {
 // with tests so `zig build test` runs them.
 test {
     _ = @import("persistence/aof.zig");
+    _ = @import("persistence/aof_snapshot.zig");
     _ = @import("benchmarks/bench_runner.zig");
     _ = @import("benchmarks/metrics.zig");
     _ = @import("storage/bloom/bloom_filter.zig");

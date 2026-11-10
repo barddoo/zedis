@@ -7,7 +7,7 @@ FROM alpine:3.20 AS builder
 
 ARG ZIG_VERSION=0.17.0
 
-RUN apk add --no-cache curl xz
+RUN apk add --no-cache curl xz openssl-dev openssl-libs-static
 
 RUN case "$(uname -m)" in \
         x86_64)  ZIG_ARCH=x86_64  ;; \
@@ -23,7 +23,7 @@ WORKDIR /build
 COPY build.zig build.zig.zon ./
 COPY src src/
 
-RUN zig build -Drelease -Dtarget="$(uname -m)-linux-musl"
+RUN zig build -Drelease -Dopenssl-static=true -Dtarget="$(uname -m)-linux-musl"
 
 ##############################################################################
 # Stage: create data dir with correct ownership for distroless

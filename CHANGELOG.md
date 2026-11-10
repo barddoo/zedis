@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- AOF rewrite: `BGREWRITEAOF` and automatic rewrites (`auto-aof-rewrite-percentage`, `auto-aof-rewrite-min-size`) replace the AOF with a snapshot of the live dataset, so it no longer grows without bound. A rewrite writes strings (with TTLs), lists and time series as commands, fsyncs a temp file, then atomically renames it into place. It runs inline and blocks the server for its duration, like `SAVE`, and is refused (leaving the AOF untouched) while the dataset holds bloom filters or search indexes, which commands cannot recreate. `INFO` reports `aof_rewrites`, `aof_last_rewrite_time` and `aof_last_bgrewrite_status`; `METRICS` reports `zedis_aof_rewrites_total`.
+
 - Real observability: `INFO` now reports live command, connection, keyspace
   hit/miss, expiry, eviction, network, memory, CPU, and AOF counters; new
   `INFO commandstats`; `SLOWLOG GET|LEN|RESET`; `LATENCY LATEST|HISTORY|RESET|DOCTOR`;
@@ -24,8 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deadline and reply `-TIMEOUT` instead of stalling without bound. `SCAN`
   remains the `KEYS` replacement; the timeout bounds a stall rather than
   removing it.
-- TLS listener via Mbed TLS: `tls-port`, `tls-cert-file`, `tls-key-file`, `tls-ca-cert-file`, `tls-auth-clients` (`yes`/`no`/`optional`) and `tls-protocols`. TLS can run alongside plaintext or replace it with `port 0`; mutual TLS verifies client certificates against the configured CA.
+- TLS listener via OpenSSL: `tls-port`, `tls-cert-file`, `tls-key-file`, `tls-ca-cert-file`, `tls-auth-clients` (`yes`/`no`/`optional`) and `tls-protocols`. TLS can run alongside plaintext or replace it with `port 0`; mutual TLS verifies client certificates against the configured CA. OpenSSL is linked statically by default.
 - RESP3 support, negotiated per connection with `HELLO [2|3] [AUTH default <password>] [SETNAME name]`. Connections stay on RESP2 until a client sends `HELLO 3`. Under RESP3, missing values reply with the null type (`_`), floats with the double type (`,`), and `CONFIG GET` and `BF.INFO` with a map (`%`). Pub/sub deliveries and `SUBSCRIBE`/`UNSUBSCRIBE` replies are push messages (`>`), while RESP2 subscribers on the same channel keep receiving arrays.
+
+### Changed
+
+- Startup no longer carries on after a failed AOF load. A damaged or unreplayable AOF now stops the server with an error instead of serving a partial dataset and appending to the bad file. `aof-load-truncated` (default `yes`) lets it cut off a final command left half-written by a crash, and `aof-load-broken` with `aof-load-broken-max-size` lets it discard a small corrupt tail; the cut is applied to the file so later writes append to a valid log. Any other corruption, or a command this build does not know, still stops startup.
+- The AOF is now loaded before its writer opens, since the writer begins appending at the file's length.
+
+### Fixed
+
+- A float reply longer than 32 characters (for example a time-series sample of `1e300`) overflowed a fixed buffer: a panic in safe builds, truncated output in `ReleaseFast`.
 
 ## [0.2.1] - 2026-10-23
 

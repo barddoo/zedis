@@ -10,10 +10,11 @@ const Io = std.Io;
 const Writer = Io.Writer;
 
 /// Protocol version the reply being written must use (2 or 3). The registry
-/// sets it from the client before every command. A plain global is sound
-/// because commands run one at a time on a single executor and handlers never
-/// suspend, so nothing can interleave between that assignment and the writes.
-pub var version: u8 = 2;
+/// sets it from the client before every command. Thread-local because commands
+/// also run off the executor (the AOF rewrite thread replays the log); on one
+/// thread nothing can interleave between that assignment and the writes, as
+/// handlers never suspend.
+pub threadlocal var version: u8 = 2;
 
 // --- RESP Writing Helpers ---
 
@@ -152,12 +153,12 @@ pub fn write_null(writer: *Writer) !void {
 
 /// A RESP3 double, or its text in a bulk string under RESP2.
 pub fn write_double_bulk_string(writer: *Writer, value: f64) !void {
-    var buf: [32]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, "{d}", .{value}) catch unreachable;
+    // Formatted straight into the reply: `{d}` prints every digit, so a value
+    // like 1e300 runs to 301 characters and fits no fixed buffer.
     if (version >= 3) {
-        try writer.print(",{s}\r\n", .{formatted});
+        try writer.print(",{d}\r\n", .{value});
     } else {
-        try writer.print("${d}\r\n{s}\r\n", .{ formatted.len, formatted });
+        try writer.print("${d}\r\n{d}\r\n", .{ std.fmt.count("{d}", .{value}), value });
     }
 }
 
@@ -198,6 +199,27 @@ test "double reply is a RESP3 double or a RESP2 bulk string" {
     try expect_reply(write_double_bulk_string, .{std.math.inf(f64)}, &.{
         .{ .version = 3, .expected = ",inf\r\n" },
     });
+}
+
+test "double reply has no length limit on its digits" {
+    const saved = version;
+    defer version = saved;
+    var digits: [301]u8 = undefined;
+    @memset(&digits, '0');
+    digits[0] = '1';
+
+    var expected_buf: [320]u8 = undefined;
+    var buffer: [320]u8 = undefined;
+    for ([_]u8{ 2, 3 }) |protocol| {
+        version = protocol;
+        const expected = if (protocol == 2)
+            try std.fmt.bufPrint(&expected_buf, "${d}\r\n{s}\r\n", .{ digits.len, digits })
+        else
+            try std.fmt.bufPrint(&expected_buf, ",{s}\r\n", .{digits});
+        var writer: Writer = .fixed(&buffer);
+        try write_double_bulk_string(&writer, 1e300);
+        try std.testing.expectEqualStrings(expected, writer.buffered());
+    }
 }
 
 test "map header is a RESP3 map or a flattened RESP2 array" {

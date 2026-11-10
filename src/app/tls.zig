@@ -1,20 +1,44 @@
-//! Server-side TLS for client connections, backed by Mbed TLS.
+//! Server-side TLS for client connections, backed by OpenSSL.
 //!
-//! The zio runtime is cooperative: a "blocking" socket read only suspends the
-//! calling coroutine, so Mbed TLS can use its ordinary blocking BIO callbacks
-//! on top of `std.Io.net.Stream`. The SSL context is not thread-safe, but the
-//! server runs a single executor and serializes writes per client with the
-//! client's write mutex, so one context is only ever touched by one coroutine
-//! at a time.
+//! OpenSSL is driven through memory BIOs: every socket read/write stays in
+//! Zig, so zio can suspend the calling coroutine instead of blocking the
+//! executor. The `Connection` owns one `SSL` object and both BIOs; zio
+//! serializes writes per client with the client's write mutex, so an SSL
+//! object is only touched by one coroutine at a time.
 
 const std = @import("std");
-
-const c = @import("mbedtls_c");
 
 const Io = std.Io;
 const Stream = Io.net.Stream;
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.tls);
+
+const OpenSslCtx = opaque {};
+const OpenSslConn = opaque {};
+
+extern fn zedis_tls_ctx_new(
+    cert_file: [*:0]const u8,
+    key_file: [*:0]const u8,
+    ca_file: [*:0]const u8,
+    auth_clients: c_int,
+    min_version: c_int,
+    max_version: c_int,
+    err: [*]u8,
+    err_len: usize,
+) ?*OpenSslCtx;
+extern fn zedis_tls_ctx_free(ctx: *OpenSslCtx) void;
+extern fn zedis_tls_conn_new(ctx: *OpenSslCtx, err: [*]u8, err_len: usize) ?*OpenSslConn;
+extern fn zedis_tls_conn_free(conn: *OpenSslConn) void;
+extern fn zedis_tls_conn_error(conn: *OpenSslConn) [*:0]const u8;
+extern fn zedis_tls_version_1_2() c_int;
+extern fn zedis_tls_version_1_3() c_int;
+extern fn zedis_tls_handshake(conn: *OpenSslConn) c_int;
+extern fn zedis_tls_feed(conn: *OpenSslConn, data: *const anyopaque, len: usize) c_int;
+extern fn zedis_tls_pending(conn: *OpenSslConn) c_int;
+extern fn zedis_tls_flush(conn: *OpenSslConn, buf: [*]u8, cap: usize) c_int;
+extern fn zedis_tls_read(conn: *OpenSslConn, buf: [*]u8, len: usize) c_int;
+extern fn zedis_tls_write(conn: *OpenSslConn, buf: *const anyopaque, len: usize) c_int;
+extern fn zedis_tls_shutdown(conn: *OpenSslConn) void;
 
 pub const AuthClients = enum {
     /// Do not ask the client for a certificate.
@@ -38,108 +62,60 @@ pub const InitError = error{
     MissingCertFile,
     MissingKeyFile,
     MissingCaCertFile,
-    CryptoInitFailed,
-    CertParseFailed,
-    KeyParseFailed,
-    CaParseFailed,
     ConfigFailed,
     UnsupportedProtocol,
     OutOfMemory,
 };
 
-/// Process-wide TLS configuration shared by every accepted connection. The
-/// Mbed TLS contexts stay at a fixed address for their whole lifetime because
-/// `mbedtls_ssl_conf_own_cert` stores pointers into them.
+/// Process-wide TLS configuration shared by every accepted connection.
 pub const Server = struct {
     allocator: Allocator,
-    config: c.mbedtls_ssl_config,
-    cert: c.mbedtls_x509_crt,
-    key: c.mbedtls_pk_context,
-    ca: c.mbedtls_x509_crt,
-    has_ca: bool,
+    ctx: *OpenSslCtx,
 
     pub fn create(allocator: Allocator, options: Options) InitError!*Server {
-        const self = try allocator.create(Server);
-        errdefer allocator.destroy(self);
-
-        self.* = .{
-            .allocator = allocator,
-            .config = undefined,
-            .cert = undefined,
-            .key = undefined,
-            .ca = undefined,
-            .has_ca = false,
-        };
-        try self.setup(options);
-        return self;
-    }
-
-    fn setup(self: *Server, options: Options) InitError!void {
         if (options.cert_file.len == 0) return error.MissingCertFile;
         if (options.key_file.len == 0) return error.MissingKeyFile;
         if (options.auth_clients != .no and options.ca_file.len == 0) return error.MissingCaCertFile;
 
-        if (c.psa_crypto_init() != 0) return error.CryptoInitFailed;
+        const range = try parseProtocolRange(options.protocols);
+        const auth: c_int = switch (options.auth_clients) {
+            .no => 0,
+            .optional => 1,
+            .required => 2,
+        };
 
-        c.mbedtls_ssl_config_init(&self.config);
-        c.mbedtls_x509_crt_init(&self.cert);
-        c.mbedtls_pk_init(&self.key);
-        c.mbedtls_x509_crt_init(&self.ca);
-        errdefer self.free();
+        const cert = try allocator.dupeSentinel(u8, options.cert_file, 0);
+        defer allocator.free(cert);
+        const key = try allocator.dupeSentinel(u8, options.key_file, 0);
+        defer allocator.free(key);
+        const ca = try allocator.dupeSentinel(u8, options.ca_file, 0);
+        defer allocator.free(ca);
 
-        const cert_path = try self.allocator.dupeSentinel(u8, options.cert_file, 0);
-        defer self.allocator.free(cert_path);
-        if (c.mbedtls_x509_crt_parse_file(&self.cert, cert_path.ptr) != 0)
-            return error.CertParseFailed;
-
-        const key_path = try self.allocator.dupeSentinel(u8, options.key_file, 0);
-        defer self.allocator.free(key_path);
-        if (c.mbedtls_pk_parse_keyfile(&self.key, key_path.ptr, null) != 0)
-            return error.KeyParseFailed;
-
-        if (options.ca_file.len != 0) {
-            const ca_path = try self.allocator.dupeSentinel(u8, options.ca_file, 0);
-            defer self.allocator.free(ca_path);
-            if (c.mbedtls_x509_crt_parse_file(&self.ca, ca_path.ptr) != 0)
-                return error.CaParseFailed;
-            self.has_ca = true;
-        }
-
-        if (c.mbedtls_ssl_config_defaults(
-            &self.config,
-            c.MBEDTLS_SSL_IS_SERVER,
-            c.MBEDTLS_SSL_TRANSPORT_STREAM,
-            c.MBEDTLS_SSL_PRESET_DEFAULT,
-        ) != 0) return error.ConfigFailed;
-
-        try self.applyProtocols(options.protocols);
-
-        c.mbedtls_ssl_conf_authmode(&self.config, switch (options.auth_clients) {
-            .no => c.MBEDTLS_SSL_VERIFY_NONE,
-            .optional => c.MBEDTLS_SSL_VERIFY_OPTIONAL,
-            .required => c.MBEDTLS_SSL_VERIFY_REQUIRED,
-        });
-        if (self.has_ca) c.mbedtls_ssl_conf_ca_chain(&self.config, &self.ca, null);
-        if (c.mbedtls_ssl_conf_own_cert(&self.config, &self.cert, &self.key) != 0)
+        var err: [256]u8 = undefined;
+        err[0] = 0;
+        const ctx = zedis_tls_ctx_new(
+            cert.ptr,
+            key.ptr,
+            ca.ptr,
+            auth,
+            range.min orelse 0,
+            range.max orelse 0,
+            &err,
+            err.len,
+        ) orelse {
+            log.err("OpenSSL configuration failed: {s}", .{std.mem.sliceTo(&err, 0)});
             return error.ConfigFailed;
-    }
+        };
 
-    fn applyProtocols(self: *Server, protocols: []const u8) error{UnsupportedProtocol}!void {
-        const range = try parseProtocolRange(protocols);
-        if (range.min) |version| c.mbedtls_ssl_conf_min_tls_version(&self.config, version);
-        if (range.max) |version| c.mbedtls_ssl_conf_max_tls_version(&self.config, version);
-    }
-
-    fn free(self: *Server) void {
-        c.mbedtls_ssl_config_free(&self.config);
-        c.mbedtls_x509_crt_free(&self.cert);
-        c.mbedtls_pk_free(&self.key);
-        c.mbedtls_x509_crt_free(&self.ca);
+        const self = try allocator.create(Server);
+        self.* = .{ .allocator = allocator, .ctx = ctx };
+        return self;
     }
 
     pub fn destroy(self: *Server) void {
-        self.free();
-        self.allocator.destroy(self);
+        const allocator = self.allocator;
+        zedis_tls_ctx_free(self.ctx);
+        allocator.destroy(self);
     }
 };
 
@@ -150,128 +126,138 @@ pub const Error = error{
     Canceled,
 };
 
-const ProtocolRange = struct {
-    min: ?c.mbedtls_ssl_protocol_version = null,
-    max: ?c.mbedtls_ssl_protocol_version = null,
-};
-
-fn parseProtocolRange(protocols: []const u8) error{UnsupportedProtocol}!ProtocolRange {
-    var range: ProtocolRange = .{};
-    var tokens = std.mem.tokenizeAny(u8, protocols, " \t,");
-    while (tokens.next()) |token| {
-        const version: c.mbedtls_ssl_protocol_version = if (std.mem.eql(u8, token, "TLSv1.2"))
-            c.MBEDTLS_SSL_VERSION_TLS1_2
-        else if (std.mem.eql(u8, token, "TLSv1.3"))
-            c.MBEDTLS_SSL_VERSION_TLS1_3
-        else
-            return error.UnsupportedProtocol;
-
-        range.min = if (range.min) |current| @min(current, version) else version;
-        range.max = if (range.max) |current| @max(current, version) else version;
-    }
-    return range;
-}
-
 /// One TLS-wrapped client socket. Allocated on the heap so the SSL context has
 /// a stable address for its lifetime.
 pub const Connection = struct {
     stream: Stream,
     io: Io,
     server: *Server,
-    ssl: c.mbedtls_ssl_context,
-    initialized: bool = false,
-    /// Set when a BIO callback saw zio cancellation, so `read` can surface it
-    /// instead of the generic Mbed TLS recv failure.
-    canceled: bool = false,
+    conn: *OpenSslConn,
 
     pub fn accept(stream: Stream, io: Io, server: *Server) Error!*Connection {
         const allocator = server.allocator;
         const self = allocator.create(Connection) catch return error.HandshakeFailed;
+
+        var err: [256]u8 = undefined;
+        err[0] = 0;
+        const conn = zedis_tls_conn_new(server.ctx, &err, err.len) orelse {
+            allocator.destroy(self);
+            log.warn("OpenSSL connection setup failed: {s}", .{std.mem.sliceTo(&err, 0)});
+            return error.HandshakeFailed;
+        };
         self.* = .{
             .stream = stream,
             .io = io,
             .server = server,
-            .ssl = undefined,
+            .conn = conn,
         };
-
-        c.mbedtls_ssl_init(&self.ssl);
-        self.initialized = true;
-        errdefer self.destroy();
-
-        if (c.mbedtls_ssl_setup(&self.ssl, &server.config) != 0)
-            return error.HandshakeFailed;
-        c.mbedtls_ssl_set_bio(&self.ssl, self, bioSend, bioRecv, null);
-
-        while (true) {
-            const rc = c.mbedtls_ssl_handshake(&self.ssl);
-            if (rc == 0) return self;
-            switch (rc) {
-                c.MBEDTLS_ERR_SSL_WANT_READ, c.MBEDTLS_ERR_SSL_WANT_WRITE => continue,
-                else => {
-                    log.warn("mbedtls_ssl_handshake failed: {d}", .{rc});
-                    return error.HandshakeFailed;
-                },
-            }
+        errdefer {
+            zedis_tls_conn_free(conn);
+            allocator.destroy(self);
         }
-    }
 
-    pub fn deinit(self: *Connection) void {
-        if (self.initialized) {
-            c.mbedtls_ssl_free(&self.ssl);
-            self.initialized = false;
-        }
+        try self.handshake();
+        return self;
     }
 
     pub fn destroy(self: *Connection) void {
         const allocator = self.server.allocator;
-        self.deinit();
+        zedis_tls_conn_free(self.conn);
         allocator.destroy(self);
     }
 
     /// Sends a best-effort close_notify. The peer may already be gone, so
     /// failures are ignored; the caller closes the socket afterwards.
     pub fn closeNotify(self: *Connection) void {
-        if (!self.initialized) return;
-        _ = c.mbedtls_ssl_close_notify(&self.ssl);
+        zedis_tls_shutdown(self.conn);
+        self.flushOut() catch {};
     }
 
     pub fn read(self: *Connection, buffer: []u8) Error!usize {
         if (buffer.len == 0) return 0;
         while (true) {
-            const rc = c.mbedtls_ssl_read(&self.ssl, buffer.ptr, buffer.len);
+            const rc = zedis_tls_read(self.conn, buffer.ptr, buffer.len);
             if (rc > 0) return @intCast(rc);
-            if (self.canceled) return error.Canceled;
-            switch (rc) {
-                0, c.MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY => return 0,
-                c.MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET,
-                c.MBEDTLS_ERR_SSL_WANT_READ,
-                c.MBEDTLS_ERR_SSL_WANT_WRITE,
-                => continue,
-                c.MBEDTLS_ERR_SSL_TIMEOUT => return error.Canceled,
-                else => {
-                    log.debug("mbedtls_ssl_read failed: {d}", .{rc});
-                    return error.ReadFailed;
-                },
+            if (rc == 0) return 0;
+            if (rc == -2) {
+                // Key updates and alerts may be queued for the peer before we
+                // block waiting for more ciphertext.
+                try self.flushOut();
+                if (!try self.fillInput()) return 0;
+                continue;
             }
+            if (rc == -3) {
+                try self.flushOut();
+                continue;
+            }
+            log.debug("OpenSSL read failed: {s}", .{self.lastError()});
+            return error.ReadFailed;
         }
     }
 
     pub fn writeAll(self: *Connection, bytes: []const u8) Error!void {
         var offset: usize = 0;
         while (offset < bytes.len) {
-            const rc = c.mbedtls_ssl_write(&self.ssl, bytes[offset..].ptr, bytes.len - offset);
+            const rc = zedis_tls_write(self.conn, bytes[offset..].ptr, bytes.len - offset);
             if (rc > 0) {
                 offset += @intCast(rc);
+                if (zedis_tls_pending(self.conn) >= 64 * 1024) try self.flushOut();
                 continue;
             }
-            switch (rc) {
-                c.MBEDTLS_ERR_SSL_WANT_READ, c.MBEDTLS_ERR_SSL_WANT_WRITE => continue,
-                else => {
-                    log.debug("mbedtls_ssl_write failed: {d}", .{rc});
-                    return error.WriteFailed;
-                },
+            if (rc == -3) {
+                try self.flushOut();
+                continue;
             }
+            if (rc == -2) {
+                try self.flushOut();
+                if (!try self.fillInput()) return error.WriteFailed;
+                continue;
+            }
+            log.debug("OpenSSL write failed: {s}", .{self.lastError()});
+            return error.WriteFailed;
         }
+        try self.flushOut();
+    }
+
+    fn handshake(self: *Connection) Error!void {
+        while (true) {
+            const rc = zedis_tls_handshake(self.conn);
+            if (rc == 1) return;
+            if (rc < 0) {
+                log.warn("OpenSSL handshake failed: {s}", .{self.lastError()});
+                return error.HandshakeFailed;
+            }
+            if (zedis_tls_pending(self.conn) > 0) {
+                try self.flushOut();
+                continue;
+            }
+            if (!try self.fillInput()) return error.HandshakeFailed;
+        }
+    }
+
+    fn flushOut(self: *Connection) Error!void {
+        var buffer: [16 * 1024]u8 = undefined;
+        while (true) {
+            const rc = zedis_tls_flush(self.conn, &buffer, buffer.len);
+            if (rc < 0) return error.WriteFailed;
+            if (rc == 0) return;
+            try self.sendRaw(buffer[0..@intCast(rc)]);
+        }
+    }
+
+    fn fillInput(self: *Connection) Error!bool {
+        var buffer: [16 * 1024]u8 = undefined;
+        const n = self.recvRaw(&buffer) catch |err| switch (err) {
+            error.Canceled => return error.Canceled,
+            else => return error.ReadFailed,
+        };
+        if (n == 0) return false;
+        if (zedis_tls_feed(self.conn, &buffer, n) != 0) return error.ReadFailed;
+        return true;
+    }
+
+    fn lastError(self: *Connection) []const u8 {
+        return std.mem.span(zedis_tls_conn_error(self.conn));
     }
 
     fn sendRaw(self: *Connection, bytes: []const u8) !void {
@@ -283,26 +269,9 @@ pub const Connection = struct {
     fn recvRaw(self: *Connection, buffer: []u8) !usize {
         if (buffer.len == 0) return 0;
         var data: [1][]u8 = .{buffer};
-        return self.stream.read(self.io, &data) catch |err| {
-            if (err == error.Canceled) self.canceled = true;
-            return err;
-        };
+        return self.stream.read(self.io, &data);
     }
 };
-
-fn bioSend(ctx: ?*anyopaque, buf: [*c]const u8, len: usize) callconv(.c) c_int {
-    const connection: *Connection = @ptrCast(@alignCast(ctx orelse return c.MBEDTLS_ERR_NET_SEND_FAILED));
-    if (len == 0) return 0;
-    connection.sendRaw(buf[0..len]) catch return c.MBEDTLS_ERR_NET_SEND_FAILED;
-    return @intCast(@min(len, std.math.maxInt(c_int)));
-}
-
-fn bioRecv(ctx: ?*anyopaque, buf: [*c]u8, len: usize) callconv(.c) c_int {
-    const connection: *Connection = @ptrCast(@alignCast(ctx orelse return c.MBEDTLS_ERR_NET_RECV_FAILED));
-    if (len == 0) return 0;
-    const n = connection.recvRaw(buf[0..len]) catch return c.MBEDTLS_ERR_NET_RECV_FAILED;
-    return @intCast(@min(n, std.math.maxInt(c_int)));
-}
 
 /// `std.Io.Reader` over the decrypted stream.
 pub const Reader = struct {
@@ -380,10 +349,32 @@ pub const Writer = struct {
     }
 };
 
+const ProtocolRange = struct {
+    min: ?c_int = null,
+    max: ?c_int = null,
+};
+
+fn parseProtocolRange(protocols: []const u8) error{UnsupportedProtocol}!ProtocolRange {
+    var range: ProtocolRange = .{};
+    var tokens = std.mem.tokenizeAny(u8, protocols, " \t,");
+    while (tokens.next()) |token| {
+        const version: c_int = if (std.mem.eql(u8, token, "TLSv1.2"))
+            zedis_tls_version_1_2()
+        else if (std.mem.eql(u8, token, "TLSv1.3"))
+            zedis_tls_version_1_3()
+        else
+            return error.UnsupportedProtocol;
+
+        range.min = if (range.min) |current| @min(current, version) else version;
+        range.max = if (range.max) |current| @max(current, version) else version;
+    }
+    return range;
+}
+
 test "protocol list yields the lowest and highest requested version" {
     const range = try parseProtocolRange("TLSv1.3 TLSv1.2");
-    try std.testing.expectEqual(@as(c.mbedtls_ssl_protocol_version, c.MBEDTLS_SSL_VERSION_TLS1_2), range.min.?);
-    try std.testing.expectEqual(@as(c.mbedtls_ssl_protocol_version, c.MBEDTLS_SSL_VERSION_TLS1_3), range.max.?);
+    try std.testing.expectEqual(zedis_tls_version_1_2(), range.min.?);
+    try std.testing.expectEqual(zedis_tls_version_1_3(), range.max.?);
 }
 
 test "unknown TLS protocol names are rejected" {
