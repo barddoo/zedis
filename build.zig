@@ -12,6 +12,11 @@ pub fn build(b: *std.Build) void {
         "openssl-prefix",
         "OpenSSL installation prefix (defaults to Homebrew on macOS, system elsewhere)",
     ) orelse defaultOpenSslPrefix(b, target);
+    const openssl_lib_dir = b.option(
+        []const u8,
+        "openssl-lib-dir",
+        "OpenSSL library directory, overrides openssl-prefix/lib (useful for multiarch installs)",
+    );
     const openssl_static = b.option(
         bool,
         "openssl-static",
@@ -28,7 +33,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("zio", zio_mod);
-    addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
+    addTlsSources(b, exe.root_module, openssl_prefix, openssl_lib_dir, openssl_static);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -53,7 +58,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .debug,
     });
     test_mod.addImport("zio", zio_mod);
-    addTlsSources(b, test_mod, openssl_prefix, openssl_static);
+    addTlsSources(b, test_mod, openssl_prefix, openssl_lib_dir, openssl_static);
 
     const unit_tests = b.addTest(.{
         .name = "test-unit",
@@ -132,14 +137,17 @@ pub fn build(b: *std.Build) void {
 
 /// Adds the OpenSSL glue and links libssl/libcrypto. `prefix` is only needed
 /// for keg-only installs such as Homebrew's OpenSSL.
-fn addTlsSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8, static: bool) void {
+fn addTlsSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8, lib_dir: ?[]const u8, static: bool) void {
     module.addCSourceFile(.{ .file = b.path("src/app/openssl_glue.c"), .flags = &.{} });
     module.addIncludePath(b.path("src/app"));
     module.link_libc = true;
 
     if (prefix) |root| {
         module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include" }) });
-        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "lib" }) });
+    }
+    const resolved_lib_dir = lib_dir orelse if (prefix) |root| b.pathJoin(&.{ root, "lib" }) else null;
+    if (resolved_lib_dir) |dir| {
+        module.addLibraryPath(.{ .cwd_relative = dir });
     }
 
     const link_mode: std.builtin.LinkMode = if (static) .static else .dynamic;

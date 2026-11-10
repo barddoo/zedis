@@ -35,13 +35,11 @@ jobs:
             runner: ubuntu-latest
             binary: zedis
             ext: ""
-            openssl_args: -Dopenssl-prefix=/usr
           - platform: linux-aarch64
             target: aarch64-linux
             runner: ubuntu-24.04-arm
             binary: zedis
             ext: ""
-            openssl_args: -Dopenssl-prefix=/usr
           # - platform: windows-x86_64
           #   target: x86_64-windows
           #   runner: windows-latest
@@ -66,7 +64,9 @@ jobs:
 
       - name: Build
         run: |
-          zig build -Drelease -Dtarget=${{ matrix.target }} ${{ matrix.openssl_args }}
+          zig build -Drelease -Dtarget=${{ matrix.target }} \
+            -Dopenssl-prefix=/usr \
+            -Dopenssl-lib-dir="$(pkg-config --variable=libdir openssl)"
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
