@@ -836,8 +836,8 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         "MSET",        "SETEX",  "SETNX",     "INCRBY",    "DECRBY",
         "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",     "LSET",
         "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY", "TS.ALTER",
-        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT",
-        "HSET",        "HMSET",
+        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT", "HSET",
+        "HMSET",
     };
     for (denyoom_commands) |name| {
         const info = registry.commands.getPtr(name) orelse {

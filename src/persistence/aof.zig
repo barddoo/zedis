@@ -837,9 +837,19 @@ pub const Reader = struct {
 };
 
 const testing = std.testing;
+
+/// A private directory name for a test. The random suffix keeps concurrent test
+/// binaries from sharing the same relative paths and corrupting each other.
+fn testDir(buf: []u8, base: []const u8) []const u8 {
+    var random: [8]u8 = undefined;
+    testing.io.random(&random);
+    return std.fmt.bufPrint(buf, "{s}-{x}", .{ base, std.mem.readInt(u64, &random, .little) }) catch unreachable;
+}
+
 test "aof reader replays values larger than its read buffer" {
     const reg_init = @import("../commands/init_registry.zig");
-    const dir_name = "aof_reader_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_reader_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     // A value larger than the 8 KB read buffer, followed by another command.
@@ -877,7 +887,8 @@ fn read_test_aof(dir_name: []const u8, file_name: []const u8, buf: []u8) ![]cons
 }
 
 test "aof writer thread writes queued commands before deinit returns" {
-    const dir_name = "aof_writer_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_writer_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
@@ -894,7 +905,8 @@ test "aof writer thread writes queued commands before deinit returns" {
 }
 
 test "aof writer appends to an existing file and wait_durable waits for fsync" {
-    const dir_name = "aof_writer_append_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_writer_append_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const ping = [_]Value{.{ .data = "PING" }};
@@ -943,7 +955,8 @@ fn wait_for_failure_state(aof_writer: *Writer, want_failed: bool) !void {
 }
 
 test "aof write failure is reported until a retry succeeds" {
-    const dir_name = "aof_failure_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_failure_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
@@ -976,7 +989,8 @@ test "aof write failure is reported until a retry succeeds" {
 }
 
 test "aof wait_durable reports failure under appendfsync always" {
-    const dir_name = "aof_always_failure_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_always_failure_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .always);
@@ -1035,7 +1049,8 @@ fn load_aof_bytes(dir_name: []const u8, contents: []const u8, options: LoadOptio
 }
 
 test "aof reader cuts off a command truncated by a crash and keeps what precedes it" {
-    const dir_name = "aof_truncated_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_truncated_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const partial = "*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n";
@@ -1047,7 +1062,8 @@ test "aof reader cuts off a command truncated by a crash and keeps what precedes
 }
 
 test "aof reader leaves the file alone when not asked to repair it" {
-    const dir_name = "aof_norepair_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_norepair_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const partial = "*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n";
@@ -1059,7 +1075,8 @@ test "aof reader leaves the file alone when not asked to repair it" {
 }
 
 test "aof reader refuses a truncated tail unless aof-load-truncated is set" {
-    const dir_name = "aof_strict_truncated_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_strict_truncated_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const partial = "*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n";
@@ -1070,7 +1087,8 @@ test "aof reader refuses a truncated tail unless aof-load-truncated is set" {
 }
 
 test "aof reader treats damage as fatal unless aof-load-broken allows a small tail" {
-    const dir_name = "aof_broken_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_broken_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const garbage = "garbage\r\n";
@@ -1093,7 +1111,8 @@ test "aof reader treats damage as fatal unless aof-load-broken allows a small ta
 }
 
 test "aof reader refuses a command this build does not know" {
-    const dir_name = "aof_unknown_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_unknown_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const loaded = try load_aof_bytes(dir_name, set_a ++ "*1\r\n$5\r\nNOPE!\r\n", .{ .load_broken = true, .repair = true });
@@ -1102,7 +1121,8 @@ test "aof reader refuses a command this build does not know" {
 }
 
 test "aof reader accepts a complete file and an empty one" {
-    const dir_name = "aof_clean_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_clean_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     const full = try load_aof_bytes(dir_name, set_a, .{});
@@ -1219,7 +1239,8 @@ fn expect_aof_replays_to(dir_name: []const u8, registry: *Registry, reference: *
 
 test "aof rewrite runs in the background and keeps everything logged while it ran" {
     const reg_init = @import("../commands/init_registry.zig");
-    const dir_name = "aof_bg_rewrite_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_bg_rewrite_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var registry = try reg_init.init_registry(testing.allocator);
@@ -1251,7 +1272,8 @@ test "aof rewrite runs in the background and keeps everything logged while it ra
 
 test "aof rewrite keeps durable offsets valid across the file switch" {
     const reg_init = @import("../commands/init_registry.zig");
-    const dir_name = "aof_bg_rewrite_durable_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_bg_rewrite_durable_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var registry = try reg_init.init_registry(testing.allocator);
@@ -1281,7 +1303,8 @@ test "aof rewrite keeps durable offsets valid across the file switch" {
 
 test "aof rewrite that cannot be done leaves the AOF untouched and the writer working" {
     const reg_init = @import("../commands/init_registry.zig");
-    const dir_name = "aof_bg_rewrite_refused_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_bg_rewrite_refused_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var registry = try reg_init.init_registry(testing.allocator);
@@ -1311,7 +1334,8 @@ test "aof rewrite that cannot be done leaves the AOF untouched and the writer wo
 }
 
 test "aof rewrite is due once the file is big enough and has grown enough" {
-    const dir_name = "aof_rewrite_due_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_rewrite_due_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var aof_writer = try Writer.init(testing.allocator, testing.io, true, "test.aof", dir_name, .no);
@@ -1342,7 +1366,8 @@ test "aof rewrite is due once the file is big enough and has grown enough" {
 
 test "aof rewrite refuses to start while disabled or already running" {
     const reg_init = @import("../commands/init_registry.zig");
-    const dir_name = "aof_rewrite_guard_test_dir";
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = testDir(&dir_buf, "aof_rewrite_guard_test_dir");
     defer Dir.cwd().deleteTree(testing.io, dir_name) catch {};
 
     var registry = try reg_init.init_registry(testing.allocator);

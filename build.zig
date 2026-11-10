@@ -63,6 +63,11 @@ pub fn build(b: *std.Build) void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     run_unit_tests.setEnvironmentVariable("ZIG_EXE", b.graph.zig_exe);
+    // Tests touch the filesystem and the clock, so a cached result can hide a
+    // later regression (or replay a failure whose cause is already gone).
+    // Inherited stdio also keeps the build runner from mistaking the tests'
+    // expected log output for a failed command.
+    run_unit_tests.stdio = .inherit;
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);

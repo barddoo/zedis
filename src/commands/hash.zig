@@ -184,8 +184,8 @@ test "HSET creates fields and returns new-field count" {
 
     const args = [_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "f1" }, .{ .data = "v1" },
-        .{ .data = "f2" }, .{ .data = "v2" },
+        .{ .data = "f1" },   .{ .data = "v1" },
+        .{ .data = "f2" },   .{ .data = "v2" },
     };
     try hset(&writer, &store, &args);
     try testing.expectEqualStrings(":2\r\n", writer.buffered());
@@ -194,7 +194,7 @@ test "HSET creates fields and returns new-field count" {
     writer = Writer.fixed(&buf);
     const args2 = [_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "f1" }, .{ .data = "new" },
+        .{ .data = "f1" },   .{ .data = "new" },
     };
     try hset(&writer, &store, &args2);
     try testing.expectEqualStrings(":0\r\n", writer.buffered());
@@ -230,8 +230,8 @@ test "HMSET sets multiple fields and returns OK" {
 
     try hmset(&writer, &store, &[_]Value{
         .{ .data = "HMSET" }, .{ .data = "h" },
-        .{ .data = "a" }, .{ .data = "1" },
-        .{ .data = "b" }, .{ .data = "2" },
+        .{ .data = "a" },     .{ .data = "1" },
+        .{ .data = "b" },     .{ .data = "2" },
     });
     try testing.expectEqualStrings("+OK\r\n", writer.buffered());
 
@@ -247,13 +247,13 @@ test "HMGET returns array with nulls for missing fields" {
 
     try hset(&writer, &store, &[_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "x" }, .{ .data = "10" },
+        .{ .data = "x" },    .{ .data = "10" },
     });
 
     writer = Writer.fixed(&buf);
     try hmget(&writer, &store, &[_]Value{
         .{ .data = "HMGET" }, .{ .data = "h" },
-        .{ .data = "x" }, .{ .data = "y" },
+        .{ .data = "x" },     .{ .data = "y" },
     });
     try testing.expectEqualStrings("*2\r\n$2\r\n10\r\n$-1\r\n", writer.buffered());
 }
@@ -266,7 +266,7 @@ test "HGETALL returns all fields and values" {
 
     try hset(&writer, &store, &[_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "k" }, .{ .data = "v" },
+        .{ .data = "k" },    .{ .data = "v" },
     });
     writer = Writer.fixed(&buf);
     try hgetall(&writer, &store, &[_]Value{ .{ .data = "HGETALL" }, .{ .data = "h" } });
@@ -286,13 +286,13 @@ test "HDEL deletes fields and returns count" {
 
     try hset(&writer, &store, &[_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "a" }, .{ .data = "1" },
-        .{ .data = "b" }, .{ .data = "2" },
+        .{ .data = "a" },    .{ .data = "1" },
+        .{ .data = "b" },    .{ .data = "2" },
     });
     writer = Writer.fixed(&buf);
     try hdel(&writer, &store, &[_]Value{
         .{ .data = "HDEL" }, .{ .data = "h" },
-        .{ .data = "a" }, .{ .data = "nosuch" },
+        .{ .data = "a" },    .{ .data = "nosuch" },
     });
     try testing.expectEqualStrings(":1\r\n", writer.buffered());
     try testing.expectEqual(@as(usize, 1), (try store.get_hash("h")).?.hlen());
@@ -345,9 +345,9 @@ test "HLEN returns field count" {
 
     try hset(&writer, &store, &[_]Value{
         .{ .data = "HSET" }, .{ .data = "h" },
-        .{ .data = "a" }, .{ .data = "1" },
-        .{ .data = "b" }, .{ .data = "2" },
-        .{ .data = "c" }, .{ .data = "3" },
+        .{ .data = "a" },    .{ .data = "1" },
+        .{ .data = "b" },    .{ .data = "2" },
+        .{ .data = "c" },    .{ .data = "3" },
     });
     writer = Writer.fixed(&buf);
     try hlen(&writer, &store, &[_]Value{ .{ .data = "HLEN" }, .{ .data = "h" } });
