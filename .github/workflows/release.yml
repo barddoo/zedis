@@ -17,11 +17,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-
       - name: Run tests
-        run: zig build test:all
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -w /src \
+            alpine:3.24.4 \
+            sh -c 'apk add --no-cache curl xz openssl-dev openssl-libs-static minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build test:all -Dopenssl-prefix=/usr'
 
   build:
     name: Build ${{ matrix.platform }}
@@ -31,32 +33,17 @@ jobs:
       matrix:
         include:
           - platform: linux-x86_64
-            target: x86_64-linux
             runner: ubuntu-latest
             binary: zedis
             ext: ""
           - platform: linux-aarch64
-            target: aarch64-linux
             runner: ubuntu-24.04-arm
             binary: zedis
             ext: ""
-          # - platform: windows-x86_64
-          #   target: x86_64-windows
-          #   runner: windows-latest
-          #   binary: zedis.exe
-          #   ext: ".exe"
-          #   openssl_args: ""
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
-
-      - name: Install OpenSSL (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends libssl-dev
 
       - name: Extract version from tag
         id: version
@@ -64,9 +51,11 @@ jobs:
 
       - name: Build
         run: |
-          zig build -Drelease -Dtarget=${{ matrix.target }} \
-            -Dopenssl-prefix=/usr \
-            -Dopenssl-lib-dir="$(pkg-config --variable=libdir openssl)"
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src" \
+            -w /src \
+            alpine:3.24.4 \
+            sh -c 'apk add --no-cache curl xz openssl-dev openssl-libs-static minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build -Drelease -Dopenssl-static=true -Dopenssl-prefix=/usr -Dtarget=$(uname -m)-linux-musl'
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
