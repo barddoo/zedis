@@ -23,7 +23,7 @@ WORKDIR /build
 COPY build.zig build.zig.zon ./
 COPY src src/
 
-RUN zig build -Drelease -Dopenssl-static=true -Dtarget="$(uname -m)-linux-musl"
+RUN zig build -Drelease -Dopenssl-static=true -Dopenssl-prefix=/usr -Dtarget="$(uname -m)-linux-musl"
 
 ##############################################################################
 # Stage: create data dir with correct ownership for distroless
