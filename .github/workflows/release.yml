@@ -19,8 +19,6 @@ jobs:
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       - name: Run tests
         run: zig build test:all
@@ -59,8 +57,6 @@ jobs:
 
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
-        with:
-          version: 0.17.0
 
       - name: Extract version from tag
         id: version
