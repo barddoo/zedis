@@ -46,5 +46,6 @@
         "src",
         "LICENSE",
         "README.md",
+        "install-zig.sh",
     },
 }

@@ -5,19 +5,14 @@
 ##############################################################################
 FROM alpine:3.20 AS builder
 
-ARG ZIG_VERSION=0.17.0
+ARG ZIG_VERSION=0.17.1
+# ZSF minisign public key. Confirm it matches https://ziglang.org/download before relying on it.
+ARG ZIG_MINISIGN_PUBKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
-RUN apk add --no-cache curl xz openssl-dev openssl-libs-static
+RUN apk add --no-cache curl xz openssl-dev openssl-libs-static minisign
 
-RUN case "$(uname -m)" in \
-        x86_64)  ZIG_ARCH=x86_64  ;; \
-        aarch64) ZIG_ARCH=aarch64 ;; \
-        *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;; \
-    esac && \
-    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${ZIG_ARCH}-linux-${ZIG_VERSION}.tar.xz" | \
-        tar -xJ -C /opt && \
-    ln -s /opt/zig-${ZIG_ARCH}-linux-${ZIG_VERSION} /opt/zig && \
-    ln -s /opt/zig/zig /usr/local/bin/zig
+COPY install-zig.sh /usr/local/bin/install-zig.sh
+RUN install-zig.sh "${ZIG_VERSION}" "${ZIG_MINISIGN_PUBKEY}"
 
 WORKDIR /build
 COPY build.zig build.zig.zon ./
