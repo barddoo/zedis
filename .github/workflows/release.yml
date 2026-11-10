@@ -26,30 +26,28 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
           - platform: linux-x86_64
             target: x86_64-linux
+            runner: ubuntu-latest
             binary: zedis
             ext: ""
+            openssl_args: -Dopenssl-prefix=/usr
           - platform: linux-aarch64
             target: aarch64-linux
+            runner: ubuntu-24.04-arm
             binary: zedis
             ext: ""
-          - platform: macos-x86_64
-            target: x86_64-macos
-            binary: zedis
-            ext: ""
-          - platform: macos-arm64
-            target: aarch64-macos
-            binary: zedis
-            ext: ""
+            openssl_args: -Dopenssl-prefix=/usr
           # - platform: windows-x86_64
           #   target: x86_64-windows
+          #   runner: windows-latest
           #   binary: zedis.exe
           #   ext: ".exe"
+          #   openssl_args: ""
 
     steps:
       - name: Checkout code
@@ -58,13 +56,17 @@ jobs:
       - name: Setup Zig
         uses: mlugg/setup-zig@v2
 
+      - name: Install OpenSSL (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends libssl-dev
+
       - name: Extract version from tag
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Build
         run: |
-          zig build -Drelease -Dtarget=${{ matrix.target }}
+          zig build -Drelease -Dtarget=${{ matrix.target }} ${{ matrix.openssl_args }}
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
@@ -112,8 +114,6 @@ jobs:
           files: |
             zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
             zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
-            zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
-            zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
             # zedis-${{ steps.version.outputs.VERSION }}-windows-x86_64.exe
             SHA256SUMS
           body: |
@@ -132,18 +132,6 @@ jobs:
             **Linux (ARM64)**
             ```bash
             curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
-            chmod +x zedis && sudo mv zedis /usr/local/bin/
-            ```
-
-            **macOS (Apple Silicon)**
-            ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-arm64
-            chmod +x zedis && sudo mv zedis /usr/local/bin/
-            ```
-
-            **macOS (Intel)**
-            ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-macos-x86_64
             chmod +x zedis && sudo mv zedis /usr/local/bin/
             ```
 
