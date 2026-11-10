@@ -22,12 +22,10 @@ jobs:
       - name: Install Zig and OpenSSL
         run: |
           sudo apt-get install -y --no-install-recommends libssl-dev minisign
-          ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
-          sudo ln -sf /usr/include/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/openssl/opensslconf.h \
-            /usr/include/openssl/opensslconf.h
+          sudo ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
       - name: Run tests
-        run: zig build test:all -Dopenssl-prefix=/usr
+        run: zig build test:all
 
   build:
     name: Build ${{ matrix.platform }}
