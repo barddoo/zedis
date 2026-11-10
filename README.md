@@ -23,6 +23,14 @@ A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), 
   for allocating commands, and cgroup-aware auto-sizing inside containers.
 - **Pub/Sub**: Decoupled communication between services, with push delivery to idle
   subscribers.
+- **TLS**: Optional TLS 1.2/1.3 listener (Mbed TLS) with certificate/key/CA
+  configuration and optional mutual TLS via `tls-auth-clients`.
+- **Observability**: Real `INFO` counters (connections, ops/sec, hit rate,
+  memory, AOF state), `SLOWLOG`, `LATENCY`, and a `METRICS` command exposing
+  Prometheus text exposition.
+- **Graceful shutdown**: `SIGINT`/`SIGTERM` and `SHUTDOWN [NOSAVE|SAVE]` stop
+  accepting, drain clients, flush the AOF, and close the listeners. `CONFIG
+  REWRITE` persists runtime changes.
 - **Time Series**: Time series data structure. **Now with Gorilla compression!**
 - **Opinionated Design**: No multiple logical databases, expiry is lazy only.
 
@@ -37,7 +45,7 @@ Download the binary from the [releases page](https://github.com/barddoo/zedis/re
 
 ### Prerequisites
 
-- [Zig](https://ziglang.org/download/) 0.17.0 (pinned in `build.zig.zon`)
+- [Zig](https://ziglang.org/download/) 0.17.1 (pinned in `build.zig.zon`)
 
 ### Building and Running
 
@@ -72,6 +80,25 @@ OK
 (integer) 1
 127.0.0.1:6379> TYPE mykey
 string
+```
+
+### TLS
+
+Enable the TLS listener in the config file (see `zedis.conf` for all options):
+
+```conf
+port 0                 # optional: serve TLS only
+tls-port 6380
+tls-cert-file /etc/zedis/server.crt
+tls-key-file /etc/zedis/server.key
+tls-ca-cert-file /etc/zedis/ca.crt
+tls-auth-clients no    # yes (default), no, or optional
+```
+
+Then connect with any TLS-capable Redis client, for example:
+
+```bash
+redis-cli --tls --insecure -p 6380
 ```
 
 ## Docker

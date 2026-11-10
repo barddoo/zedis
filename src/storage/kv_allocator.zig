@@ -184,6 +184,7 @@ test "KeyValueAllocator tracks alloc free and resize" {
 
     slice = try kv_alloc.realloc(slice, 64);
     try testing.expectEqual(@as(usize, 64), kv.get_memory_usage());
+    try testing.expect(kv.get_peak_usage() >= kv.get_memory_usage());
 }
 
 test "KeyValueAllocator returns out of memory without eviction" {

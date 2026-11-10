@@ -129,10 +129,10 @@ pub const SlowLog = struct {
     threshold_us: i64 = 10_000,
 
     pub fn init(allocator: Allocator, max_len: usize) !SlowLog {
-        const capacity = @max(max_len, 1);
+        if (max_len == 0) return .{ .allocator = allocator };
         return .{
             .allocator = allocator,
-            .entries = try allocator.alloc(SlowLogEntry, capacity),
+            .entries = try allocator.alloc(SlowLogEntry, max_len),
         };
     }
 

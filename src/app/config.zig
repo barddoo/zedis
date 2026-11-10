@@ -319,6 +319,13 @@ const managed_directives = [_][]const u8{
     "command-timeout-ms",
 };
 
+fn shouldWriteManaged(config: Config, index: usize) bool {
+    // Leave an auto-sized (cgroup-derived) maxmemory implicit; writing it
+    // would pin the budget on the next start.
+    if (index == 0 and !config.kv_memory_budget_explicit) return false;
+    return true;
+}
+
 fn managedDirectiveIndex(key: []const u8) ?usize {
     for (managed_directives, 0..) |name, index| {
         if (eql(u8, key, name)) return index;
@@ -350,9 +357,11 @@ pub fn rewrite_file(allocator: std.mem.Allocator, io: std.Io, path: []const u8, 
             var parts = std.mem.tokenizeAny(u8, trimmed, " \t");
             if (parts.next()) |key| {
                 if (managedDirectiveIndex(key)) |index| {
-                    try writeManagedDirective(&output, allocator, config, index);
-                    seen[index] = true;
-                    continue;
+                    if (shouldWriteManaged(config, index)) {
+                        try writeManagedDirective(&output, allocator, config, index);
+                        seen[index] = true;
+                        continue;
+                    }
                 }
             }
         }
@@ -360,7 +369,7 @@ pub fn rewrite_file(allocator: std.mem.Allocator, io: std.Io, path: []const u8, 
     }
 
     for (managed_directives, 0..) |_, index| {
-        if (seen[index]) continue;
+        if (seen[index] or !shouldWriteManaged(config, index)) continue;
         if (output.items.len > 0 and output.items[output.items.len - 1] != '\n') {
             try output.append(allocator, '\n');
         }
@@ -996,6 +1005,7 @@ test "config rewrite updates managed directives and preserves comments" {
     defer arena.deinit();
     var config = try read_file(arena.allocator(), testing.io, path);
     config.kv_memory_budget = 2 * 1024 * 1024;
+    config.kv_memory_budget_explicit = true;
     config.eviction_policy = .noeviction;
 
     try rewrite_file(testing.allocator, testing.io, path, config);

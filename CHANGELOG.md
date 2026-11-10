@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Real observability: `INFO` now reports live command, connection, keyspace
+  hit/miss, expiry, eviction, network, memory, CPU, and AOF counters; new
+  `INFO commandstats`; `SLOWLOG GET|LEN|RESET`; `LATENCY LATEST|HISTORY|RESET|DOCTOR`;
+  and `METRICS` for Prometheus text scraping.
+- `slowlog-log-slower-than`, `slowlog-max-len`, `latency-monitor-threshold`,
+  and `command-timeout-ms` config keys, all mutable with `CONFIG SET`.
+- Graceful shutdown on `SIGINT`/`SIGTERM` and `SHUTDOWN [NOSAVE|SAVE]`. The
+  accept loops stop, clients are woken, and the AOF writer drains and fsyncs
+  before the process exits.
+- `CONFIG REWRITE` persists mutable directives to the config file using an
+  atomic temp-file rename, preserving comments and unrelated lines.
+- Read-only `O(N)` commands (`KEYS`, `SCAN`, `LRANGE`) accept a cooperative
+  deadline and reply `-TIMEOUT` instead of stalling without bound. `SCAN`
+  remains the `KEYS` replacement; the timeout bounds a stall rather than
+  removing it.
+- TLS listener via Mbed TLS: `tls-port`, `tls-cert-file`, `tls-key-file`, `tls-ca-cert-file`, `tls-auth-clients` (`yes`/`no`/`optional`) and `tls-protocols`. TLS can run alongside plaintext or replace it with `port 0`; mutual TLS verifies client certificates against the configured CA.
+- RESP3 support, negotiated per connection with `HELLO [2|3] [AUTH default <password>] [SETNAME name]`. Connections stay on RESP2 until a client sends `HELLO 3`. Under RESP3, missing values reply with the null type (`_`), floats with the double type (`,`), and `CONFIG GET` and `BF.INFO` with a map (`%`). Pub/sub deliveries and `SUBSCRIBE`/`UNSUBSCRIBE` replies are push messages (`>`), while RESP2 subscribers on the same channel keep receiving arrays.
+
 ## [0.2.1] - 2026-10-23
 
 ### Added

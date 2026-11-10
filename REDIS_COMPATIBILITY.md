@@ -12,9 +12,12 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 | Command | Supported | Notes                                       |
 | ------- | --------- | ------------------------------------------- |
 | AUTH    | Yes       | Authentication command                      |
+| CLIENT  | Yes       | ID, SETNAME, GETNAME, and SETINFO           |
+| COMMAND | Yes       | COUNT, LIST, INFO, DOCS, and GETKEYS        |
 | ECHO    | Yes       | Echo back the given string                  |
 | PING    | Yes       | Ping the server (supports optional message) |
 | QUIT    | Yes       | Close the connection                        |
+| SELECT  | Yes       | Only database 0 exists                      |
 | HELP    | Yes       | Show help message                           |
 
 ## String Commands
@@ -27,6 +30,7 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 | INCR        | Yes       | Increment the integer value of a key by one |
 | DECR        | Yes       | Decrement the integer value of a key by one |
 | EXPIRE      | Yes       | Set expiration time for a key               |
+| PEXPIRE     | Yes       | Set expiration time in milliseconds         |
 | APPEND      | Yes       | Append a value to a key                     |
 | STRLEN      | Yes       | Get the length of the value stored in a key |
 | GETSET      | Yes       | Set a key and return its old value          |
@@ -43,12 +47,15 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 | Command   | Supported | Notes                               |
 | --------- | --------- | ----------------------------------- |
 | EXISTS    | Yes       | Check if key exists                 |
-| KEYS      | Yes       | Find all keys matching a pattern    |
+| KEYS      | Yes       | O(N) and blocking; prefer SCAN. Aborts with `-TIMEOUT` when `command-timeout-ms` is set |
+| SCAN      | Yes       | Cursor iteration with MATCH/COUNT/TYPE |
 | TTL       | Yes       | Get remaining time to live of a key |
+| PTTL      | Yes       | Get remaining TTL in milliseconds   |
 | PERSIST   | Yes       | Remove expiration from a key        |
 | TYPE      | Yes       | Get the data type of a key          |
 | RENAME    | Yes       | Rename a key                        |
 | RANDOMKEY | Yes       | Return a random key                 |
+| UNLINK    | Yes       | Delete keys (synchronous free)      |
 
 ## List Commands
 
@@ -134,9 +141,9 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 
 | Command | Supported | Notes                  |
 | ------- | --------- | ---------------------- |
-| MULTI   | No        | Start a transaction    |
-| EXEC    | No        | Execute a transaction  |
-| DISCARD | No        | Discard a transaction  |
+| MULTI   | Yes       | Start a transaction    |
+| EXEC    | Yes       | Execute a transaction  |
+| DISCARD | Yes       | Discard a transaction  |
 | WATCH   | No        | Watch keys for changes |
 | UNWATCH | No        | Stop watching keys     |
 
@@ -148,9 +155,15 @@ This document outlines the compatibility of Zedis with Redis commands. The table
 | BGSAVE     | No        | Asynchronously save dataset to RDB file                   |
 | FLUSHDB    | Yes       | Clear the single store (synchronous only, no ASYNC mode)  |
 | FLUSHALL   | Yes       | Alias of FLUSHDB in single-store mode                     |
-| INFO       | No        | Get server information                                    |
-| CONFIG GET | No        | Get configuration parameters                              |
-| CONFIG SET | No        | Set configuration parameters                              |
+| INFO       | Yes       | Real counters for stats, memory, clients, persistence, commandstats |
+| CONFIG GET | Yes       | Get configuration parameters                              |
+| CONFIG SET | Yes       | Set supported runtime parameters                          |
+| CONFIG REWRITE | Yes   | Persist runtime changes to the config file                |
+| CONFIG RESETSTAT | Yes | Reset statistics counters                                 |
+| METRICS    | Yes       | Prometheus text exposition (Zedis extension)              |
+| SLOWLOG    | Yes       | GET, LEN, RESET                                            |
+| LATENCY    | Yes       | LATEST, HISTORY, RESET, DOCTOR                             |
+| SHUTDOWN   | Yes       | NOSAVE (default) or SAVE, then flush the AOF              |
 | DBSIZE     | Yes       | Get number of keys in the single store                    |
 | LASTSAVE   | No        | Get Unix timestamp of last save                           |
 | MONITOR    | No        | Listen for all requests received by server                |

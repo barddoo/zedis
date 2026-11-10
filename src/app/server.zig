@@ -609,6 +609,9 @@ pub fn listen(self: *Server) !void {
     var connection_group: Io.Group = .init;
     defer connection_group.await(self.io) catch {}; // Wait for all clients to finish
 
+    // zio delivers signals as awaitable events. One watcher per signal lets
+    // either SIGINT or SIGTERM request shutdown; cancelling this group on
+    // return stops the waiters and restores the previous OS handlers.
     var signal_group: Io.Group = .init;
     defer signal_group.cancel(self.io);
     signal_group.async(self.io, watchSignal, .{ self, zio.SignalKind.interrupt });

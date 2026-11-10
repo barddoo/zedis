@@ -28,7 +28,7 @@
 
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.17.0",
+    .minimum_zig_version = "0.17.1",
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
     // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
@@ -38,6 +38,14 @@
         .zio = .{
             .url = "git+https://github.com/lalinsky/zio?ref=main#035d2454121c58c803c8623de8b4ebf208d67c4a",
             .hash = "zio-0.19.0-xHbVVGU-LQBGFit4OXnREA3nYfN70OacQJBhyFwx3kI4",
+        },
+        .mbedtls = .{
+            .url = "git+https://github.com/barddoo/mbedtls.git#0efb15e72f3f298cdcf4bf88fa51a69d5349028c",
+            .hash = "mbedtls-4.2.0-E4NUR446AgA19cTsBO80PQNcBLDzplBYjrXOVdwsV3b2",
+        },
+        .translate_c = .{
+            .url = "git+https://codeberg.org/ziglang/translate-c#cfac21f3199b2b02ce3fd7db652aa456421fe4ab",
+            .hash = "translate_c-2.0.2-Q_BUWvBNBwDnyehSiuAJmdFcMYHYGA-Jc3KiYdrV2Dqx",
         },
     },
     .paths = .{

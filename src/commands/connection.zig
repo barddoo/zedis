@@ -81,6 +81,8 @@ const Store = @import("../storage/store.zig").Store;
 const KeyValueAllocator = @import("../storage/kv_allocator.zig");
 const Server = @import("../app/server.zig");
 const Stats = @import("../app/stats.zig");
+const ServerStats = Stats.ServerStats;
+const SlowLog = Stats.SlowLog;
 const Io = std.Io;
 const testing = std.testing;
 
@@ -313,7 +315,10 @@ pub fn config(client: *Client, args: []const Value, writer: *Writer) !void {
             try resp.write_error(writer, "ERR The server is running without a config file");
             return;
         };
-        Config.rewrite_file(client.allocator, client.server.io, path, client.server.config) catch |err| {
+        // Blocking I/O, like SAVE: the rewrite must not suspend the command
+        // path and let another client change the config mid-write.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        Config.rewrite_file(client.allocator, io, path, client.server.config) catch |err| {
             try writer.print("-ERR Rewriting config file: {s}\r\n", .{@errorName(err)});
             return;
         };
@@ -553,6 +558,7 @@ fn apply_config_set(client: *Client, name: []const u8, value: []const u8) Config
     if (std.mem.eql(u8, param.name, "maxmemory")) {
         const bytes = Config.parse_memory_size(value) catch return error.InvalidValue;
         client.server.config.kv_memory_budget = bytes;
+        client.server.config.kv_memory_budget_explicit = true;
         client.server.kv_allocator.memory_budget = bytes;
         return;
     }
@@ -733,8 +739,8 @@ const TestContext = struct {
         });
         self.server.kv_allocator = try KeyValueAllocator.init(allocator, 4096, .allkeys_lru);
         self.server.io = testing.io;
-        self.server.stats = Stats.ServerStats.init(allocator, testing.io);
-        self.server.slowlog = try Stats.SlowLog.init(allocator, 0);
+        self.server.stats = ServerStats.init(allocator, testing.io);
+        self.server.slowlog = try SlowLog.init(allocator, 0);
         self.server.latency = .{};
 
         self.client = undefined;
