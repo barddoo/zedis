@@ -18,11 +18,7 @@ pub fn build(b: *std.Build) void {
         "Link OpenSSL statically (disable with -Dopenssl-static=false)",
     ) orelse true;
 
-    const lua_prefix = b.option(
-        []const u8,
-        "lua-prefix",
-        "LuaJIT installation prefix (defaults to Homebrew on macOS)",
-    ) orelse defaultLuaPrefix(b, target);
+    const lua_build = luaJITBuildStep(b, target);
 
     // --- Main executable ---
     const exe = b.addExecutable(.{
@@ -35,8 +31,8 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("zio", zio_mod);
     addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
-    addLuaSources(b, exe.root_module, lua_prefix);
-    // LuaJIT on 64-bit macOS: GC requires a low 4 GB address space.
+    addLuaSources(b, exe.root_module, target);
+    exe.step.dependOn(lua_build);
     // LuaJIT on 64-bit macOS: GC requires a low 4 GB address space.
     if (target.result.os.tag == .macos) {
         exe.pagezero_size = 0x10000;
@@ -67,13 +63,15 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("zio", zio_mod);
     addTlsSources(b, test_mod, openssl_prefix, openssl_static);
-    addLuaSources(b, test_mod, lua_prefix);
+    addLuaSources(b, test_mod, target);
 
     const unit_tests = b.addTest(.{
         .name = "test-unit",
         .root_module = test_mod,
         .filters = test_filters,
     });
+
+    unit_tests.step.dependOn(lua_build);
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     run_unit_tests.setEnvironmentVariable("ZIG_EXE", b.graph.zig_exe);
@@ -184,29 +182,27 @@ fn exists(b: *std.Build, path: []const u8) bool {
     return true;
 }
 
-fn addLuaSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8) void {
-    module.link_libc = true;
-    if (prefix) |root| {
-        module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include", "luajit-2.1" }) });
-        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "lib" }) });
+fn luaJITBuildStep(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step {
+    const make = b.addSystemCommand(&.{"make"});
+    make.addArg("-C");
+    make.addDirectoryArg(b.path("vendor/luajit"));
+    make.addArg("BUILDMODE=static");
+    if (target.result.os.tag == .macos) {
+        make.addArg("MACOSX_DEPLOYMENT_TARGET=13.0");
     }
-    module.linkSystemLibrary("luajit-5.1", .{ .preferred_link_mode = .static });
+    make.addArg("amalg");
+    return &make.step;
 }
 
-fn defaultLuaPrefix(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
-    const candidates: []const []const u8 = switch (target.result.os.tag) {
-        .macos => &.{
-            "/opt/homebrew/opt/luajit",
-            "/usr/local/opt/luajit",
-        },
-        .linux => &.{
-            "/usr",
-            "/usr/local",
-        },
-        else => &.{},
-    };
-    for (candidates) |root| {
-        if (exists(b, b.pathJoin(&.{ root, "include", "luajit-2.1", "lua.h" }))) return root;
+fn addLuaSources(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    _ = b;
+    module.link_libc = true;
+    module.addSystemIncludePath(.{ .cwd_relative = "vendor/luajit/src" });
+    module.addObjectFile(.{ .cwd_relative = "vendor/luajit/src/libluajit.a" });
+    // LuaJIT on Linux pulls in pthread, math, and dynamic linker symbols.
+    if (target.result.os.tag == .linux) {
+        module.linkSystemLibrary("pthread", .{});
+        module.linkSystemLibrary("m", .{});
+        module.linkSystemLibrary("dl", .{});
     }
-    return null;
 }
