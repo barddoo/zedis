@@ -97,6 +97,7 @@ test {
     _ = @import("commands/hash.zig");
     _ = @import("commands/keys.zig");
     _ = @import("commands/list.zig");
+    _ = @import("commands/lua.zig");
     _ = @import("commands/registry.zig");
     _ = @import("commands/search.zig");
     _ = @import("commands/server.zig");

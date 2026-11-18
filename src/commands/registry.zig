@@ -223,6 +223,53 @@ pub const CommandRegistry = struct {
             return false;
         }
     }
+
+    /// Execute a command from a Lua script context. No client required.
+    /// Only dispatches store_handler and default handlers; rejects client_handler commands.
+    pub fn execute_for_script(
+        self: *CommandRegistry,
+        writer: *std.Io.Writer,
+        store: *Store,
+        args: []const Value,
+    ) void {
+        resp.version = 2;
+        if (args.len == 0) {
+            resp.write_error(writer, "ERR empty command") catch {};
+            return;
+        }
+        var buf: [32]u8 = undefined;
+        const command_name = args[0].as_slice();
+        if (command_name.len > buf.len) {
+            resp.write_error(writer, "ERR command name too long") catch {};
+            return;
+        }
+        const upper_name = std.ascii.upperString(&buf, command_name);
+        const cmd_info = self.get(upper_name) orelse {
+            resp.write_error(writer, "ERR unknown command") catch {};
+            return;
+        };
+        if (args.len < cmd_info.min_args) {
+            resp.write_error(writer, "ERR wrong number of arguments") catch {};
+            return;
+        }
+        if (cmd_info.max_args) |max_args| {
+            if (args.len > max_args) {
+                resp.write_error(writer, "ERR wrong number of arguments") catch {};
+                return;
+            }
+        }
+        switch (cmd_info.handler) {
+            .store_handler => |handler| handler(writer, store, args) catch |err| {
+                handle_command_error(writer, cmd_info.name, err);
+            },
+            .default => |handler| handler(writer, args) catch |err| {
+                handle_command_error(writer, cmd_info.name, err);
+            },
+            .client_handler => {
+                resp.write_error(writer, "ERR command not allowed in scripts") catch {};
+            },
+        }
+    }
 };
 
 test "handle_command_error writes a single error code prefix" {

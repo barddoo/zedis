@@ -10,6 +10,7 @@ const pubsub = @import("pubsub.zig");
 const ts = @import("time_series.zig");
 const key = @import("keys.zig");
 const server_commands = @import("server.zig");
+const lua_commands = @import("lua.zig");
 
 pub fn init_registry(allocator: Allocator) !CommandRegistry {
     var registry = CommandRegistry.init(allocator);
@@ -996,6 +997,37 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .min_args = 1,
         .max_args = 1,
         .description = "Reset connection state",
+        .write_to_aof = false,
+    });
+
+    // --- Lua scripting commands ---
+
+    try registry.register(.{
+        .name = "EVAL",
+        .handler = .{ .client_handler = lua_commands.eval },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Execute a Lua script server-side",
+        .write_to_aof = false,
+        .denyoom = true,
+    });
+
+    try registry.register(.{
+        .name = "EVALSHA",
+        .handler = .{ .client_handler = lua_commands.evalsha },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Execute a cached Lua script by SHA1",
+        .write_to_aof = false,
+        .denyoom = true,
+    });
+
+    try registry.register(.{
+        .name = "SCRIPT",
+        .handler = .{ .client_handler = lua_commands.script_cmd },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Script management: LOAD, EXISTS, FLUSH",
         .write_to_aof = false,
     });
 
