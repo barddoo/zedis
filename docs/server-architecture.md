@@ -43,6 +43,9 @@ serialized without a store lock. This relies on commands never suspending:
   command (it stalls the server for its duration, like Redis' `SAVE`).
 - AOF queueing uses a spinlock, so contention with the writer thread cannot park the
   coroutine in the middle of a command.
+- With the disk tier enabled, materializing a spilled value reads TidesDB
+  synchronously on the executor. It stalls the event loop for the read but keeps
+  the no-suspension invariant; Phase 5 moves these reads to a worker pool.
 
 Socket I/O and `appendfsync always` durability waits can suspend, but only outside
 command execution. If a handler ever needs to suspend, it must not mutate the store

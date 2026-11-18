@@ -52,10 +52,10 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
 
     try registry.register(.{
         .name = "SET",
-        .handler = .{ .store_handler = string.set },
+        .handler = .{ .store_handler = string.set_full },
         .min_args = 3,
-        .max_args = 3,
-        .description = "Set string value of a key",
+        .max_args = null,
+        .description = "Set string value of a key with optional NX/XX/EX/PX/EXAT/PXAT/GET/KEEPTTL",
         .write_to_aof = true,
     });
 
@@ -827,17 +827,190 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .write_to_aof = false,
     });
 
+    // --- String commands ---
+
+    try registry.register(.{
+        .name = "GETEX",
+        .handler = .{ .store_handler = string.getex },
+        .min_args = 2,
+        .max_args = 4,
+        .description = "Get value and optionally set/clear expiry",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "GETDEL",
+        .handler = .{ .store_handler = string.getdel },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get value and delete the key",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "GETRANGE",
+        .handler = .{ .store_handler = string.getrange },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Get a substring of a string value",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SUBSTR",
+        .handler = .{ .store_handler = string.getrange },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Alias for GETRANGE",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SETRANGE",
+        .handler = .{ .store_handler = string.setrange },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Overwrite part of a string at offset",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "PSETEX",
+        .handler = .{ .store_handler = string.psetex },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Set value with millisecond expiry",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "MSETNX",
+        .handler = .{ .store_handler = string.msetnx },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Set multiple keys only if none exist",
+        .write_to_aof = true,
+    });
+
+    // --- List commands ---
+
+    try registry.register(.{
+        .name = "LREM",
+        .handler = .{ .store_handler = list.lrem },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Remove elements from a list",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "LTRIM",
+        .handler = .{ .store_handler = list.ltrim },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Trim a list to a range",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "LINSERT",
+        .handler = .{ .store_handler = list.linsert },
+        .min_args = 5,
+        .max_args = 5,
+        .description = "Insert element before or after pivot",
+        .write_to_aof = true,
+    });
+
+    // --- Hash commands ---
+
+    try registry.register(.{
+        .name = "HSETNX",
+        .handler = .{ .store_handler = hash.hsetnx },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Set hash field only if it does not exist",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "HINCRBY",
+        .handler = .{ .store_handler = hash.hincrby },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Increment hash field by integer",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "HINCRBYFLOAT",
+        .handler = .{ .store_handler = hash.hincrbyfloat },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Increment hash field by float",
+        .write_to_aof = true,
+    });
+
+    // --- Key commands ---
+
+    try registry.register(.{
+        .name = "EXPIRETIME",
+        .handler = .{ .store_handler = key.expiretime },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get expiry as Unix timestamp (seconds)",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "PEXPIRETIME",
+        .handler = .{ .store_handler = key.pexpiretime },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get expiry as Unix timestamp (milliseconds)",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "COPY",
+        .handler = .{ .store_handler = key.copy },
+        .min_args = 3,
+        .max_args = 4,
+        .description = "Copy a key to a destination key",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "OBJECT",
+        .handler = .{ .store_handler = key.object_cmd },
+        .min_args = 2,
+        .max_args = null,
+        .description = "Object inspection subcommands (ENCODING, REFCOUNT, IDLETIME, FREQ, HELP)",
+        .write_to_aof = false,
+    });
+
+    // --- Connection commands ---
+
+    try registry.register(.{
+        .name = "RESET",
+        .handler = .{ .client_handler = connection_commands.reset },
+        .min_args = 1,
+        .max_args = 1,
+        .description = "Reset connection state",
+        .write_to_aof = false,
+    });
+
     // Redis' CMD_DENYOOM: commands that may allocate store memory and are
     // rejected with -OOM when the budget is exhausted. Commands that only free
     // memory (DEL, LPOP, RPOP, FLUSHDB, ...) and commands that don't touch the
     // store stay allowed, so a full instance can still be drained.
     const denyoom_commands = [_][]const u8{
-        "SET",         "INCR",   "DECR",      "APPEND",    "GETSET",
-        "MSET",        "SETEX",  "SETNX",     "INCRBY",    "DECRBY",
-        "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",     "LSET",
-        "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY", "TS.ALTER",
-        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT", "HSET",
-        "HMSET",
+        "SET",         "INCR",   "DECR",      "APPEND",       "GETSET",
+        "MSET",        "SETEX",  "SETNX",     "INCRBY",       "DECRBY",
+        "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",        "LSET",
+        "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY",    "TS.ALTER",
+        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT",    "HSET",
+        "HMSET",       "GETEX",  "SETRANGE",  "PSETEX",       "MSETNX",
+        "LINSERT",     "HSETNX", "HINCRBY",   "HINCRBYFLOAT", "COPY",
     };
     for (denyoom_commands) |name| {
         const info = registry.commands.getPtr(name) orelse {

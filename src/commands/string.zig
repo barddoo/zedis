@@ -427,6 +427,258 @@ pub fn incrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_bulk_string(writer, result);
 }
 
+fn write_string_value(writer: *Writer, obj: *const ZedisObject) !void {
+    switch (obj.value) {
+        .string => |s| try resp.write_bulk_string(writer, s),
+        .short_string => |ss| try resp.write_bulk_string(writer, ss.as_slice()),
+        .int => |i| try resp.write_int_bulk_string(writer, i),
+        .list, .time_series, .bloom_filter, .search_index, .hash_map => return error.WrongType,
+    }
+}
+
+/// GET key [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT unix-time-milliseconds | PERSIST]
+pub fn getex(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const obj = store.get(key) orelse {
+        try resp.write_null(writer);
+        return;
+    };
+
+    try write_string_value(writer, obj);
+
+    if (args.len == 2) return;
+
+    const opt = args[2].as_slice();
+    const upper_buf_len = 8;
+    var upper_buf: [upper_buf_len]u8 = undefined;
+    const opt_up = std.ascii.upperString(upper_buf[0..@min(opt.len, upper_buf_len)], opt);
+
+    if (std.mem.eql(u8, opt_up, "PERSIST")) {
+        _ = store.persist(key);
+    } else if (args.len >= 4) {
+        const amount = args[3].as_int() catch return error.ValueNotInteger;
+        const now = store.clock.now().toMilliseconds();
+        if (std.mem.eql(u8, opt_up, "EX")) {
+            _ = try store.expire(key, now + amount * 1000);
+        } else if (std.mem.eql(u8, opt_up, "PX")) {
+            _ = try store.expire(key, now + amount);
+        } else if (std.mem.eql(u8, opt_up, "EXAT")) {
+            _ = try store.expire(key, amount * 1000);
+        } else if (std.mem.eql(u8, opt_up, "PXAT")) {
+            _ = try store.expire(key, amount);
+        } else {
+            return error.InvalidArgument;
+        }
+    } else {
+        return error.InvalidArgument;
+    }
+}
+
+pub fn getdel(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const obj = store.get(key) orelse {
+        try resp.write_null(writer);
+        return;
+    };
+
+    try write_string_value(writer, obj);
+    _ = store.delete(key);
+}
+
+pub fn getrange(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const start_raw = args[2].as_int() catch return error.ValueNotInteger;
+    const end_raw = args[3].as_int() catch return error.ValueNotInteger;
+
+    var value_buf: [64]u8 = undefined;
+    const str: []const u8 = blk: {
+        const obj = store.get(key) orelse {
+            try resp.write_bulk_string(writer, "");
+            return;
+        };
+        break :blk switch (obj.value) {
+            .string => |s| s,
+            .short_string => |ss| ss.as_slice(),
+            .int => |i| std.fmt.bufPrint(&value_buf, "{d}", .{i}) catch {
+                try resp.write_bulk_string(writer, "");
+                return;
+            },
+            else => return error.WrongType,
+        };
+    };
+
+    const len = str.len;
+    if (len == 0) {
+        try resp.write_bulk_string(writer, "");
+        return;
+    }
+
+    const start: usize = if (start_raw < 0) blk: {
+        const off = @as(usize, @intCast(-start_raw));
+        break :blk if (off > len) 0 else len - off;
+    } else @intCast(start_raw);
+
+    const end: usize = if (end_raw < 0) blk: {
+        const off = @as(usize, @intCast(-end_raw));
+        break :blk if (off > len) 0 else len - off;
+    } else @min(@as(usize, @intCast(end_raw)), len - 1);
+
+    if (start > end or start >= len) {
+        try resp.write_bulk_string(writer, "");
+        return;
+    }
+
+    try resp.write_bulk_string(writer, str[start .. end + 1]);
+}
+
+pub fn setrange(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const offset = args[2].as_int() catch return error.ValueNotInteger;
+    if (offset < 0) return error.InvalidArgument;
+    const replacement = args[3].as_slice();
+
+    const off: usize = @intCast(offset);
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(store.allocator);
+
+    if (store.get(key)) |obj| {
+        switch (obj.value) {
+            .string => |s| try buf.appendSlice(store.allocator, s),
+            .short_string => |ss| try buf.appendSlice(store.allocator, ss.as_slice()),
+            .int => |i| {
+                var tmp: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch return error.Overflow;
+                try buf.appendSlice(store.allocator, formatted);
+            },
+            else => return error.WrongType,
+        }
+    }
+
+    const required_len = off + replacement.len;
+    if (buf.items.len < required_len) {
+        const old_len = buf.items.len;
+        try buf.resize(store.allocator, required_len);
+        @memset(buf.items[old_len..], 0);
+    }
+
+    @memcpy(buf.items[off .. off + replacement.len], replacement);
+
+    try store.set(key, buf.items);
+    try resp.write_int(writer, buf.items.len);
+}
+
+pub fn psetex(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const ms = args[2].as_int() catch return error.ValueNotInteger;
+    const value = args[3].as_slice();
+
+    if (ms <= 0) return error.InvalidArgument;
+
+    try store.set(key, value);
+    const now = store.clock.now().toMilliseconds();
+    _ = try store.expire(key, now + ms);
+
+    try resp.write_ok(writer);
+}
+
+pub fn msetnx(writer: *Writer, store: *Store, args: []const Value) !void {
+    if ((args.len - 1) % 2 != 0) return error.WrongNumberOfArguments;
+
+    var i: usize = 1;
+    while (i < args.len) : (i += 2) {
+        if (store.get(args[i].as_slice()) != null) {
+            try resp.write_int(writer, 0);
+            return;
+        }
+    }
+
+    i = 1;
+    while (i < args.len) : (i += 2) {
+        try store.set(args[i].as_slice(), args[i + 1].as_slice());
+    }
+    try resp.write_int(writer, 1);
+}
+
+/// Full SET with options: SET key value [NX|XX] [GET] [EX n | PX n | EXAT n | PXAT n | KEEPTTL]
+pub fn set_full(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const value = args[2].as_slice();
+
+    var nx = false;
+    var xx = false;
+    var get_flag = false;
+    var keepttl = false;
+    var expiry_ms: ?i64 = null;
+
+    var i: usize = 3;
+    while (i < args.len) : (i += 1) {
+        var buf: [8]u8 = undefined;
+        const opt = args[i].as_slice();
+        const opt_up = std.ascii.upperString(buf[0..@min(opt.len, buf.len)], opt);
+
+        if (std.mem.eql(u8, opt_up, "NX")) {
+            nx = true;
+        } else if (std.mem.eql(u8, opt_up, "XX")) {
+            xx = true;
+        } else if (std.mem.eql(u8, opt_up, "GET")) {
+            get_flag = true;
+        } else if (std.mem.eql(u8, opt_up, "KEEPTTL")) {
+            keepttl = true;
+        } else if (std.mem.eql(u8, opt_up, "EX") or std.mem.eql(u8, opt_up, "PX") or
+            std.mem.eql(u8, opt_up, "EXAT") or std.mem.eql(u8, opt_up, "PXAT"))
+        {
+            i += 1;
+            if (i >= args.len) return error.WrongNumberOfArguments;
+            const amount = args[i].as_int() catch return error.ValueNotInteger;
+            if (amount <= 0) return error.InvalidArgument;
+            const now = store.clock.now().toMilliseconds();
+            if (std.mem.eql(u8, opt_up, "EX")) {
+                expiry_ms = now + amount * 1000;
+            } else if (std.mem.eql(u8, opt_up, "PX")) {
+                expiry_ms = now + amount;
+            } else if (std.mem.eql(u8, opt_up, "EXAT")) {
+                expiry_ms = amount * 1000;
+            } else {
+                expiry_ms = amount;
+            }
+        } else {
+            return error.InvalidArgument;
+        }
+    }
+
+    const existing = store.get(key);
+
+    if (get_flag) {
+        if (existing) |obj| {
+            try write_string_value(writer, obj);
+        } else {
+            try resp.write_null(writer);
+        }
+    }
+
+    if (nx and existing != null) {
+        if (!get_flag) try resp.write_null(writer);
+        return;
+    }
+    if (xx and existing == null) {
+        if (!get_flag) try resp.write_null(writer);
+        return;
+    }
+
+    const old_ttl: ?i64 = if (keepttl) store.get_ttl(key) else null;
+
+    try store.set(key, value);
+
+    if (expiry_ms) |exp| {
+        _ = try store.expire(key, exp);
+    } else if (old_ttl) |ttl| {
+        _ = try store.expire(key, ttl);
+    }
+
+    if (!get_flag) try resp.write_ok(writer);
+}
+
 test "SET command with string value" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

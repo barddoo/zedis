@@ -204,6 +204,103 @@ pub fn randomkey(writer: *Writer, store: *Store, _: []const Value) !void {
     }
 }
 
+/// EXPIRETIME key — returns the expiry as a Unix timestamp in seconds, -1 if no expiry, -2 if missing.
+pub fn expiretime(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+
+    if (store.get(key) == null) {
+        try resp.write_int(writer, @as(i64, -2));
+        return;
+    }
+
+    if (store.get_ttl(key)) |expires_at_ms| {
+        try resp.write_int(writer, @divFloor(expires_at_ms, 1000));
+    } else {
+        try resp.write_int(writer, @as(i64, -1));
+    }
+}
+
+/// PEXPIRETIME key — returns the expiry as a Unix timestamp in milliseconds, -1 if no expiry, -2 if missing.
+pub fn pexpiretime(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+
+    if (store.get(key) == null) {
+        try resp.write_int(writer, @as(i64, -2));
+        return;
+    }
+
+    if (store.get_ttl(key)) |expires_at_ms| {
+        try resp.write_int(writer, expires_at_ms);
+    } else {
+        try resp.write_int(writer, @as(i64, -1));
+    }
+}
+
+/// COPY source destination [REPLACE]
+pub fn copy(writer: *Writer, store: *Store, args: []const Value) !void {
+    const src = args[1].as_slice();
+    const dst = args[2].as_slice();
+
+    var replace = false;
+    if (args.len > 3) {
+        var buf: [8]u8 = undefined;
+        const opt = args[3].as_slice();
+        const opt_up = std.ascii.upperString(buf[0..@min(opt.len, buf.len)], opt);
+        if (std.mem.eql(u8, opt_up, "REPLACE")) {
+            replace = true;
+        } else {
+            return error.InvalidArgument;
+        }
+    }
+
+    const copied = store.copy_key(src, dst, replace) catch |err| switch (err) {
+        error.AlreadyExists => {
+            try resp.write_int(writer, @as(usize, 0));
+            return;
+        },
+        error.WrongType => return err,
+        else => return err,
+    };
+
+    try resp.write_int(writer, @as(usize, if (copied) 1 else 0));
+}
+
+/// OBJECT ENCODING key (and other OBJECT subcommands — stub returns a sensible encoding name)
+pub fn object_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
+    if (args.len < 2) return error.WrongNumberOfArguments;
+
+    var buf: [16]u8 = undefined;
+    const subcmd = args[1].as_slice();
+    const subcmd_up = std.ascii.upperString(buf[0..@min(subcmd.len, buf.len)], subcmd);
+
+    if (std.mem.eql(u8, subcmd_up, "ENCODING")) {
+        if (args.len < 3) return error.WrongNumberOfArguments;
+        const key = args[2].as_slice();
+        const obj = store.get(key) orelse return error.KeyNotFound;
+        const encoding: []const u8 = switch (obj.value) {
+            .int => "int",
+            .short_string => "embstr",
+            .string => "raw",
+            .list => "listpack",
+            .hash_map => "listpack",
+            .bloom_filter, .time_series, .search_index => "raw",
+        };
+        try resp.write_bulk_string(writer, encoding);
+    } else if (std.mem.eql(u8, subcmd_up, "REFCOUNT")) {
+        if (args.len < 3) return error.WrongNumberOfArguments;
+        if (store.get(args[2].as_slice()) == null) return error.KeyNotFound;
+        try resp.write_int(writer, @as(usize, 1));
+    } else if (std.mem.eql(u8, subcmd_up, "IDLETIME") or std.mem.eql(u8, subcmd_up, "FREQ")) {
+        if (args.len < 3) return error.WrongNumberOfArguments;
+        if (store.get(args[2].as_slice()) == null) return error.KeyNotFound;
+        try resp.write_int(writer, @as(usize, 0));
+    } else if (std.mem.eql(u8, subcmd_up, "HELP")) {
+        try resp.write_list_len(writer, 0);
+    } else {
+        return error.InvalidArgument;
+    }
+}
+
 test "EXISTS command with existing key" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

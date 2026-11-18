@@ -169,6 +169,75 @@ pub fn hlen(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_int(writer, h.hlen());
 }
 
+/// HSETNX key field value
+/// Sets field only if it does not exist. Returns 1 if set, 0 otherwise.
+pub fn hsetnx(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const field = args[2].as_slice();
+    const value = args[3].as_slice();
+
+    const h = try store.get_or_create_hash(key);
+
+    if (h.hexists(field)) {
+        try resp.write_int(writer, @as(usize, 0));
+        return;
+    }
+
+    const pv = try PrimitiveValue.from_slice(value, store.allocator);
+    _ = try h.hset(field, pv);
+    try resp.write_int(writer, @as(usize, 1));
+}
+
+/// HINCRBY key field increment
+pub fn hincrby(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const field = args[2].as_slice();
+    const increment = args[3].as_int() catch return error.ValueNotInteger;
+
+    const h = try store.get_or_create_hash(key);
+
+    const current: i64 = if (h.hget(field)) |pv| switch (pv) {
+        .int => |i| i,
+        .string => |s| std.fmt.parseInt(i64, s, 10) catch return error.ValueNotInteger,
+        .short_string => |ss| std.fmt.parseInt(i64, ss.as_slice(), 10) catch return error.ValueNotInteger,
+    } else 0;
+
+    const new_val = std.math.add(i64, current, increment) catch return error.Overflow;
+    _ = try h.hset(field, .{ .int = new_val });
+    try resp.write_int(writer, new_val);
+}
+
+/// HINCRBYFLOAT key field increment
+pub fn hincrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const field = args[2].as_slice();
+    const increment_str = args[3].as_slice();
+    const increment = std.fmt.parseFloat(f64, increment_str) catch return error.InvalidFloat;
+
+    const h = try store.get_or_create_hash(key);
+
+    const current: f64 = if (h.hget(field)) |pv| switch (pv) {
+        .int => |i| @floatFromInt(i),
+        .string => |s| std.fmt.parseFloat(f64, s) catch return error.InvalidFloat,
+        .short_string => |ss| std.fmt.parseFloat(f64, ss.as_slice()) catch return error.InvalidFloat,
+    } else 0.0;
+
+    const new_val = current + increment;
+
+    var buf: [64]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&buf, "{d:.17}", .{new_val}) catch return error.Overflow;
+    var end = formatted.len;
+    if (std.mem.indexOf(u8, formatted, ".")) |_| {
+        while (end > 0 and formatted[end - 1] == '0') end -= 1;
+        if (end > 0 and formatted[end - 1] == '.') end -= 1;
+    }
+    const result = formatted[0..end];
+
+    const pv = try PrimitiveValue.from_slice(result, store.allocator);
+    _ = try h.hset(field, pv);
+    try resp.write_bulk_string(writer, result);
+}
+
 // --- Tests ---
 
 fn make_store(allocator: std.mem.Allocator) !Store {

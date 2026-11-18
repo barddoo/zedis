@@ -265,6 +265,78 @@ pub fn lrange(writer: *Writer, store: *Store, args: []const Value) !void {
     }
 }
 
+pub fn lrem(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const count = args[2].as_int() catch return error.ValueNotInteger;
+    const element = args[3].as_slice();
+
+    const list = try store.get_list(key) orelse {
+        try resp.write_int(writer, 0);
+        return;
+    };
+
+    const removed = list.remove(count, element);
+
+    if (list.len() == 0) {
+        _ = store.delete(key);
+    }
+
+    try resp.write_int(writer, removed);
+}
+
+pub fn ltrim(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const start = args[2].as_int() catch return error.ValueNotInteger;
+    const stop = args[3].as_int() catch return error.ValueNotInteger;
+
+    const list = try store.get_list(key) orelse {
+        try resp.write_ok(writer);
+        return;
+    };
+
+    list.trim(start, stop);
+
+    if (list.len() == 0) {
+        _ = store.delete(key);
+    }
+
+    try resp.write_ok(writer);
+}
+
+pub fn linsert(writer: *Writer, store: *Store, args: []const Value) !void {
+    const key = args[1].as_slice();
+    const where_str = args[2].as_slice();
+    const pivot = args[3].as_slice();
+    const element = args[4].as_slice();
+
+    var buf: [6]u8 = undefined;
+    const where_up = std.ascii.upperString(buf[0..@min(where_str.len, buf.len)], where_str);
+    const before = std.mem.eql(u8, where_up, "BEFORE");
+    if (!before and !std.mem.eql(u8, where_up, "AFTER")) {
+        return error.InvalidArgument;
+    }
+
+    const list = try store.get_list(key) orelse {
+        try resp.write_int(writer, 0);
+        return;
+    };
+
+    const pv = try PrimitiveValue.from_slice(element, store.allocator);
+    errdefer pv.deinit(store.allocator);
+
+    const new_len = if (before)
+        try list.insert_before(pivot, pv)
+    else
+        try list.insert_after(pivot, pv);
+
+    if (new_len) |n| {
+        try resp.write_int(writer, n);
+    } else {
+        pv.deinit(store.allocator);
+        try resp.write_int(writer, -1);
+    }
+}
+
 test "LPUSH single element to new list" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

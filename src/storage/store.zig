@@ -1046,6 +1046,35 @@ pub const Store = struct {
         return true;
     }
 
+    /// Copy `src` to `dst`. Returns false if `src` does not exist.
+    /// Returns error.AlreadyExists if `dst` exists and `replace` is false.
+    /// Only supports scalar types (string, int, short_string); returns
+    /// error.WrongType for complex types.
+    pub fn copy_key(self: *Store, src: []const u8, dst: []const u8, replace: bool) !bool {
+        assert(src.len > 0);
+        assert(dst.len > 0);
+
+        const src_obj = self.get(src) orelse return false;
+
+        if (self.get(dst) != null) {
+            if (!replace) return error.AlreadyExists;
+            _ = self.delete(dst);
+        }
+
+        switch (src_obj.value) {
+            .string => |s| try self.set(dst, s),
+            .short_string => |ss| try self.set(dst, ss.as_slice()),
+            .int => |i| try self.set_int(dst, i),
+            else => return error.WrongType,
+        }
+
+        if (self.get_ttl(src)) |expires_at| {
+            _ = try self.expire(dst, expires_at);
+        }
+
+        return true;
+    }
+
     pub fn create_time_series(self: *Store, key: []const u8, ts: TimeSeries) !void {
         assert(key.len > 0);
         const ts_ptr = try self.allocator.create(TimeSeries);

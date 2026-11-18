@@ -766,6 +766,13 @@ const TestContext = struct {
     }
 };
 
+/// RESET — resets the connection to its initial state (clears name, returns to RESP2).
+pub fn reset(client: *Client, _: []const Value, writer: *Writer) !void {
+    try client.setName(null);
+    client.protocol_version = 2;
+    try resp.write_simple_string(writer, "RESET");
+}
+
 test "CONFIG GET returns exact parameter" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

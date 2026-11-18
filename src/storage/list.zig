@@ -155,4 +155,143 @@ pub const ZedisList = struct {
         }
         list_node.data = value;
     }
+
+    fn primitive_eql_slice(pv: PrimitiveValue, s: []const u8) bool {
+        return switch (pv) {
+            .string => |str| std.mem.eql(u8, str, s),
+            .short_string => |ss| std.mem.eql(u8, ss.as_slice(), s),
+            .int => |i| (std.fmt.parseInt(i64, s, 10) catch return false) == i,
+        };
+    }
+
+    /// Remove up to `|count|` elements equal to `value`.
+    /// count > 0: scan head→tail; count < 0: scan tail→head; count == 0: remove all.
+    /// Returns number of elements removed.
+    pub fn remove(self: *ZedisList, count: i64, value: []const u8) usize {
+        const remove_all = count == 0;
+        const limit: usize = if (remove_all) std.math.maxInt(usize) else @intCast(@abs(count));
+        var removed: usize = 0;
+
+        if (count >= 0) {
+            var current = self.list.first;
+            while (current) |node| {
+                if (removed >= limit) break;
+                current = node.next;
+                const list_node: *ZedisListNode = @fieldParentPtr("node", node);
+                if (primitive_eql_slice(list_node.data, value)) {
+                    self.list.remove(node);
+                    self.cached_len -= 1;
+                    switch (list_node.data) {
+                        .string => |str| self.allocator.free(str),
+                        .int, .short_string => {},
+                    }
+                    self.allocator.destroy(list_node);
+                    removed += 1;
+                }
+            }
+        } else {
+            var current = self.list.last;
+            while (current) |node| {
+                if (removed >= limit) break;
+                current = node.prev;
+                const list_node: *ZedisListNode = @fieldParentPtr("node", node);
+                if (primitive_eql_slice(list_node.data, value)) {
+                    self.list.remove(node);
+                    self.cached_len -= 1;
+                    switch (list_node.data) {
+                        .string => |str| self.allocator.free(str),
+                        .int, .short_string => {},
+                    }
+                    self.allocator.destroy(list_node);
+                    removed += 1;
+                }
+            }
+        }
+        return removed;
+    }
+
+    /// Keep only elements in [start, stop] (inclusive, 0-based, negative indices from tail).
+    /// Elements outside the range are removed.
+    pub fn trim(self: *ZedisList, start_raw: i64, stop_raw: i64) void {
+        const list_len = self.cached_len;
+        if (list_len == 0) return;
+
+        const start: usize = if (start_raw < 0) blk: {
+            const offset = @as(usize, @intCast(-start_raw));
+            break :blk if (offset > list_len) 0 else list_len - offset;
+        } else @intCast(start_raw);
+
+        const stop: usize = if (stop_raw < 0) blk: {
+            const offset = @as(usize, @intCast(-stop_raw));
+            break :blk if (offset > list_len) 0 else list_len - offset;
+        } else @min(@as(usize, @intCast(stop_raw)), list_len - 1);
+
+        if (start > stop or start >= list_len) {
+            self.deinit();
+            return;
+        }
+
+        // drop elements before start
+        var i: usize = 0;
+        while (i < start) : (i += 1) {
+            _ = self.pop_first();
+        }
+
+        // cached_len updated by pop_first; now drop elements after stop - start
+        const keep = stop - start + 1;
+        while (self.cached_len > keep) {
+            _ = self.pop();
+        }
+    }
+
+    /// Insert `value` before or after the first occurrence of `pivot`.
+    /// Returns the new list length, or null if pivot not found, or error on OOM.
+    pub fn insert_before(self: *ZedisList, pivot: []const u8, value: PrimitiveValue) !?usize {
+        var current = self.list.first;
+        while (current) |node| {
+            const list_node: *ZedisListNode = @fieldParentPtr("node", node);
+            if (primitive_eql_slice(list_node.data, pivot)) {
+                const new_node = try self.allocator.create(ZedisListNode);
+                new_node.* = .{ .data = value };
+                // insert new_node before node
+                new_node.node.prev = node.prev;
+                new_node.node.next = node;
+                if (node.prev) |prev| {
+                    prev.next = &new_node.node;
+                } else {
+                    self.list.first = &new_node.node;
+                }
+                node.prev = &new_node.node;
+                self.cached_len += 1;
+                if (self.list.last == null) self.list.last = &new_node.node;
+                return self.cached_len;
+            }
+            current = node.next;
+        }
+        return null;
+    }
+
+    pub fn insert_after(self: *ZedisList, pivot: []const u8, value: PrimitiveValue) !?usize {
+        var current = self.list.first;
+        while (current) |node| {
+            const list_node: *ZedisListNode = @fieldParentPtr("node", node);
+            if (primitive_eql_slice(list_node.data, pivot)) {
+                const new_node = try self.allocator.create(ZedisListNode);
+                new_node.* = .{ .data = value };
+                // insert new_node after node
+                new_node.node.prev = node;
+                new_node.node.next = node.next;
+                if (node.next) |next| {
+                    next.prev = &new_node.node;
+                } else {
+                    self.list.last = &new_node.node;
+                }
+                node.next = &new_node.node;
+                self.cached_len += 1;
+                return self.cached_len;
+            }
+            current = node.next;
+        }
+        return null;
+    }
 };

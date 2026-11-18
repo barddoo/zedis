@@ -3,6 +3,8 @@ const zio = @import("zio");
 const Server = @import("app/server.zig");
 const Config = @import("app/config.zig");
 
+pub const std_options_debug_io = zio.debug_io;
+
 const log = std.log.scoped(.main);
 
 pub fn main(init: std.process.Init) !void {

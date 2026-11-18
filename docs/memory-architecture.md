@@ -194,7 +194,14 @@ Structures that grow and shrink during operation:
 
 ## Memory Budgets and Reporting
 
-`Config.total_memory_budget()` = `fixed_memory_size()` + `kv_memory_budget`
+`Config.total_memory_budget()` = `fixed_memory_size()` + `kv_memory_budget` + `disk_memory_budget`
+
+With `disk-storage no` the disk share is zero and the old formula holds.
+With `disk-storage yes`, `maxmemory` is treated as the KV + disk total:
+
+- an explicit `disk-memory-budget` is subtracted from `maxmemory`;
+- otherwise the disk share is a quarter of `maxmemory` (64 MB floor, 1 GB
+  ceiling), and the KV budget is reduced by the same amount.
 
 `Config.fixed_memory_size()` = `client_pool_size()` + `pubsub_matrix_size()`
 (computed model, not a live measurement)
@@ -203,7 +210,39 @@ Structures that grow and shrink during operation:
 - `fixed_memory_used` — from `Config.fixed_memory_size()` (model-based)
 - `kv_memory_used` — from `KeyValueAllocator.get_memory_usage()` (precise)
 - `total_allocated` — sum of fixed + kv
+- `disk_memory_used` — TidesDB memtable + transactions + the configured block
+  cache (an upper bound; v10 does not report cache usage)
+- `disk_memory_budget` — the reserved disk share
 - `total_budget` — from `Config.total_memory_budget()`
+
+## Disk Tier
+
+`disk-storage yes` adds a cold-value tier (`src/storage/disk.zig` and the
+TidesDB binding in `src/storage/disk/tidesdb.zig`). The KV allocator does not
+own TidesDB memory: the C engine has no allocator hook, allocates on its own
+flush/compaction threads, and would re-enter eviction from those threads. The
+two domains share a budget and a reported number, not an allocator.
+
+- At each command boundary, `KeyValueAllocator.enforce_budget()` spills cold
+  string values down to `disk-low-watermark` before it evicts anything.
+- `noeviction` keeps no LRU index, so it cannot spill in this milestone; the
+  disk tier requires `allkeys-lru` or `volatile-lru`.
+- A spilled entry keeps its key, TTL, LRU links and type in memory; only the
+  value payload moves. `KEYS`, `SCAN`, `TTL`, `TYPE` and LRU sampling therefore
+  never read from disk.
+- The first read materializes the value. Phase 3 does this synchronously on the
+  executor, so a cold read stalls the event loop for one disk read.
+- `spill_entry()` allocates its encoding scratch from `std.heap.c_allocator`,
+  not the KV allocator, because spilling runs outside a command where a KV
+  allocation could re-enter eviction.
+- `INFO memory` reports `used_memory` (in-memory only), `used_memory_disk`, and
+  `used_memory_total`; `METRICS` exposes the same split plus spill/reload
+  counters.
+
+Materializing a spilled value during `SAVE`, `BGREWRITEAOF`, or a full-store
+iteration loads every value into memory. In disk mode these operations can
+exceed the KV budget; the AOF is the supported durability path for this
+milestone.
 
 ## Reporting Caveats
 
