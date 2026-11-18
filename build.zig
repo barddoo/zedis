@@ -18,6 +18,12 @@ pub fn build(b: *std.Build) void {
         "Link OpenSSL statically (disable with -Dopenssl-static=false)",
     ) orelse true;
 
+    const lua_prefix = b.option(
+        []const u8,
+        "lua-prefix",
+        "LuaJIT installation prefix (defaults to Homebrew on macOS)",
+    ) orelse defaultLuaPrefix(b, target);
+
     // --- Main executable ---
     const exe = b.addExecutable(.{
         .name = "zedis",
@@ -29,6 +35,13 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("zio", zio_mod);
     addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
+    addLuaSources(b, exe.root_module, lua_prefix);
+    // LuaJIT on 64-bit macOS: GC requires a low 4 GB address space.
+    // LuaJIT on 64-bit macOS: GC requires a low 4 GB address space.
+    if (target.result.os.tag == .macos) {
+        exe.pagezero_size = 0x10000;
+        exe.image_base = 0x100000000;
+    }
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -54,6 +67,7 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("zio", zio_mod);
     addTlsSources(b, test_mod, openssl_prefix, openssl_static);
+    addLuaSources(b, test_mod, lua_prefix);
 
     const unit_tests = b.addTest(.{
         .name = "test-unit",
@@ -168,4 +182,31 @@ fn defaultOpenSslPrefix(b: *std.Build, target: std.Build.ResolvedTarget) ?[]cons
 fn exists(b: *std.Build, path: []const u8) bool {
     std.Io.Dir.accessAbsolute(b.graph.io, path, .{}) catch return false;
     return true;
+}
+
+fn addLuaSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8) void {
+    module.link_libc = true;
+    if (prefix) |root| {
+        module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include", "luajit-2.1" }) });
+        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "lib" }) });
+    }
+    module.linkSystemLibrary("luajit-5.1", .{ .preferred_link_mode = .static });
+}
+
+fn defaultLuaPrefix(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
+    const candidates: []const []const u8 = switch (target.result.os.tag) {
+        .macos => &.{
+            "/opt/homebrew/opt/luajit",
+            "/usr/local/opt/luajit",
+        },
+        .linux => &.{
+            "/usr",
+            "/usr/local",
+        },
+        else => &.{},
+    };
+    for (candidates) |root| {
+        if (exists(b, b.pathJoin(&.{ root, "include", "luajit-2.1", "lua.h" }))) return root;
+    }
+    return null;
 }

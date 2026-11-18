@@ -24,6 +24,7 @@ const resp = @import("../protocol/resp.zig");
 const ClientHandle = @import("../util/types.zig").ClientHandle;
 const invalid_client_slot_index = @import("../util/types.zig").invalid_client_slot_index;
 const tls_mod = @import("tls.zig");
+const LuaEngine = @import("lua_engine.zig").LuaEngine;
 const Transport = client_module.Transport;
 const Io = std.Io;
 const Stream = Io.net.Stream;
@@ -88,6 +89,7 @@ kv_allocator: KeyValueAllocator,
 clock: Clock,
 store: Store,
 registry: CommandRegistry,
+lua_engine: LuaEngine,
 pubsub_context: PubSubContext,
 
 // Metadata
@@ -178,6 +180,7 @@ pub fn init_with_config(
         .clock = undefined,
         .store = undefined,
         .registry = undefined,
+        .lua_engine = undefined,
         .pubsub_context = undefined,
         .redisVersion = undefined,
         .createdTime = 0,
@@ -226,6 +229,7 @@ pub fn init_with_config(
     });
 
     server.registry = try command_init.init_registry(base_allocator);
+    server.lua_engine = try LuaEngine.init(base_allocator);
 
     server.stats = ServerStats.init(base_allocator, io);
     errdefer server.stats.deinit();
@@ -335,6 +339,8 @@ pub fn deinit(self: *Server) void {
     self.clock.deinit();
 
     self.store.deinit();
+
+    self.lua_engine.deinit();
 
     // Registry cleanup (uses temp arena)
     self.registry.deinit();
@@ -1164,6 +1170,7 @@ fn init_test_server(allocator: Allocator, max_clients: u32) !Server {
         .clock = Clock.init(testing.io, 0),
         .store = undefined,
         .registry = undefined,
+        .lua_engine = undefined,
         .pubsub_context = undefined,
         .redisVersion = null,
         .createdTime = 0,
@@ -1323,6 +1330,7 @@ fn init_memory_test_server(allocator: Allocator, budget: usize, policy: Config.E
         .clock = undefined,
         .store = undefined,
         .registry = undefined,
+        .lua_engine = undefined,
         .pubsub_context = undefined,
         .redisVersion = null,
         .createdTime = 0,
