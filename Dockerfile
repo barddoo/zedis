@@ -17,6 +17,7 @@ RUN install-zig.sh "${ZIG_VERSION}" "${ZIG_MINISIGN_PUBKEY}"
 WORKDIR /build
 COPY build.zig build.zig.zon ./
 COPY src src/
+COPY vendor vendor/
 
 RUN zig build -Drelease -Dtarget="$(uname -m)-linux-musl"
 

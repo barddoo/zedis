@@ -156,6 +156,10 @@ links AWS-LC from source, so no system TLS library is needed. The native ztls
 engine speaks TLS 1.3; `tls-protocols` accepts `TLSv1.3` and `TLSv1.2`, but
 TLS 1.2 is not negotiated.
 
+LuaJIT is built from the `vendor/luajit` git submodule, so clone with
+`git clone --recurse-submodules`, or run
+`git submodule update --init --recursive` before building.
+
 ```bash
 # Build in debug mode (default)
 zig build

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-18
+
+### Added
+
+- Lua scripting: `EVAL`, `EVALSHA`, and `SCRIPT LOAD|EXISTS|FLUSH`, backed by LuaJIT 2.1 from the new `vendor/luajit` submodule. Scripts get `KEYS`, `ARGV`, and the `redis.call`, `redis.pcall`, `redis.status_reply`, and `redis.error_reply` helpers; `io`, `os`, `dofile`, `loadfile`, `require`, and `load` are removed. A write made through `redis.call` is logged to the AOF as the command it ran, with absolute TTLs, so a script's effects survive a restart; a call that replied with an error is not logged.
+- String commands `GETEX`, `GETDEL`, `GETRANGE`, `SUBSTR`, `SETRANGE`, `PSETEX`, and `MSETNX`.
+- Key commands `EXPIRETIME`, `PEXPIRETIME`, `COPY` (with `REPLACE`), and `OBJECT` (`ENCODING`, `REFCOUNT`, `IDLETIME`, `FREQ`); connection command `RESET`.
+- List commands `LREM`, `LTRIM`, and `LINSERT`.
+- Hash commands `HSETNX`, `HINCRBY`, and `HINCRBYFLOAT`.
+
+### Changed
+
+- TLS is now provided by ztls, with AWS-LC built by the Zig build system, replacing the OpenSSL glue and removing the system OpenSSL dependency. The native ztls engine speaks TLS 1.3 only: `tls-protocols` still accepts `TLSv1.2` for Redis config compatibility, but a value that excludes `TLSv1.3` (such as `"TLSv1.2"` alone) is rejected at startup. Mutual TLS (`tls-auth-clients yes` or `optional`) works as before.
+- LuaJIT is built from the `vendor/luajit` submodule; the `-Dlua-prefix` option and the lookup of a system LuaJIT are gone.
+- zio updated to v0.20.1.
+- `install-zig.sh` bounds mirror downloads (connect timeout, and a mirror that delivers under 100 KiB/s for 15 s is skipped) so a stalled mirror cannot hang CI, and the `zig` symlink is installed under the requested `DEST` instead of hardcoded `/usr/local`.
+- `REDIS_COMPATIBILITY.md` was rebuilt from the registered command table: new string, list, hash, and key commands, Bloom filters, `TS.RANGE`, and partial-coverage notes are reflected, and the unregistered FT commands are documented as unsupported.
+
+### Fixed
+
+- `SET`, `MSET`, and `GETSET` no longer keep a previous TTL; Redis discards it unless the command opts in with `KEEPTTL`.
+- `EXPIRE` and `PEXPIRE` share one options parser, so both accept `NX`, `XX`, `GT`, and `LT`. `EXPIRE` previously ignored those options. Both now reject non-integer TTLs and report multiplication overflow under their own command name.
+- AOF logging of TTL-carrying commands (`SET`, `SETEX`, `PSETEX`, `GETEX`, `EXPIRE`, `PEXPIRE`) writes the resulting state as absolute `PEXPIREAT` or `DEL` commands, and a command that failed is no longer logged.
+- LuaJIT's low-address image base is applied on x86_64 macOS only; on arm64 it produced a malformed Mach-O that the kernel killed at launch.
+- CRC64 now uses slicing-by-8 tables instead of a byte-at-a-time loop, speeding up RDB checksums.
+
+### Removed
+
+- The OpenSSL TLS backend (`src/app/openssl_glue.c`, `src/app/openssl_glue.h`) and the `-Dopenssl-prefix` and `-Dopenssl-static` build options.
+
 ## [0.2.2] - 2026-11-10
 
 ### Added
@@ -285,7 +315,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/barddoo/zedis/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/barddoo/zedis/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/barddoo/zedis/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/bardoo/zedis/compare/0.1.3...v0.2.0

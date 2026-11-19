@@ -34,7 +34,7 @@ const log = std.log.scoped(.server);
 const Server = @This();
 const mailbox_capacity = 256;
 
-pub const server_version = "0.2.1";
+pub const server_version = "0.2.3";
 
 const Value = @import("../protocol/parser.zig").Value;
 
