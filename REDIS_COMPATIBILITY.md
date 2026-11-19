@@ -69,7 +69,7 @@ set; the Notes column says where.
 | PEXPIRE    | Yes       | NX, XX, GT, and LT options                                                |
 | EXPIREAT   | Partial   | Absolute expiry only; NX, XX, GT, and LT are not parsed                    |
 | PEXPIREAT  | Partial   | Absolute expiry only; NX, XX, GT, and LT are not parsed                    |
-| TYPE       | Yes       | Reports string, list, hash, tseries-type, bloom_filter, or search_index    |
+| TYPE       | Yes       | Reports string, list, hash, set, zset, tseries-type, bloom_filter, or search_index |
 | RENAME     | Yes       | Rename a key                                                              |
 | RANDOMKEY  | Yes       | Return a random key                                                       |
 | COPY       | Yes       | Supports REPLACE; no DB option                                            |
@@ -90,19 +90,26 @@ set; the Notes column says where.
 | LREM    | Yes       | Remove elements matching a value               |
 | LTRIM   | Yes       | Trim a list to a range                         |
 | LINSERT | Yes       | Insert BEFORE or AFTER a pivot element         |
+| LMOVE   | Yes       | Atomically move an element between lists       |
+| RPOPLPUSH | Yes     | Pop the tail and push it to the head of another list |
+| BLPOP   | Yes       | Blocking LPOP across several keys; decimal timeout, 0 waits forever |
+| BRPOP   | Yes       | Blocking RPOP across several keys; decimal timeout, 0 waits forever |
+| BLMOVE  | Yes       | Blocking LMOVE                                 |
 
-Blocking list commands (`BLPOP`, `BRPOP`, `BRPOPLPUSH`, `BLMOVE`), `LMOVE`, and
-`RPOPLPUSH` are not implemented.
+Blocking commands park the client outside the command handler and never stall
+other clients. Inside MULTI/EXEC and Lua scripts they behave as their
+non-blocking forms and reply nil when nothing is available. `BRPOPLPUSH` is not
+implemented. Popping the last element removes the key.
 
 ## Set Commands
 
 | Command   | Supported | Notes                                 |
 | --------- | --------- | ------------------------------------- |
-| SADD      | No        | Add members to a set                  |
-| SREM      | No        | Remove members from a set             |
-| SMEMBERS  | No        | Get all members of a set              |
-| SCARD     | No        | Get the number of members in a set    |
-| SISMEMBER | No        | Check if a value is a member of a set |
+| SADD      | Yes       | Add members to a set                  |
+| SREM      | Yes       | Remove members from a set             |
+| SMEMBERS  | Yes       | Get all members of a set              |
+| SCARD     | Yes       | Get the number of members in a set    |
+| SISMEMBER | Yes       | Check if a value is a member of a set |
 | SINTER    | No        | Get the intersection of sets          |
 | SUNION    | No        | Get the union of sets                 |
 | SDIFF     | No        | Get the difference of sets            |
@@ -129,12 +136,20 @@ Blocking list commands (`BLPOP`, `BRPOP`, `BRPOPLPUSH`, `BLMOVE`), `LMOVE`, and
 
 | Command | Supported | Notes                                      |
 | ------- | --------- | ------------------------------------------ |
-| ZADD    | No        | Add members to a sorted set                |
-| ZREM    | No        | Remove members from a sorted set           |
-| ZRANGE  | No        | Get members in a sorted set by index range |
+| ZADD    | Yes       | NX, XX, GT, LT and CH; INCR is not supported (use ZINCRBY) |
+| ZINCRBY | Yes       | Increment a member's score                 |
+| ZREM    | Yes       | Remove members from a sorted set           |
+| ZRANGE  | Partial   | Index and BYSCORE ranges with REV, LIMIT and WITHSCORES; no BYLEX. WITHSCORES replies are a flat array, also under RESP3 |
+| ZREVRANGE | Yes     | Index range, highest score first           |
+| ZRANGEBYSCORE | Yes | Score range with LIMIT and WITHSCORES      |
+| ZREVRANGEBYSCORE | Yes | Score range, highest first              |
+| ZREMRANGEBYSCORE | Yes | Remove members within a score range     |
 | ZRANK   | No        | Get the rank of a member in a sorted set   |
-| ZSCORE  | No        | Get the score of a member in a sorted set  |
-| ZCARD   | No        | Get the number of members in a sorted set  |
+| ZSCORE  | Yes       | Get the score of a member in a sorted set  |
+| ZCARD   | Yes       | Get the number of members in a sorted set  |
+
+Sets and sorted sets survive restarts through the AOF (replay and rewrite). RDB
+snapshots do not write them yet, like hashes.
 
 ## Pub/Sub Commands
 
@@ -279,11 +294,11 @@ replies with an unknown command. Treat FT as unsupported.
 
 ## Summary
 
-**Total Commands**: 157 listed in this document
+**Total Commands**: 167 listed in this document
 
-- **Fully Implemented**: 99 commands
-- **Partially Implemented**: 9 commands (all with a subset of subcommands or options; see Notes)
-- **Not Implemented**: 49 commands
-- **Implementation Coverage**: ~69% (108 of 157 listed commands)
+- **Fully Implemented**: 118 commands
+- **Partially Implemented**: 10 commands (all with a subset of subcommands or options; see Notes)
+- **Not Implemented**: 39 commands
+- **Implementation Coverage**: ~77% (128 of 167 listed commands)
 
 This compatibility matrix will be updated as new commands are implemented in Zedis.

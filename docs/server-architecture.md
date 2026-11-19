@@ -51,6 +51,28 @@ Socket I/O and `appendfsync always` durability waits can suspend, but only outsi
 command execution. If a handler ever needs to suspend, it must not mutate the store
 around that suspension (or the single-executor/no-lock invariant no longer holds).
 
+## Blocking commands
+
+`BLPOP`, `BRPOP` and `BLMOVE` obey the no-suspension rule by splitting the work.
+Their handlers never wait: they pop when a key has data and reply nil otherwise,
+which is also what MULTI/EXEC, Lua and AOF replay get. The waiting happens in
+`Client.handle`, between commands (`app/blocking.zig`):
+
+1. If no key is ready, replies already batched for the client are flushed, so a
+   pipeline is not held back by the parked command.
+2. The client registers a `Waiter` for its keys and parks on a `zio.Event` with the
+   command's timeout.
+3. After each command, `Server.notify_blocked` wakes waiters on keys that the
+   command may have filled (LPUSH, RPUSH, LINSERT, LMOVE and friends, including
+   commands run by EXEC and scripts).
+4. A woken client re-checks readiness and then runs the unmodified command, so
+   the pop is logged to the AOF verbatim and only when it succeeds. A timeout
+   writes nil without running anything, so nothing is logged.
+
+Waiters wake in registration order but are not handed the element: a client that
+wakes after another has taken it simply parks again. A parked client does not
+read its socket, so a peer that disconnects is noticed only on wake or timeout.
+
 ## Observability
 
 `Server` owns a `stats.ServerStats`, a fixed-size `SLOWLOG` ring and a
