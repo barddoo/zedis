@@ -35,6 +35,7 @@ const log = std.log.scoped(.server);
 const Server = @This();
 const mailbox_capacity = 256;
 
+pub const zedis_version = "0.2.6";
 pub const server_version = "7.0.0";
 
 /// Returns the Redis version string reported to clients. When

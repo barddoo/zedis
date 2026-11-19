@@ -30,9 +30,9 @@ jobs:
       - name: Check version matches the tag
         run: |
           tag="${GITHUB_REF#refs/tags/v}"
-          server=$(sed -n 's/.*server_version = "\([^"]*\)".*/\1/p' src/app/server.zig)
+          server=$(sed -n 's/.*zedis_version = "\([^"]*\)".*/\1/p' src/app/server.zig)
           zon=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
-          test "$tag" = "$server" || { echo "tag $tag != server_version $server"; exit 1; }
+          test "$tag" = "$server" || { echo "tag $tag != zedis_version $server"; exit 1; }
           test "$tag" = "$zon" || { echo "tag $tag != build.zig.zon version $zon"; exit 1; }
 
       - name: Run tests
