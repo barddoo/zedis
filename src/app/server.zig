@@ -193,7 +193,7 @@ pub fn init_with_config(
     errdefer server.deinitNetwork();
 
     if (config.tls_enabled()) {
-        server.tls = try tls_mod.Server.create(base_allocator, .{
+        server.tls = try tls_mod.Server.create(io, base_allocator, .{
             .cert_file = config.tls_cert_file,
             .key_file = config.tls_key_file,
             .ca_file = config.tls_ca_cert_file,

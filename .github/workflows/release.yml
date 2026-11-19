@@ -19,9 +19,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install Zig and OpenSSL
+      - name: Install Zig
         run: |
-          sudo apt-get install -y --no-install-recommends libssl-dev minisign
+          sudo apt-get install -y --no-install-recommends minisign
           sudo ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
 
       - name: Run tests
@@ -57,7 +57,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/src" \
             -w /src \
             alpine:3.24.4 \
-            sh -c 'apk add --no-cache curl xz openssl-dev openssl-libs-static minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build -Drelease -Dopenssl-static=true -Dopenssl-prefix=/usr -Dtarget=$(uname -m)-linux-musl'
+            sh -c 'apk add --no-cache curl xz minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build -Drelease -Dtarget=$(uname -m)-linux-musl'
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact

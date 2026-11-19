@@ -68,7 +68,8 @@ tls_key_file: []const u8 = "",
 tls_ca_cert_file: []const u8 = "",
 /// Whether clients must present a certificate signed by `tls_ca_cert_file`.
 tls_auth_clients: TlsAuthClients = .yes,
-/// Space-separated TLS versions to negotiate (TLSv1.2, TLSv1.3).
+/// Space-separated TLS versions to negotiate (TLSv1.3; TLSv1.2 is accepted for
+/// Redis config compatibility but not negotiated).
 tls_protocols: []const u8 = "",
 
 // General

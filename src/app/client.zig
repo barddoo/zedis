@@ -37,7 +37,7 @@ pub const Transport = union(enum) {
     pub fn reader(self: Transport, io: std.Io, buffer: []u8) Reader {
         return switch (self) {
             .plain => |stream| .{ .plain = stream.reader(io, buffer) },
-            .tls => |t| .{ .tls = tls_mod.Reader.init(t.connection, buffer) },
+            .tls => |t| .{ .tls = t.connection.reader(buffer) },
             .none => unreachable,
         };
     }
@@ -45,7 +45,7 @@ pub const Transport = union(enum) {
     pub fn writer(self: Transport, io: std.Io, buffer: []u8) Writer {
         return switch (self) {
             .plain => |stream| .{ .plain = stream.writer(io, buffer) },
-            .tls => |t| .{ .tls = tls_mod.Writer.init(t.connection, buffer) },
+            .tls => |t| .{ .tls = t.connection.writer(buffer) },
             .none => unreachable,
         };
     }

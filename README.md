@@ -21,7 +21,7 @@ A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), 
   for allocating commands, and cgroup-aware auto-sizing inside containers.
 - **Pub/Sub**: Decoupled communication between services, with push delivery to idle
   subscribers.
-- **TLS**: Optional TLS 1.2/1.3 listener (OpenSSL) with certificate/key/CA
+- **TLS**: Optional TLS 1.3 listener (ztls/AWS-LC) with certificate/key/CA
   configuration and optional mutual TLS via `tls-auth-clients`.
 - **Observability**: Real `INFO` counters (connections, ops/sec, hit rate,
   memory, AOF state), `SLOWLOG`, `LATENCY`, and a `METRICS` command exposing
@@ -151,11 +151,10 @@ See `docs/memory-architecture.md` for the current allocator layout, memory budge
 
 ### Building for Development
 
-TLS support links OpenSSL. On macOS install it with `brew install openssl@4`
-(the build auto-detects the Homebrew keg); on Debian/Ubuntu install
-`libssl-dev`, and on Alpine install `openssl-dev openssl-libs-static`.
-OpenSSL is linked statically by default; pass `-Dopenssl-static=false` for a
-dynamic link, or `-Dopenssl-prefix=/path` for a non-standard prefix.
+TLS is provided by [ztls](https://github.com/lalinsky/ztls), which builds and
+links AWS-LC from source, so no system TLS library is needed. The native ztls
+engine speaks TLS 1.3; `tls-protocols` accepts `TLSv1.3` and `TLSv1.2`, but
+TLS 1.2 is not negotiated.
 
 ```bash
 # Build in debug mode (default)

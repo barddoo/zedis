@@ -7,16 +7,8 @@ pub fn build(b: *std.Build) void {
     const zio = b.dependency("zio", .{ .target = target, .optimize = optimize });
     const zio_mod = zio.module("zio");
 
-    const openssl_prefix = b.option(
-        []const u8,
-        "openssl-prefix",
-        "OpenSSL installation prefix (defaults to Homebrew on macOS, system elsewhere)",
-    ) orelse defaultOpenSslPrefix(b, target);
-    const openssl_static = b.option(
-        bool,
-        "openssl-static",
-        "Link OpenSSL statically (disable with -Dopenssl-static=false)",
-    ) orelse true;
+    const ztls = b.dependency("ztls", .{ .target = target, .optimize = optimize });
+    const ztls_mod = ztls.module("ztls");
 
     const lua_build = luaJITBuildStep(b, target);
 
@@ -30,7 +22,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addImport("zio", zio_mod);
-    addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
+    exe.root_module.addImport("ztls", ztls_mod);
     addLuaSources(b, exe.root_module, target);
     exe.step.dependOn(lua_build);
     // LuaJIT's GC needs a low 4 GB address space on x86_64 macOS. On arm64 the
@@ -63,7 +55,7 @@ pub fn build(b: *std.Build) void {
         .optimize = .debug,
     });
     test_mod.addImport("zio", zio_mod);
-    addTlsSources(b, test_mod, openssl_prefix, openssl_static);
+    test_mod.addImport("ztls", ztls_mod);
     addLuaSources(b, test_mod, target);
 
     const unit_tests = b.addTest(.{
@@ -141,46 +133,6 @@ pub fn build(b: *std.Build) void {
 
     const bench_all_step = b.step("bench", "Run micro-benchmarks");
     bench_all_step.dependOn(&run_bench_micro.step);
-}
-
-/// Adds the OpenSSL glue and links libssl/libcrypto. `prefix` is only needed
-/// for keg-only installs such as Homebrew's OpenSSL.
-fn addTlsSources(b: *std.Build, module: *std.Build.Module, prefix: ?[]const u8, static: bool) void {
-    module.addCSourceFile(.{ .file = b.path("src/app/openssl_glue.c"), .flags = &.{} });
-    module.addIncludePath(b.path("src/app"));
-    module.link_libc = true;
-
-    if (prefix) |root| {
-        module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ root, "include" }) });
-        module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ root, "lib" }) });
-    }
-
-    const link_mode: std.builtin.LinkMode = if (static) .static else .dynamic;
-    module.linkSystemLibrary("ssl", .{ .preferred_link_mode = link_mode });
-    module.linkSystemLibrary("crypto", .{ .preferred_link_mode = link_mode });
-}
-
-/// macOS keeps OpenSSL in a keg-only Homebrew prefix; Linux installs it on the
-/// system search path, so only macOS needs probing.
-fn defaultOpenSslPrefix(b: *std.Build, target: std.Build.ResolvedTarget) ?[]const u8 {
-    if (target.result.os.tag != .macos) return null;
-
-    const candidates = [_][]const u8{
-        "/opt/homebrew/opt/openssl@4",
-        "/opt/homebrew/opt/openssl@3",
-        "/usr/local/opt/openssl@4",
-        "/usr/local/opt/openssl@3",
-    };
-    for (candidates) |root| {
-        const header = b.pathJoin(&.{ root, "include", "openssl", "ssl.h" });
-        if (exists(b, header)) return root;
-    }
-    return null;
-}
-
-fn exists(b: *std.Build, path: []const u8) bool {
-    std.Io.Dir.accessAbsolute(b.graph.io, path, .{}) catch return false;
-    return true;
 }
 
 fn luaJITBuildStep(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.Step {

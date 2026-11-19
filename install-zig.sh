@@ -30,8 +30,10 @@ fi
 # Official site last; its tarballs live under /download/<version>/.
 for base in $mirrors "https://ziglang.org/download/${version}"; do
   echo "trying $base" >&2
-  curl -fsSL --retry 2 -o "$work/$name" "$base/$name?source=zedis-docker" || continue
-  curl -fsSL --retry 2 -o "$work/$name.minisig" "$base/$name.minisig?source=zedis-docker" || continue
+  curl -fsSL --connect-timeout 10 --speed-limit 102400 --speed-time 15 --retry 2 \
+       -o "$work/$name" "$base/$name?source=zedis-docker" || continue
+  curl -fsSL --connect-timeout 10 --max-time 15 --retry 2 \
+       -o "$work/$name.minisig" "$base/$name.minisig?source=zedis-docker" || continue
 
   minisign -Vm "$work/$name" -x "$work/$name.minisig" -P "$pubkey" >/dev/null || {
     echo "signature check failed for $base" >&2
@@ -45,7 +47,8 @@ for base in $mirrors "https://ziglang.org/download/${version}"; do
   fi
 
   tar -xJf "$work/$name" -C "$dest"
-  ln -sf "$dest/zig-${arch}-linux-${version}/zig" /usr/local/bin/zig
+  mkdir -p "$dest/bin"
+  ln -sf "$dest/zig-${arch}-linux-${version}/zig" "$dest/bin/zig"
   echo "installed zig ${version} (${arch}) from $base" >&2
   exit 0
 done
