@@ -15,7 +15,8 @@ A Redis-compatible in-memory data store written in [Zig](https://ziglang.org/), 
 - **High Performance**: Written in Zig, with a single-executor command path and no
   global store lock.
 - **Key Expiration**: Lazy TTL expiry on access, plus expiry checks during eviction.
-- **Disk persistence (RDB)**: Point-in-time snapshots of your dataset.
+- **Disk persistence (RDB)**: Point-in-time snapshots of your dataset, loaded at
+  startup when `appendonly` is off.
 - **Append-only file (AOF)**: Durable write-ahead logging with group commit.
 - **Memory Budgeting**: Redis-compatible `maxmemory` with eviction, `-OOM` rejection
   for allocating commands, and cgroup-aware auto-sizing inside containers.

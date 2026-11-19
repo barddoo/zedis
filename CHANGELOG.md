@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-19
+
+### Added
+
+- Sets: `SADD`, `SREM`, `SMEMBERS`, `SCARD`, and `SISMEMBER`, backed by a new `set` value type. AOF replay and rewrites rebuild a set with `SADD`, including its TTL.
+- Sorted sets: `ZADD` (`NX`, `XX`, `GT`, `LT`, `CH`), `ZINCRBY`, `ZREM`, `ZREMRANGEBYSCORE`, `ZCARD`, `ZSCORE`, `ZRANGE` (`BYSCORE`, `REV`, `LIMIT`, `WITHSCORES`), `ZREVRANGE`, `ZRANGEBYSCORE`, and `ZREVRANGEBYSCORE`. A member-to-score map answers score lookups while an array ordered by (score, member) serves ranks and ranges; AOF rewrites emit `ZADD` with shortest round-tripping scores.
+- Blocking list commands `BLPOP`, `BRPOP`, and `BLMOVE`, plus non-blocking `LMOVE` and `RPOPLPUSH`. Timeouts are decimal seconds, with `0` waiting forever. A blocked client parks its coroutine outside the command path: earlier pipelined replies are flushed first, nothing is logged to the AOF while parked, and a push, list move, `RENAME`, or `COPY` on a watched key wakes it to re-check. Inside `MULTI`, in pub/sub mode, and during AOF replay the same commands run non-blocking, which is what keeps replays deterministic.
+- The Redis primitives Sidekiq needs for queues, retries, and schedules: lists with blocking pops and moves, sets, sorted sets, `MULTI`/`EXEC`, and `INFO`.
+
+### Changed
+
+- RDB snapshots now load at startup when `appendonly` is `no`. The boot path follows `appendonly` instead of always trying the AOF, and reads the configured `dbfilename` (it previously looked for a hardcoded `test.rdb`). The RDB writer round-trips strings, lists, hashes, sets, and sorted sets with their TTLs, and `SAVE` refuses a dataset holding a time series, bloom filter, or search index instead of writing a snapshot that cannot be loaded.
+- `TYPE`, `SCAN TYPE`, and `OBJECT ENCODING` now recognize `hash`, `set`, and `zset`.
+- New commands participate in the memory gate (`denyoom`), the read-only classification used by command timeouts, and `COMMAND` key specs.
+- `REDIS_COMPATIBILITY.md` marks sets, sorted sets, blocking list commands, and list moves as implemented, and `docs/server-architecture.md` documents the blocked-client model.
+
+### Fixed
+
+- Startup no longer ignores `appendonly` or silently skips a snapshot: it loads the AOF when it is enabled and the RDB otherwise, and refuses to start when that file cannot be loaded instead of serving an empty dataset.
+- `SCAN TYPE hash` matches hashes; previously only strings, lists, and module types were recognized.
+- `LMOVE` and `RPOPLPUSH` relink the moved list node instead of reallocating it, so a failure after the pop cannot drop the element.
+- Blocking and sorted-set errors now use Redis' messages: `ERR timeout is not a float or out of range`, `ERR timeout is negative`, `ERR min or max is not a float`, and `ERR resulting score is not a number (NaN)`.
+
 ## [0.2.3] - 2026-11-18
 
 ### Added
@@ -316,7 +339,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/barddoo/zedis/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/barddoo/zedis/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/barddoo/zedis/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/barddoo/zedis/compare/v0.2.0...v0.2.1

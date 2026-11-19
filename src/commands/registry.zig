@@ -111,6 +111,7 @@ pub const CommandRegistry = struct {
             error.InvalidRange => "ERR min or max is not a float",
             error.ScoreNaN => "ERR resulting score is not a number (NaN)",
             error.InvalidArgument => "ERR invalid argument",
+            error.UnsupportedType => "ERR SAVE cannot serialize this dataset (RDB holds strings, lists, hashes, sets and sorted sets)",
             error.QuerySyntax => "ERR invalid query syntax",
             error.UnknownField => "ERR unknown field",
             error.MissingParam => "ERR missing query parameter",

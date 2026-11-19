@@ -35,7 +35,7 @@ const log = std.log.scoped(.server);
 const Server = @This();
 const mailbox_capacity = 256;
 
-pub const server_version = "0.2.3";
+pub const server_version = "0.2.4";
 
 const Value = @import("../protocol/parser.zig").Value;
 
@@ -273,10 +273,10 @@ pub fn init_with_config(
     server.kv_allocator.begin_command();
     defer server.kv_allocator.end_command();
 
-    // Prefer AOF to RDB
-    // Load AOF file if it exists
-    // 'true' to be replaced with user option (use aof/rdb on boot)
-    if (true) {
+    // The AOF is the recovery log when enabled; otherwise the RDB snapshot is.
+    // Redis never mixes them: an AOF left over from an earlier run is ignored
+    // while `appendonly` is no, and a snapshot is ignored while it is yes.
+    if (config.appendonly) {
         const load_options: aof.LoadOptions = .{
             .load_truncated = config.aof_load_truncated,
             .load_broken = config.aof_load_broken,
@@ -298,22 +298,21 @@ pub fn init_with_config(
                 return err;
             },
         }
-    } else {
-        if (Reader.rdb_file_exists()) {
-            if (Reader.init(base_allocator, &server.store)) |reader_value| {
-                var reader = reader_value;
-                defer reader.deinit();
+    } else if (Reader.fileExists(io, config.dir, config.dbfilename)) {
+        var reader = Reader.init(base_allocator, &server.store, io, config.dir, config.dbfilename) catch |err| {
+            log.err("Refusing to start: cannot open the RDB ({s})", .{@errorName(err)});
+            return err;
+        };
+        defer reader.deinit();
 
-                if (reader.read_file()) |data| {
-                    log.info("Loading RDB into store", .{});
-                    server.createdTime = data.ctime;
-                } else |err| {
-                    log.warn("Failed to read RDB: {s}", .{@errorName(err)});
-                }
-            } else |err| {
-                log.warn("Failed to initialize RDB reader: {s}", .{@errorName(err)});
-            }
-        }
+        const data = reader.read_file() catch |err| {
+            log.err("Refusing to start: the RDB could not be loaded ({s})", .{@errorName(err)});
+            return err;
+        };
+        log.info("Loading RDB into store", .{});
+        server.createdTime = data.ctime;
+    } else {
+        log.debug("No RDB to load", .{});
     }
 
     // After loading: the writer starts appending at the file's length, which a
