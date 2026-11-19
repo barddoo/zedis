@@ -477,7 +477,7 @@ test "HSCAN returns cursor 0 and field-value pairs, with MATCH filtering" {
     var writer = Writer.fixed(&buf);
 
     try hset(&writer, &store, &[_]Value{
-        .{ .data = "HSET" }, .{ .data = "h" },
+        .{ .data = "HSET" },   .{ .data = "h" },
         .{ .data = "field1" }, .{ .data = "v1" },
         .{ .data = "other" },  .{ .data = "v2" },
     });
@@ -493,7 +493,7 @@ test "HSCAN returns cursor 0 and field-value pairs, with MATCH filtering" {
     // MATCH filter: only field1 matches "field*".
     writer = Writer.fixed(&buf);
     try hscan(&writer, &store, &[_]Value{
-        .{ .data = "HSCAN" }, .{ .data = "h" }, .{ .data = "0" },
+        .{ .data = "HSCAN" }, .{ .data = "h" },      .{ .data = "0" },
         .{ .data = "MATCH" }, .{ .data = "field*" },
     });
     try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*2\r\n$6\r\nfield1\r\n$2\r\nv1\r\n", writer.buffered());

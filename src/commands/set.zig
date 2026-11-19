@@ -202,7 +202,7 @@ test "SSCAN returns cursor 0 and all members, with MATCH filtering" {
     try testing.expect(std.mem.startsWith(u8, out, "*2\r\n$1\r\n0\r\n*3\r\n"));
 
     const filtered = try run(store, &buf, sscan, &.{
-        .{ .data = "SSCAN" }, .{ .data = "s" }, .{ .data = "0" },
+        .{ .data = "SSCAN" }, .{ .data = "s" },  .{ .data = "0" },
         .{ .data = "MATCH" }, .{ .data = "a*" },
     });
     try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*1\r\n$2\r\naa\r\n", filtered);
