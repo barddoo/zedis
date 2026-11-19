@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Store = @import("../storage/store.zig").Store;
-const CommandRegistry = @import("../commands/registry.zig").CommandRegistry;
+const Client = @import("client.zig").Client;
 const Value = @import("../protocol/parser.zig").Value;
 const resp = @import("../protocol/resp.zig");
 
@@ -66,7 +66,7 @@ pub inline fn lua_newtable(L: *State) void {
 
 const EvalContext = struct {
     store: *Store,
-    registry: *CommandRegistry,
+    client: *Client,
 };
 var current_ctx: ?EvalContext = null;
 
@@ -109,7 +109,7 @@ fn redis_call_impl(L: *State, raise_errors: bool) c_int {
 
     var resp_buf: [65536]u8 = undefined;
     var tmp_writer: std.Io.Writer = .fixed(&resp_buf);
-    ctx.registry.execute_for_script(&tmp_writer, ctx.store, args);
+    ctx.client.server.execute_script_command(ctx.client, args, &tmp_writer);
 
     const result = tmp_writer.buffered();
     if (result.len == 0) {
@@ -355,7 +355,7 @@ pub const LuaEngine = struct {
         self: *LuaEngine,
         writer: *std.Io.Writer,
         store: *Store,
-        registry: *CommandRegistry,
+        client: *Client,
         script: []const u8,
         keys: []const Value,
         argv: []const Value,
@@ -363,7 +363,7 @@ pub const LuaEngine = struct {
         const L = self.L;
         lua_settop(L, 0);
 
-        current_ctx = .{ .store = store, .registry = registry };
+        current_ctx = .{ .store = store, .client = client };
         defer current_ctx = null;
 
         lua_createtable(L, @intCast(keys.len), 0);

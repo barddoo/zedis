@@ -17,7 +17,7 @@ pub fn eval(client: *Client, args: []const Value, writer: *std.Io.Writer) !void 
     }
     const keys = args[3 .. 3 + nk];
     const argv = args[3 + nk ..];
-    try client.server.lua_engine.eval(writer, client.store, &client.server.registry, script, keys, argv);
+    try client.server.lua_engine.eval(writer, client.store, client, script, keys, argv);
 }
 
 pub fn evalsha(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {
@@ -37,7 +37,7 @@ pub fn evalsha(client: *Client, args: []const Value, writer: *std.Io.Writer) !vo
     }
     const keys = args[3 .. 3 + nk];
     const argv = args[3 + nk ..];
-    try client.server.lua_engine.eval(writer, client.store, &client.server.registry, script, keys, argv);
+    try client.server.lua_engine.eval(writer, client.store, client, script, keys, argv);
 }
 
 pub fn script_cmd(client: *Client, args: []const Value, writer: *std.Io.Writer) !void {

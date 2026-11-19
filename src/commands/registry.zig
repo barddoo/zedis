@@ -175,7 +175,6 @@ pub const CommandRegistry = struct {
         // own AUTH option and checks credentials itself.
         if (!std.mem.eql(u8, upper_name, "AUTH") and
             !std.mem.eql(u8, upper_name, "HELLO") and
-            !std.mem.eql(u8, upper_name, "PING") and
             !client.is_authenticated())
         {
             resp.write_error(writer, "NOAUTH Authentication required") catch {};

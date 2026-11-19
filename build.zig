@@ -33,8 +33,9 @@ pub fn build(b: *std.Build) void {
     addTlsSources(b, exe.root_module, openssl_prefix, openssl_static);
     addLuaSources(b, exe.root_module, target);
     exe.step.dependOn(lua_build);
-    // LuaJIT on 64-bit macOS: GC requires a low 4 GB address space.
-    if (target.result.os.tag == .macos) {
+    // LuaJIT's GC needs a low 4 GB address space on x86_64 macOS. On arm64 the
+    // override yields a malformed Mach-O (overlapping segments, SIGKILL at launch).
+    if (target.result.os.tag == .macos and target.result.cpu.arch == .x86_64) {
         exe.pagezero_size = 0x10000;
         exe.image_base = 0x100000000;
     }
