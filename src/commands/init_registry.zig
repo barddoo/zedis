@@ -302,6 +302,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     try registry.register(.{
+        .name = "SSCAN",
+        .handler = .{ .store_handler = set.sscan },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Incrementally iterate set members",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
         .name = "ZADD",
         .handler = .{ .store_handler = zset.zadd },
         .min_args = 4,
@@ -1007,6 +1016,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
         .min_args = 2,
         .max_args = 2,
         .description = "Get number of fields in a hash",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "HSCAN",
+        .handler = .{ .store_handler = hash.hscan },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Incrementally iterate hash fields and values",
         .write_to_aof = false,
     });
 

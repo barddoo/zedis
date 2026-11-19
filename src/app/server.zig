@@ -35,7 +35,17 @@ const log = std.log.scoped(.server);
 const Server = @This();
 const mailbox_capacity = 256;
 
-pub const server_version = "0.2.5";
+pub const server_version = "7.0.0";
+
+/// Returns the Redis version string reported to clients. When
+/// `redis-version` is set in the config file that value is used;
+/// otherwise the built-in server_version is returned. This lets operators
+/// satisfy clients that enforce a minimum Redis version without changing the
+/// binary.
+pub fn reported_version(self: *const Server) []const u8 {
+    const override = self.config.redis_version;
+    return if (override.len > 0) override else server_version;
+}
 
 const Value = @import("../protocol/parser.zig").Value;
 

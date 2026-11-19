@@ -2,6 +2,7 @@ const std = @import("std");
 const Store = @import("../storage/store.zig").Store;
 const Value = @import("../protocol/parser.zig").Value;
 const resp = @import("../protocol/resp.zig");
+const string_match = @import("../util/string_match.zig").string_match;
 const Io = std.Io;
 const Writer = Io.Writer;
 const testing = std.testing;
@@ -77,6 +78,51 @@ pub fn sismember(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_int(writer, @intFromBool(set.contains(args[2].as_slice())));
 }
 
+/// SSCAN key cursor [MATCH pattern] [COUNT count]
+/// Cursor-based iteration over set members. Zedis uses a flat hash map with no
+/// stable slot numbering, so we always do a full scan and return cursor 0 —
+/// this matches Redis's guarantee that cursor 0 signals "done".
+pub fn sscan(writer: *Writer, store: *Store, args: []const Value) !void {
+    // args: [0]=SSCAN [1]=key [2]=cursor [3..]=options
+    const key = args[1].as_slice();
+    _ = args[2].as_u64() catch return resp.write_error(writer, "ERR invalid cursor");
+
+    var pattern: []const u8 = "*";
+    var i: usize = 3;
+    while (i < args.len) {
+        const opt = args[i].as_slice();
+        if (std.ascii.eqlIgnoreCase(opt, "MATCH") and i + 1 < args.len) {
+            pattern = args[i + 1].as_slice();
+            i += 2;
+        } else if (std.ascii.eqlIgnoreCase(opt, "COUNT") and i + 1 < args.len) {
+            _ = args[i + 1].as_usize() catch return error.SyntaxError;
+            i += 2;
+        } else {
+            return error.SyntaxError;
+        }
+    }
+
+    const set = try store.get_set(key);
+
+    try resp.write_list_len(writer, 2);
+    try resp.write_bulk_string(writer, "0"); // always done in one pass
+
+    if (set) |s| {
+        var count: usize = 0;
+        var it = s.iterator();
+        while (it.next()) |member| {
+            if (string_match(pattern, member.*)) count += 1;
+        }
+        try resp.write_list_len(writer, count);
+        it = s.iterator();
+        while (it.next()) |member| {
+            if (string_match(pattern, member.*)) try resp.write_bulk_string(writer, member.*);
+        }
+    } else {
+        try resp.write_list_len(writer, 0);
+    }
+}
+
 /// Owns the clock the store points at, so it outlives every store call.
 const Env = struct {
     clock: Clock,
@@ -141,6 +187,28 @@ test "SMEMBERS lists every member" {
 
     try testing.expectEqualStrings("*1\r\n$4\r\nonly\r\n", try run(store, &buf, smembers, &.{ .{ .data = "SMEMBERS" }, .{ .data = "s" } }));
     try testing.expectEqualStrings("*0\r\n", try run(store, &buf, smembers, &.{ .{ .data = "SMEMBERS" }, .{ .data = "none" } }));
+}
+
+test "SSCAN returns cursor 0 and all members, with MATCH filtering" {
+    var env: Env = undefined;
+    try env.init();
+    defer env.store.deinit();
+    const store = &env.store;
+    var buf: [512]u8 = undefined;
+
+    _ = try run(store, &buf, sadd, &.{ .{ .data = "SADD" }, .{ .data = "s" }, .{ .data = "aa" }, .{ .data = "bb" }, .{ .data = "cc" } });
+
+    const out = try run(store, &buf, sscan, &.{ .{ .data = "SSCAN" }, .{ .data = "s" }, .{ .data = "0" } });
+    try testing.expect(std.mem.startsWith(u8, out, "*2\r\n$1\r\n0\r\n*3\r\n"));
+
+    const filtered = try run(store, &buf, sscan, &.{
+        .{ .data = "SSCAN" }, .{ .data = "s" }, .{ .data = "0" },
+        .{ .data = "MATCH" }, .{ .data = "a*" },
+    });
+    try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*1\r\n$2\r\naa\r\n", filtered);
+
+    const empty = try run(store, &buf, sscan, &.{ .{ .data = "SSCAN" }, .{ .data = "nosuchkey" }, .{ .data = "0" } });
+    try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*0\r\n", empty);
 }
 
 test "set commands reject keys holding another type" {

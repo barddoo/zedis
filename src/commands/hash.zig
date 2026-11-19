@@ -5,6 +5,7 @@ const ZedisHash = @import("../storage/hash.zig").ZedisHash;
 const PrimitiveValue = @import("../util/types.zig").PrimitiveValue;
 const Value = @import("../protocol/parser.zig").Value;
 const resp = @import("../protocol/resp.zig");
+const string_match = @import("../util/string_match.zig").string_match;
 const Io = std.Io;
 const Writer = Io.Writer;
 const testing = std.testing;
@@ -238,6 +239,52 @@ pub fn hincrbyfloat(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_bulk_string(writer, result);
 }
 
+/// HSCAN key cursor [MATCH pattern] [COUNT count]
+/// Cursor-based iteration over hash fields and values. Returns each matching
+/// field followed by its value. Always returns cursor 0 (full scan in one pass).
+pub fn hscan(writer: *Writer, store: *Store, args: []const Value) !void {
+    // args: [0]=HSCAN [1]=key [2]=cursor [3..]=options
+    const key = args[1].as_slice();
+    _ = args[2].as_u64() catch return resp.write_error(writer, "ERR invalid cursor");
+
+    var pattern: []const u8 = "*";
+    var i: usize = 3;
+    while (i < args.len) {
+        const opt = args[i].as_slice();
+        if (std.ascii.eqlIgnoreCase(opt, "MATCH") and i + 1 < args.len) {
+            pattern = args[i + 1].as_slice();
+            i += 2;
+        } else if (std.ascii.eqlIgnoreCase(opt, "COUNT") and i + 1 < args.len) {
+            _ = args[i + 1].as_usize() catch return error.SyntaxError;
+            i += 2;
+        } else {
+            return error.SyntaxError;
+        }
+    }
+
+    const hash = try store.get_hash(key);
+
+    try resp.write_list_len(writer, 2);
+    try resp.write_bulk_string(writer, "0"); // always done in one pass
+
+    if (hash) |h| {
+        var count: usize = 0;
+        var it = h.iterator();
+        while (it.next()) |entry| {
+            if (string_match(pattern, entry.key_ptr.*)) count += 1;
+        }
+        try resp.write_list_len(writer, count * 2); // field + value per match
+        it = h.iterator();
+        while (it.next()) |entry| {
+            if (!string_match(pattern, entry.key_ptr.*)) continue;
+            try resp.write_bulk_string(writer, entry.key_ptr.*);
+            try write_primitive(writer, entry.value_ptr.*);
+        }
+    } else {
+        try resp.write_list_len(writer, 0);
+    }
+}
+
 // --- Tests ---
 
 fn make_store(allocator: std.mem.Allocator) !Store {
@@ -421,6 +468,42 @@ test "HLEN returns field count" {
     writer = Writer.fixed(&buf);
     try hlen(&writer, &store, &[_]Value{ .{ .data = "HLEN" }, .{ .data = "h" } });
     try testing.expectEqualStrings(":3\r\n", writer.buffered());
+}
+
+test "HSCAN returns cursor 0 and field-value pairs, with MATCH filtering" {
+    var store = try make_store(testing.allocator);
+    defer store.deinit();
+    var buf: [512]u8 = undefined;
+    var writer = Writer.fixed(&buf);
+
+    try hset(&writer, &store, &[_]Value{
+        .{ .data = "HSET" }, .{ .data = "h" },
+        .{ .data = "field1" }, .{ .data = "v1" },
+        .{ .data = "other" },  .{ .data = "v2" },
+    });
+
+    // Full scan: cursor 0, two fields → 4 elements in inner list (2 field+value pairs).
+    writer = Writer.fixed(&buf);
+    try hscan(&writer, &store, &[_]Value{
+        .{ .data = "HSCAN" }, .{ .data = "h" }, .{ .data = "0" },
+    });
+    const out = writer.buffered();
+    try testing.expect(std.mem.startsWith(u8, out, "*2\r\n$1\r\n0\r\n*4\r\n"));
+
+    // MATCH filter: only field1 matches "field*".
+    writer = Writer.fixed(&buf);
+    try hscan(&writer, &store, &[_]Value{
+        .{ .data = "HSCAN" }, .{ .data = "h" }, .{ .data = "0" },
+        .{ .data = "MATCH" }, .{ .data = "field*" },
+    });
+    try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*2\r\n$6\r\nfield1\r\n$2\r\nv1\r\n", writer.buffered());
+
+    // Missing key returns empty list.
+    writer = Writer.fixed(&buf);
+    try hscan(&writer, &store, &[_]Value{
+        .{ .data = "HSCAN" }, .{ .data = "nosuchkey" }, .{ .data = "0" },
+    });
+    try testing.expectEqualStrings("*2\r\n$1\r\n0\r\n*0\r\n", writer.buffered());
 }
 
 test "hash commands return WRONGTYPE on non-hash key" {

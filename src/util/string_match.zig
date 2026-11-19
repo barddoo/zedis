@@ -1,38 +1,42 @@
-// TODO: Add character class support and escape character support.
-pub fn string_match(pattern: []const u8, str: []const u8) bool {
-    var pIndex: usize = 0;
-    var sIndex: usize = 0;
+const std = @import("std");
 
-    while (pIndex < pattern.len and sIndex < str.len) {
-        if (pattern[pIndex] == '*') {
-            // Skip consecutive '*' characters
-            while (pIndex + 1 < pattern.len and pattern[pIndex + 1] == '*') : (pIndex += 1) {}
-            if (pIndex + 1 == pattern.len) {
-                return true; // Trailing '*' matches the rest of the string
-            }
-            pIndex += 1;
-            while (sIndex < str.len) {
-                if (string_match(pattern[pIndex..], str[sIndex..])) {
-                    return true;
-                }
-                sIndex += 1;
-            }
-            return false;
-        } else if (pattern[pIndex] == '?' or pattern[pIndex] == str[sIndex]) {
-            pIndex += 1;
-            sIndex += 1;
+// TODO: Add character class support and escape character support.
+//
+// Iterative backtracking: when a '*' is seen we save (star_p, star_s).
+// On mismatch we replay from star_p letting '*' consume one more character.
+// Consecutive '*'s collapse naturally because each one overwrites star_p.
+pub fn string_match(pattern: []const u8, str: []const u8) bool {
+    var p: usize = 0;
+    var s: usize = 0;
+    // Sentinel meaning "no '*' seen yet"; std.math.maxInt avoids a separate flag.
+    var star_p: usize = std.math.maxInt(usize);
+    var star_s: usize = 0;
+
+    while (s < str.len) {
+        const pc = if (p < pattern.len) pattern[p] else 0;
+
+        if (pc == '*') {
+            star_p = p + 1;
+            star_s = s;
+            p += 1;
+        } else if (@intFromBool(pc == '?') | @intFromBool(pc == str[s]) != 0) {
+            // Bitwise | avoids short-circuit so the comparison is branch-free.
+            p += 1;
+            s += 1;
+        } else if (star_p != std.math.maxInt(usize)) {
+            star_s += 1;
+            s = star_s;
+            p = star_p;
         } else {
             return false;
         }
     }
 
-    // Check for remaining characters in pattern
-    while (pIndex < pattern.len and pattern[pIndex] == '*') : (pIndex += 1) {}
-
-    return pIndex == pattern.len and sIndex == str.len;
+    while (p < pattern.len and pattern[p] == '*') : (p += 1) {}
+    return p == pattern.len;
 }
 
-const testing = @import("std").testing;
+const testing = std.testing;
 
 test "string_match: exact match" {
     try testing.expect(string_match("hello", "hello"));

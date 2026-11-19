@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-19
+
+### Changed
+
+- `string_match`: replaced recursive glob matching with iterative backtracking; bitwise `|` on the character comparison avoids a short-circuit branch.
+
 ## [0.2.5] - 2026-11-19
 
 ### Changed
@@ -350,7 +356,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - No Redis modules support
 - FLUSHDB/FLUSHALL are synchronous only (no ASYNC mode)
 
-[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/barddoo/zedis/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/barddoo/zedis/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/barddoo/zedis/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/barddoo/zedis/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/barddoo/zedis/compare/v0.2.2...v0.2.3

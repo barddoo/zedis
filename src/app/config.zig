@@ -205,6 +205,10 @@ initial_capacity: u32 = 8192, // Initial hash map capacity for Store (reduces ea
 eviction_policy: EvictionPolicy = .allkeys_lru, // LRU eviction policy
 requirepass: ?[]const u8 = null, // Password authentication (null = disabled)
 rdb_write_buffer_size: usize = 256 * 1024, // 256KB buffer for RDB writes (optimal SSD throughput)
+/// Version string reported to clients in INFO and HELLO. Empty means use the
+/// built-in server_version. Set to "7.0.0" or higher to satisfy clients that
+/// enforce a minimum Redis version (e.g. Sidekiq 8).
+redis_version: []const u8 = "",
 
 // Computed constants (calculated from other fields)
 pub fn client_pool_size(self: Config) usize {
@@ -608,6 +612,8 @@ fn parse_config_line(config: *Config, allocator: std.mem.Allocator, key: []const
         config.aof_load_broken_max_size = try parseInt(u32, trimmed_value, 10);
     } else if (eql(u8, key, "aof-use-rdb-preamble")) {
         config.aof_use_rdb_preamble = eql(u8, trimmed_value, "yes");
+    } else if (eql(u8, key, "redis-version")) {
+        config.redis_version = try allocator.dupe(u8, trimmed_value);
     }
 }
 
@@ -804,6 +810,22 @@ fn parse_cgroup_limit(text: []const u8) ?u64 {
 }
 
 const testing = std.testing;
+
+test "redis-version is parsed from config" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const config = try parse_config_text(arena.allocator(), "redis-version 7.2.0\n");
+    try testing.expectEqualStrings("7.2.0", config.redis_version);
+}
+
+test "redis-version defaults to empty" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const config = try parse_config_text(arena.allocator(), "port 6379\n");
+    try testing.expectEqualStrings("", config.redis_version);
+}
 
 test "config directives past the first 8 KiB are loaded" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

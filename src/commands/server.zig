@@ -255,7 +255,7 @@ fn writeInfo(server: *Server, writer: *std.Io.Writer, filter: []const u8) !void 
                 "config_file:{s}\r\n" ++
                 "io_threads_active:0\r\n\r\n",
             .{
-                server_version,
+                server.reported_version(),
                 server_version,
                 @tagName(builtin.os.tag),
                 @bitSizeOf(usize),

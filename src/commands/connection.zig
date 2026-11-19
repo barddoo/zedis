@@ -194,7 +194,7 @@ pub fn hello(client: *Client, args: []const Value, writer: *Writer) !void {
     try resp.write_bulk_string(writer, "server");
     try resp.write_bulk_string(writer, "zedis");
     try resp.write_bulk_string(writer, "version");
-    try resp.write_bulk_string(writer, server_version);
+    try resp.write_bulk_string(writer, client.server.reported_version());
     try resp.write_bulk_string(writer, "proto");
     try resp.write_int(writer, proto);
     try resp.write_bulk_string(writer, "id");
