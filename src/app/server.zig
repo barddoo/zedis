@@ -393,7 +393,10 @@ fn aof_logging(self: *Server, command_name: []const u8) AofLogging {
     if (!self.aof_writer.enabled) return .none;
     if (std.ascii.eqlIgnoreCase(command_name, "EXPIRE") or
         std.ascii.eqlIgnoreCase(command_name, "PEXPIRE") or
-        std.ascii.eqlIgnoreCase(command_name, "SETEX"))
+        std.ascii.eqlIgnoreCase(command_name, "SETEX") or
+        std.ascii.eqlIgnoreCase(command_name, "PSETEX") or
+        std.ascii.eqlIgnoreCase(command_name, "SET") or
+        std.ascii.eqlIgnoreCase(command_name, "GETEX"))
     {
         return .absolute_ttl;
     }
@@ -421,8 +424,7 @@ fn memory_gate(self: *Server, client: *Client, args: []const Value, writer: *std
 
     // Let the registry answer NOAUTH for unauthenticated clients.
     if (!client.is_authenticated() and
-        !std.mem.eql(u8, upper_name, "AUTH") and
-        !std.mem.eql(u8, upper_name, "PING"))
+        !std.mem.eql(u8, upper_name, "AUTH"))
     {
         return true;
     }
@@ -466,9 +468,36 @@ pub fn execute_locked(self: *Server, client: *Client, args: []const Value, respo
 
     const ok = self.process_command_direct(client, args, response_writer);
 
-    if (logging == .absolute_ttl) self.log_absolute_ttl(client, args, existed);
+    if (ok and logging == .absolute_ttl) self.log_absolute_ttl(client, args, existed);
     if (logging != .none) self.maybe_rewrite_aof();
     return ok;
+}
+
+/// Runs one `redis.call` from a script with the same AOF logging as a top-level
+/// command, so script writes survive a restart. The enclosing EVAL isn't logged
+/// itself; its effects are, as individual commands (Redis' effects replication).
+pub fn execute_script_command(self: *Server, client: *Client, args: []const Value, response_writer: *std.Io.Writer) void {
+    const logging: AofLogging = if (args.len > 0) self.aof_logging(args[0].as_slice()) else .none;
+    if (logging != .none) {
+        if (self.aof_writer.failure()) |failure| {
+            failure.write_error(response_writer) catch {};
+            return;
+        }
+        self.stats.rdb_changes_since_last_save +%= 1;
+    }
+    if (logging == .verbatim) client.aof_end = self.aof_writer.write_command(args);
+
+    const existed = logging == .absolute_ttl and args.len > 1 and args[1].as_slice().len > 0 and
+        self.store.exists(args[1].as_slice());
+
+    self.registry.execute_for_script(response_writer, client.store, args);
+
+    // A command that replied with an error did not change the store, so its
+    // effect must not be replayed.
+    const reply = response_writer.buffered();
+    const failed = reply.len > 0 and reply[0] == '-';
+    if (logging == .absolute_ttl and !failed) self.log_absolute_ttl(client, args, existed);
+    if (logging != .none) self.maybe_rewrite_aof();
 }
 
 /// Starts rewriting the AOF on a background thread; see `aof.Writer.start_rewrite`.
@@ -486,23 +515,40 @@ fn maybe_rewrite_aof(self: *Server) void {
     self.start_aof_rewrite() catch |err| log.warn("Could not start an AOF rewrite: {s}", .{@errorName(err)});
 }
 
-/// Logs the state an EXPIRE or SETEX left behind: `SET key value` for SETEX,
-/// then `PEXPIREAT key <expiry ms>` if the key has a TTL, or `DEL key` if
-/// EXPIRE deleted it.
+/// Logs the state a TTL-carrying command left behind as absolute commands:
+/// `SET key value` when the value changed, then `PEXPIREAT key <expiry ms>` if
+/// the key has a TTL, or `DEL key` when EXPIRE deleted it. Commands that did
+/// not apply (a failed NX/XX, an invalid option) log nothing.
 fn log_absolute_ttl(self: *Server, client: *Client, args: []const Value, existed: bool) void {
     if (args.len < 3 or args[1].as_slice().len == 0) return;
     const key = args[1].as_slice();
+    const name = args[0].as_slice();
+    const is_set = std.ascii.eqlIgnoreCase(name, "SET");
+    const is_setex = std.ascii.eqlIgnoreCase(name, "SETEX");
+    const is_psetex = std.ascii.eqlIgnoreCase(name, "PSETEX");
+    const is_getex = std.ascii.eqlIgnoreCase(name, "GETEX");
 
-    if (std.ascii.eqlIgnoreCase(args[0].as_slice(), "SETEX")) {
-        // Only log a SETEX that took effect, i.e. its value is now stored.
+    if (is_set) {
+        // A conditional SET that didn't write left the old value in place;
+        // replaying it would apply a write that never happened.
+        if (!self.stored_string_equals(key, args[2].as_slice())) return;
+        client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "SET" }, args[1], args[2] });
+    } else if (is_setex or is_psetex) {
+        // Only log one that took effect, i.e. its value is now stored.
         if (args.len != 4 or !self.stored_string_equals(key, args[3].as_slice())) return;
         client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "SET" }, args[1], args[3] });
+    } else if (is_getex) {
+        // GETEX without an option only reads; there is nothing to replay.
+        if (args.len < 3 or !self.store.exists(key)) return;
     } else if (!self.store.exists(key)) {
         if (existed) client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "DEL" }, args[1] });
         return;
     }
 
-    const expires_at = self.store.get_ttl(key) orelse return;
+    const expires_at = self.store.get_ttl(key) orelse {
+        if (is_getex) client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "PERSIST" }, args[1] });
+        return;
+    };
     var buf: [20]u8 = undefined;
     const at = std.fmt.bufPrint(&buf, "{d}", .{expires_at}) catch unreachable;
     client.aof_end = self.aof_writer.write_command(&[_]Value{ .{ .data = "PEXPIREAT" }, args[1], .{ .data = at } });
@@ -1619,4 +1665,129 @@ test "COMMAND INFO describes a registered command" {
     );
 
     try testing.expect(std.mem.startsWith(u8, writer.buffered(), "*1\r\n*10\r\n$3\r\nGET\r\n:2\r\n"));
+}
+
+test "PING requires authentication when requirepass is set" {
+    const server = try init_memory_test_server(testing.allocator, 1024 * 1024, .noeviction);
+    defer deinit_memory_test_server(server);
+    defer resp.version = 2;
+    server.config.requirepass = "secret";
+
+    var client = initCommandTestClient(server);
+    client.authenticated = false;
+
+    var buffer: [128]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    const ping_args = [_]Value{.{ .data = "PING" }};
+    server.execute_command(&client, &ping_args, &writer);
+    try testing.expectEqualStrings("-NOAUTH Authentication required\r\n", writer.buffered());
+
+    client.authenticated = true;
+    writer = std.Io.Writer.fixed(&buffer);
+    server.execute_command(&client, &ping_args, &writer);
+    try testing.expectEqualStrings("+PONG\r\n", writer.buffered());
+}
+
+test "script commands write through to the store" {
+    const server = try init_memory_test_server(testing.allocator, 1024 * 1024, .noeviction);
+    defer deinit_memory_test_server(server);
+    defer resp.version = 2;
+
+    var client = initCommandTestClient(server);
+    var buffer: [128]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    const set_args = [_]Value{ .{ .data = "SET" }, .{ .data = "k" }, .{ .data = "v" } };
+    server.execute_script_command(&client, &set_args, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+
+    writer = std.Io.Writer.fixed(&buffer);
+    const get_args = [_]Value{ .{ .data = "GET" }, .{ .data = "k" } };
+    server.execute_script_command(&client, &get_args, &writer);
+    try testing.expectEqualStrings("$1\r\nv\r\n", writer.buffered());
+}
+
+fn init_test_aof(server: *Server, dir_buf: *[64]u8) ![]const u8 {
+    var random: [8]u8 = undefined;
+    testing.io.random(&random);
+    const dir_name = try std.fmt.bufPrint(dir_buf, "zedis-aof-{x}", .{std.mem.readInt(u64, &random, .little)});
+    server.aof_writer = try aof.Writer.init(testing.allocator, testing.io, true, "appendonly.aof", dir_name, .no);
+    return dir_name;
+}
+
+fn read_test_aof(dir_name: []const u8, buf: []u8) ![]const u8 {
+    const dir = try Io.Dir.cwd().openDir(testing.io, dir_name, .{});
+    defer dir.close(testing.io);
+    const file = try dir.openFile(testing.io, "appendonly.aof", .{});
+    defer file.close(testing.io);
+    const n = try file.readPositionalAll(testing.io, buf, 0);
+    return buf[0..n];
+}
+
+test "AOF logs SET expiries as absolute times and skips writes NX rejected" {
+    const server = try init_memory_test_server(testing.allocator, 1024 * 1024, .noeviction);
+    defer deinit_memory_test_server(server);
+    defer resp.version = 2;
+
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = try init_test_aof(server, &dir_buf);
+    defer Io.Dir.cwd().deleteTree(testing.io, dir_name) catch {};
+
+    var client = initCommandTestClient(server);
+    var buffer: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buffer);
+
+    server.execute_command(&client, &[_]Value{
+        .{ .data = "SET" }, .{ .data = "guard" }, .{ .data = "token" },
+        .{ .data = "NX" },  .{ .data = "EX" },    .{ .data = "300" },
+    }, &writer);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+
+    writer = Io.Writer.fixed(&buffer);
+    server.execute_command(&client, &[_]Value{
+        .{ .data = "SET" }, .{ .data = "guard" }, .{ .data = "other" },
+        .{ .data = "NX" },  .{ .data = "EX" },    .{ .data = "300" },
+    }, &writer);
+    try testing.expectEqualStrings("$-1\r\n", writer.buffered());
+
+    server.aof_writer.deinit();
+    server.aof_writer = .{ .enabled = false };
+
+    var aof_buf: [512]u8 = undefined;
+    const contents = try read_test_aof(dir_name, &aof_buf);
+
+    try testing.expect(std.mem.indexOf(u8, contents, "PEXPIREAT") != null);
+    try testing.expect(std.mem.indexOf(u8, contents, "other") == null);
+    try testing.expect(std.mem.indexOf(u8, contents, "\r\nEX\r\n") == null);
+}
+
+test "AOF logs the effects of commands a script runs" {
+    const server = try init_memory_test_server(testing.allocator, 1024 * 1024, .noeviction);
+    defer deinit_memory_test_server(server);
+    defer resp.version = 2;
+
+    var dir_buf: [64]u8 = undefined;
+    const dir_name = try init_test_aof(server, &dir_buf);
+    defer Io.Dir.cwd().deleteTree(testing.io, dir_name) catch {};
+
+    var client = initCommandTestClient(server);
+    var buffer: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buffer);
+
+    server.execute_script_command(&client, &[_]Value{
+        .{ .data = "SET" }, .{ .data = "job:guard" }, .{ .data = "token" },
+        .{ .data = "EX" },  .{ .data = "60" },
+    }, &writer);
+    server.execute_script_command(&client, &[_]Value{
+        .{ .data = "DEL" }, .{ .data = "job:guard" },
+    }, &writer);
+
+    server.aof_writer.deinit();
+    server.aof_writer = .{ .enabled = false };
+
+    var aof_buf: [512]u8 = undefined;
+    const contents = try read_test_aof(dir_name, &aof_buf);
+
+    try testing.expect(std.mem.indexOf(u8, contents, "PEXPIREAT") != null);
+    try testing.expect(std.mem.indexOf(u8, contents, "DEL") != null);
 }

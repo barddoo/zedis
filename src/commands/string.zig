@@ -106,35 +106,34 @@ pub fn del(writer: *Writer, store: *Store, args: []const Value) !void {
     try resp.write_int(writer, deleted);
 }
 
+/// EXPIRE key seconds [NX|XX|GT|LT]
 pub fn expire(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].as_slice();
-    const expiration_seconds = args[2].as_int() catch {
-        return resp.write_int(writer, 0);
+    const seconds = args[2].as_int() catch return error.ValueNotInteger;
+    const milliseconds = std.math.mul(i64, seconds, 1000) catch {
+        return resp.write_error(writer, "ERR invalid expire time in 'expire' command");
     };
-
-    const result = if (expiration_seconds < 0)
-        store.delete(key)
-    else blk: {
-        const ts = store.clock.now();
-        const current_time = ts.toMilliseconds();
-
-        break :blk store.expire(key, current_time + (expiration_seconds * 1000));
-    };
-
-    try resp.write_int(writer, @intFromBool(try result));
+    return expire_with_options(writer, store, args[1].as_slice(), milliseconds, args[3..], "expire");
 }
 
+/// PEXPIRE key milliseconds [NX|XX|GT|LT]
 pub fn pexpire(writer: *Writer, store: *Store, args: []const Value) !void {
-    const key = args[1].as_slice();
-    const milliseconds = args[2].as_int() catch {
-        return resp.write_error(writer, "ERR value is not an integer or out of range");
-    };
+    const milliseconds = args[2].as_int() catch return error.ValueNotInteger;
+    return expire_with_options(writer, store, args[1].as_slice(), milliseconds, args[3..], "pexpire");
+}
 
+fn expire_with_options(
+    writer: *Writer,
+    store: *Store,
+    key: []const u8,
+    milliseconds: i64,
+    option_args: []const Value,
+    command_name: []const u8,
+) !void {
     var nx = false;
     var xx = false;
     var gt = false;
     var lt = false;
-    for (args[3..]) |arg| {
+    for (option_args) |arg| {
         const option = arg.as_slice();
         if (std.ascii.eqlIgnoreCase(option, "NX")) {
             nx = true;
@@ -145,7 +144,9 @@ pub fn pexpire(writer: *Writer, store: *Store, args: []const Value) !void {
         } else if (std.ascii.eqlIgnoreCase(option, "LT")) {
             lt = true;
         } else {
-            return error.SyntaxError;
+            var message: [128]u8 = undefined;
+            const text = std.fmt.bufPrint(&message, "ERR Unsupported option {s}", .{option}) catch "ERR syntax error";
+            return resp.write_error(writer, text);
         }
     }
 
@@ -174,7 +175,10 @@ pub fn pexpire(writer: *Writer, store: *Store, args: []const Value) !void {
     }
 
     const new_expiry = std.math.add(i64, now, milliseconds) catch {
-        return resp.write_error(writer, "ERR invalid expire time in 'pexpire' command");
+        var message: [96]u8 = undefined;
+        const text = std.fmt.bufPrint(&message, "ERR invalid expire time in '{s}' command", .{command_name}) catch
+            "ERR invalid expire time";
+        return resp.write_error(writer, text);
     };
 
     if (gt) {
@@ -280,6 +284,7 @@ pub fn getset(writer: *Writer, store: *Store, args: []const Value) !void {
     }
 
     try store.set(key, new_value);
+    _ = store.persist(key);
 }
 
 pub fn mget(writer: *Writer, store: *Store, args: []const Value) !void {
@@ -313,6 +318,7 @@ pub fn mset(writer: *Writer, store: *Store, args: []const Value) !void {
         const key = args[i].as_slice();
         const value = args[i + 1].as_slice();
         try store.set(key, value);
+        _ = store.persist(key);
     }
 
     try resp.write_ok(writer);
@@ -674,6 +680,9 @@ pub fn set_full(writer: *Writer, store: *Store, args: []const Value) !void {
         _ = try store.expire(key, exp);
     } else if (old_ttl) |ttl| {
         _ = try store.expire(key, ttl);
+    } else {
+        // Redis discards the TTL on a plain SET; KEEPTTL is the opt-in.
+        _ = store.persist(key);
     }
 
     if (!get_flag) try resp.write_ok(writer);
@@ -1683,4 +1692,122 @@ test "PEXPIRE NX leaves an existing expiry unchanged" {
 
     try testing.expectEqualStrings(":0\r\n", writer.buffered());
     try testing.expectEqual(now + 10000, store.get_ttl("mykey").?);
+}
+
+test "SET discards the previous expiry unless KEEPTTL is given" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "v1");
+    _ = try store.expire("mykey", clock.now().toMilliseconds() + 60_000);
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+    const plain = [_]Value{ .{ .data = "SET" }, .{ .data = "mykey" }, .{ .data = "v2" } };
+    try set_full(&writer, &store, &plain);
+    try testing.expectEqualStrings("+OK\r\n", writer.buffered());
+    try testing.expect(store.get_ttl("mykey") == null);
+
+    writer = Writer.fixed(&buffer);
+    const keep = [_]Value{
+        .{ .data = "SET" }, .{ .data = "mykey" }, .{ .data = "v3" }, .{ .data = "KEEPTTL" },
+    };
+    _ = try store.expire("mykey", clock.now().toMilliseconds() + 60_000);
+    try set_full(&writer, &store, &keep);
+    try testing.expect(store.get_ttl("mykey") != null);
+}
+
+test "MSET and GETSET discard the previous expiry" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+    const expiry = clock.now().toMilliseconds() + 60_000;
+
+    try store.set("mset-key", "v1");
+    _ = try store.expire("mset-key", expiry);
+    try mset(&writer, &store, &[_]Value{
+        .{ .data = "MSET" }, .{ .data = "mset-key" }, .{ .data = "v2" },
+    });
+    try testing.expect(store.get_ttl("mset-key") == null);
+
+    try store.set("getset-key", "v1");
+    _ = try store.expire("getset-key", expiry);
+    writer = Writer.fixed(&buffer);
+    try getset(&writer, &store, &[_]Value{
+        .{ .data = "GETSET" }, .{ .data = "getset-key" }, .{ .data = "v2" },
+    });
+    try testing.expect(store.get_ttl("getset-key") == null);
+}
+
+test "EXPIRE honours NX, GT and LT instead of resetting the expiry" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+
+    try expire(&writer, &store, &[_]Value{
+        .{ .data = "EXPIRE" }, .{ .data = "mykey" }, .{ .data = "100" },
+    });
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+    const original = store.get_ttl("mykey").?;
+
+    writer = Writer.fixed(&buffer);
+    try expire(&writer, &store, &[_]Value{
+        .{ .data = "EXPIRE" }, .{ .data = "mykey" }, .{ .data = "30" }, .{ .data = "NX" },
+    });
+    try testing.expectEqualStrings(":0\r\n", writer.buffered());
+    try testing.expectEqual(original, store.get_ttl("mykey").?);
+
+    writer = Writer.fixed(&buffer);
+    try expire(&writer, &store, &[_]Value{
+        .{ .data = "EXPIRE" }, .{ .data = "mykey" }, .{ .data = "20" }, .{ .data = "GT" },
+    });
+    try testing.expectEqualStrings(":0\r\n", writer.buffered());
+    try testing.expectEqual(original, store.get_ttl("mykey").?);
+
+    writer = Writer.fixed(&buffer);
+    try expire(&writer, &store, &[_]Value{
+        .{ .data = "EXPIRE" }, .{ .data = "mykey" }, .{ .data = "200" }, .{ .data = "GT" },
+    });
+    try testing.expectEqualStrings(":1\r\n", writer.buffered());
+    try testing.expect(store.get_ttl("mykey").? > original);
+}
+
+test "EXPIRE rejects a non-integer TTL" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var clock = Clock.init(testing.io, 0);
+    var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
+    defer store.deinit();
+
+    try store.set("mykey", "value");
+
+    var buffer: [128]u8 = undefined;
+    var writer = Writer.fixed(&buffer);
+    try testing.expectError(error.ValueNotInteger, expire(&writer, &store, &[_]Value{
+        .{ .data = "EXPIRE" }, .{ .data = "mykey" }, .{ .data = "soon" },
+    }));
+    try testing.expect(store.get_ttl("mykey") == null);
 }
