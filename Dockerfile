@@ -9,7 +9,7 @@ ARG ZIG_VERSION=0.17.1
 # ZSF minisign public key. Confirm it matches https://ziglang.org/download before relying on it.
 ARG ZIG_MINISIGN_PUBKEY=RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
 
-RUN apk add --no-cache curl xz minisign
+RUN apk add --no-cache build-base curl xz minisign
 
 COPY install-zig.sh /usr/local/bin/install-zig.sh
 RUN install-zig.sh "${ZIG_VERSION}" "${ZIG_MINISIGN_PUBKEY}"

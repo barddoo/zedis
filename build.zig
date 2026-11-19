@@ -140,6 +140,10 @@ fn luaJITBuildStep(b: *std.Build, target: std.Build.ResolvedTarget) *std.Build.S
     make.addArg("-C");
     make.addDirectoryArg(b.path("vendor/luajit"));
     make.addArg("BUILDMODE=static");
+    // LuaJIT's DWARF unwinder references _Unwind_* / libgcc_s, which Zig
+    // does not link. Zedis only calls Lua from Zig and catches errors with
+    // lua_pcall, so it does not need to unwind through foreign frames.
+    make.addArg("XCFLAGS=-DLUAJIT_NO_UNWIND");
     if (target.result.os.tag == .macos) {
         make.addArg("MACOSX_DEPLOYMENT_TARGET=13.0");
     }

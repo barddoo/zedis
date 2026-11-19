@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SET`, `MSET`, and `GETSET` no longer keep a previous TTL; Redis discards it unless the command opts in with `KEEPTTL`.
 - `EXPIRE` and `PEXPIRE` share one options parser, so both accept `NX`, `XX`, `GT`, and `LT`. `EXPIRE` previously ignored those options. Both now reject non-integer TTLs and report multiplication overflow under their own command name.
 - AOF logging of TTL-carrying commands (`SET`, `SETEX`, `PSETEX`, `GETEX`, `EXPIRE`, `PEXPIRE`) writes the resulting state as absolute `PEXPIREAT` or `DEL` commands, and a command that failed is no longer logged.
+- LuaJIT is compiled with `LUAJIT_NO_UNWIND`, so the static library no longer references `_Unwind_*` and `libgcc_s` symbols that Zig does not link on Linux. Zedis only calls Lua from Zig and catches errors with `lua_pcall`, so the DWARF unwinder is not needed.
 - LuaJIT's low-address image base is applied on x86_64 macOS only; on arm64 it produced a malformed Mach-O that the kernel killed at launch.
 - CRC64 now uses slicing-by-8 tables instead of a byte-at-a-time loop, speeding up RDB checksums.
 
@@ -319,8 +320,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.3]: https://github.com/barddoo/zedis/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/barddoo/zedis/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/barddoo/zedis/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/bardoo/zedis/compare/0.1.3...v0.2.0
-[0.1.3]: https://github.com/bardoo/zedis/compare/0.1.2...0.1.3
-[0.1.2]: https://github.com/bardoo/zedis/compare/0.1.1...0.1.2
-[0.1.1]: https://github.com/bardoo/zedis/compare/0.1.0...0.1.1
-[0.1.0]: https://github.com/bardoo/zedis/releases/tag/0.1.0
+[0.2.0]: https://github.com/barddoo/zedis/compare/0.1.3...v0.2.0
+[0.1.3]: https://github.com/barddoo/zedis/compare/0.1.2...0.1.3
+[0.1.2]: https://github.com/barddoo/zedis/compare/0.1.1...0.1.2
+[0.1.1]: https://github.com/barddoo/zedis/compare/0.1.0...0.1.1
+[0.1.0]: https://github.com/barddoo/zedis/releases/tag/0.1.0

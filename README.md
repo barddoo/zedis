@@ -44,12 +44,13 @@ Download the binary from the [releases page](https://github.com/barddoo/zedis/re
 ### Prerequisites
 
 - [Zig](https://ziglang.org/download/) 0.17.1 (pinned in `build.zig.zon`)
+- `make` and a C compiler: `zig build` compiles LuaJIT from `vendor/luajit`
 
 ### Building and Running
 
 ```bash
-# Clone the repository
-git clone https://github.com/barddoo/zedis.git
+# Clone the repository with its submodules
+git clone --recurse-submodules https://github.com/barddoo/zedis.git
 cd zedis
 
 # Build the project (optimized, ReleaseFast)

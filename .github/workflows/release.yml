@@ -23,8 +23,17 @@ jobs:
 
       - name: Install Zig
         run: |
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends minisign
           sudo ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U"
+
+      - name: Check version matches the tag
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          server=$(sed -n 's/.*server_version = "\([^"]*\)".*/\1/p' src/app/server.zig)
+          zon=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon)
+          test "$tag" = "$server" || { echo "tag $tag != server_version $server"; exit 1; }
+          test "$tag" = "$zon" || { echo "tag $tag != build.zig.zon version $zon"; exit 1; }
 
       - name: Run tests
         run: zig build test:all
@@ -61,7 +70,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/src" \
             -w /src \
             alpine:3.24.4 \
-            sh -c 'apk add --no-cache curl xz minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build -Drelease -Dtarget=$(uname -m)-linux-musl'
+            sh -c 'apk add --no-cache build-base curl xz minisign && ./install-zig.sh 0.17.1 "RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U" && zig build -Drelease -Dtarget=$(uname -m)-linux-musl'
           cp zig-out/bin/${{ matrix.binary }} zedis-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.ext }}
 
       - name: Upload artifact
@@ -120,20 +129,22 @@ jobs:
 
             **Linux (x86_64)**
             ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
+            curl -Lo zedis https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
             chmod +x zedis && sudo mv zedis /usr/local/bin/
             ```
 
             **Linux (ARM64)**
             ```bash
-            curl -Lo zedis https://github.com/charlesfonseca/zedis/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
+            curl -Lo zedis https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-aarch64
             chmod +x zedis && sudo mv zedis /usr/local/bin/
             ```
 
             ### Verify checksums
 
             ```bash
-            sha256sum -c SHA256SUMS
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/SHA256SUMS
+            curl -LO https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/zedis-${{ steps.version.outputs.VERSION }}-linux-x86_64
+            sha256sum -c SHA256SUMS --ignore-missing
             ```
 
             ## Quick start

@@ -9,6 +9,25 @@ zig-out
 zig-pkg
 *.o
 
+# LuaJIT build outputs from a local build; the Docker build regenerates them
+vendor/luajit/.git
+vendor/luajit/src/*.o
+vendor/luajit/src/*.a
+vendor/luajit/src/luajit
+vendor/luajit/src/host/*.o
+vendor/luajit/src/host/buildvm
+vendor/luajit/src/host/minilua
+vendor/luajit/src/host/buildvm_arch.h
+vendor/luajit/src/lj_bcdef.h
+vendor/luajit/src/lj_ffdef.h
+vendor/luajit/src/lj_folddef.h
+vendor/luajit/src/lj_libdef.h
+vendor/luajit/src/lj_recdef.h
+vendor/luajit/src/lj_vm.S
+vendor/luajit/src/jit/vmdef.lua
+vendor/luajit/src/luajit.h
+vendor/luajit/src/luajit_relver.txt
+
 # Runtime data
 *.rdb
 *.aof
