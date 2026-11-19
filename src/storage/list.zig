@@ -62,6 +62,20 @@ pub const ZedisList = struct {
         self.cached_len += 1;
     }
 
+    /// Detaches the head node without freeing it, so LMOVE can relink it into
+    /// another list with no allocation that could fail after the pop.
+    pub fn pop_first_node(self: *ZedisList) ?*std.DoublyLinkedList.Node {
+        const node = self.list.popFirst() orelse return null;
+        self.cached_len -= 1;
+        return node;
+    }
+
+    pub fn pop_node(self: *ZedisList) ?*std.DoublyLinkedList.Node {
+        const node = self.list.popLast() orelse return null;
+        self.cached_len -= 1;
+        return node;
+    }
+
     pub fn pop_first(self: *ZedisList) ?PrimitiveValue {
         const node = self.list.popFirst() orelse return null;
         const list_node: *ZedisListNode = @fieldParentPtr("node", node);

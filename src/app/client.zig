@@ -19,6 +19,8 @@ const ClientMailbox = @import("../util/client_mailbox.zig").ClientMailbox;
 const free_message_list = @import("../util/client_mailbox.zig").free_message_list;
 const Config = @import("config.zig");
 const resp = @import("../protocol/resp.zig");
+const blocking = @import("blocking.zig");
+const Stats = @import("stats.zig");
 const ClientHandle = @import("../util/types.zig").ClientHandle;
 const tls_mod = @import("tls.zig");
 
@@ -354,6 +356,9 @@ pub const Client = struct {
             var sw = StackWriter.init(self.server.base_allocator);
             defer sw.deinit();
             const response_writer = sw.writer();
+            // Bytes of the batch already written, because a blocking command
+            // flushes earlier replies before it parks.
+            var sent: usize = 0;
 
             // Only the first command of a batch may wait for the socket; the rest
             // must already be buffered, so the batch never blocks with replies
@@ -366,11 +371,11 @@ pub const Client = struct {
                     switch (err) {
                         error.Timeout => {
                             log.debug("Client {d} idle timeout", .{self.client_id});
-                            self.write_batch(sw.slice(response_writer)) catch {};
+                            self.write_batch(sw.slice(response_writer)[sent..]) catch {};
                             return;
                         },
                         error.EndOfStream, error.ReadFailed, error.Canceled => {
-                            self.write_batch(sw.slice(response_writer)) catch {};
+                            self.write_batch(sw.slice(response_writer)[sent..]) catch {};
                             return;
                         },
                         else => {
@@ -379,7 +384,7 @@ pub const Client = struct {
                             // desynchronized, so continuing would re-parse the
                             // same bad bytes forever. Reply then close, like Redis.
                             response_writer.writeAll("-ERR protocol error\r\n") catch {};
-                            self.write_batch(sw.slice(response_writer)) catch {};
+                            self.write_batch(sw.slice(response_writer)[sent..]) catch {};
                             return;
                         },
                     }
@@ -390,15 +395,24 @@ pub const Client = struct {
                 // Execute the command inline on this coroutine. The single zio
                 // executor serializes it against other clients; there is no store
                 // thread and no store lock.
+                if (self.blocking_request(command.get_args())) |request| {
+                    const ready = self.wait_for_data(request, &sw, response_writer, &sent) catch return;
+                    if (!ready) {
+                        self.write_blocking_timeout(response_writer, command.get_args());
+                        _ = arena.reset(.{ .retain_with_limit = parse_arena_retain_bytes });
+                        continue :batch;
+                    }
+                }
+
                 self.server.execute_command(self, command.get_args(), response_writer);
                 _ = arena.reset(.{ .retain_with_limit = parse_arena_retain_bytes });
 
                 // Bound the reply batch; next_command ends it once no complete
                 // command is buffered.
-                if (sw.slice(response_writer).len >= max_batch_bytes) break :batch;
+                if (sw.slice(response_writer).len - sent >= max_batch_bytes) break :batch;
             }
 
-            self.write_batch(sw.slice(response_writer)) catch return;
+            self.write_batch(sw.slice(response_writer)[sent..]) catch return;
 
             if (self.disconnect_requested.load(.acquire)) {
                 log.debug("client {d}: disconnect after cmd", .{self.client_id});
@@ -417,6 +431,55 @@ pub const Client = struct {
                 log.debug("Client {} staying in pubsub mode", .{self.client_id});
             }
         }
+    }
+
+    /// A blocking command only waits for real: inside MULTI, in pub/sub mode or
+    /// before AUTH it runs through the normal path, where its handler never blocks.
+    fn blocking_request(self: *Client, args: []const Value) ?blocking.Request {
+        if (self.transaction != null or self.is_in_pubsub_mode or !self.is_authenticated()) return null;
+        return blocking.parse(args);
+    }
+
+    /// Parks until one of the request's keys has data. Returns false on timeout.
+    /// Runs outside any command handler, so the store is never held across the
+    /// suspension; the handler then runs normally and does a plain pop.
+    fn wait_for_data(self: *Client, request: blocking.Request, sw: *StackWriter, w: *std.Io.Writer, sent: *usize) !bool {
+        if (blocking.is_ready(self.store, request)) return true;
+
+        // Earlier pipelined replies must not wait behind this command.
+        const pending = sw.slice(w);
+        try self.write_batch(pending[sent.*..]);
+        sent.* = pending.len;
+
+        var waiter: blocking.Waiter = .{ .keys = request.keys };
+        self.server.blocking.add(&waiter);
+        defer self.server.blocking.remove(&waiter);
+
+        const start = Stats.nowNs(self.io);
+        while (true) {
+            // Nothing suspends between this check and the wait, so a push cannot
+            // slip in unnoticed.
+            waiter.event.reset();
+            if (blocking.is_ready(self.store, request)) return true;
+            if (self.disconnect_requested.load(.acquire)) return error.Canceled;
+
+            const timeout: zio.Timeout = if (request.timeout_ns) |limit| blk: {
+                const elapsed = Stats.nowNs(self.io) -| start;
+                if (elapsed >= limit) return false;
+                break :blk .fromNanoseconds(limit - elapsed);
+            } else .none;
+
+            waiter.event.waitTimeout(timeout) catch |err| switch (err) {
+                error.Timeout => return blocking.is_ready(self.store, request),
+                error.Canceled => return error.Canceled,
+            };
+        }
+    }
+
+    fn write_blocking_timeout(self: *Client, w: *std.Io.Writer, args: []const Value) void {
+        const resp3 = self.protocol_version >= 3;
+        const reply = if (resp3) "_\r\n" else if (blocking.is_blmove(args)) "$-1\r\n" else "*-1\r\n";
+        w.writeAll(reply) catch {};
     }
 
     /// Write accumulated reply bytes to the socket and flush.

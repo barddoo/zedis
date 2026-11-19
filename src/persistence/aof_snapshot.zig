@@ -5,6 +5,8 @@ const ZedisValue = store_mod.ZedisValue;
 const ZedisList = @import("../storage/list.zig").ZedisList;
 const ZedisListNode = @import("../storage/list.zig").ZedisListNode;
 const ZedisHash = @import("../storage/hash.zig").ZedisHash;
+const ZedisSet = @import("../storage/set.zig").ZedisSet;
+const ZedisZSet = @import("../storage/zset.zig").ZedisZSet;
 const TimeSeries = @import("../storage/time_series.zig").TimeSeries;
 const Io = std.Io;
 
@@ -39,7 +41,7 @@ fn check_supported(store: *const Store) error{UnsupportedType}!void {
     var it = store.iterator();
     while (it.next()) |entry| {
         switch (entry.object.value) {
-            .string, .short_string, .int, .list, .time_series, .hash_map => {},
+            .string, .short_string, .int, .list, .time_series, .hash_map, .set, .zset => {},
             .bloom_filter, .search_index => {
                 log.warn("AOF rewrite cannot express {s} key '{s}'", .{ @tagName(entry.object.value), entry.key });
                 return error.UnsupportedType;
@@ -57,6 +59,8 @@ fn write_value(writer: *Io.Writer, key: []const u8, value: ZedisValue) !void {
         .list => |list| try write_list(writer, key, list),
         .time_series => |ts| try write_time_series(writer, key, ts),
         .hash_map => |h| try write_hash(writer, key, h),
+        .set => |s| try write_set(writer, key, s),
+        .zset => |z| try write_zset(writer, key, z),
         .bloom_filter, .search_index => unreachable,
     }
 }
@@ -162,6 +166,47 @@ fn write_hash(writer: *Io.Writer, key: []const u8, h: *const ZedisHash) !void {
     if (n > 0) try put(writer, parts[0 .. 2 + n * 2]);
 }
 
+/// Members per SADD/ZADD command when chunking a large set or zset.
+const set_chunk = 64;
+
+fn write_set(writer: *Io.Writer, key: []const u8, s: *const ZedisSet) !void {
+    var parts: [2 + set_chunk][]const u8 = undefined;
+    parts[0] = "SADD";
+    parts[1] = key;
+
+    var n: usize = 0;
+    var it = s.iterator();
+    while (it.next()) |member| {
+        parts[2 + n] = member.*;
+        n += 1;
+        if (n == set_chunk) {
+            try put(writer, parts[0 .. 2 + n]);
+            n = 0;
+        }
+    }
+    if (n > 0) try put(writer, parts[0 .. 2 + n]);
+}
+
+fn write_zset(writer: *Io.Writer, key: []const u8, z: *const ZedisZSet) !void {
+    var parts: [2 + set_chunk * 2][]const u8 = undefined;
+    var score_bufs: [set_chunk][32]u8 = undefined;
+    parts[0] = "ZADD";
+    parts[1] = key;
+
+    var n: usize = 0;
+    for (z.order.items) |entry| {
+        // {d} prints the shortest text that parses back to the same f64.
+        parts[2 + n * 2] = std.fmt.bufPrint(&score_bufs[n], "{d}", .{entry.score}) catch unreachable;
+        parts[2 + n * 2 + 1] = entry.member;
+        n += 1;
+        if (n == set_chunk) {
+            try put(writer, parts[0 .. 2 + n * 2]);
+            n = 0;
+        }
+    }
+    if (n > 0) try put(writer, parts[0 .. 2 + n * 2]);
+}
+
 fn put(writer: *Io.Writer, parts: []const []const u8) Io.Writer.Error!void {
     try writer.print("*{d}\r\n", .{parts.len});
     for (parts) |part| {
@@ -247,6 +292,40 @@ test "snapshot writes each value type as the commands that recreate it" {
     try copy.run(&.{ "INCR", "counter" });
     try testing.expectEqual(@as(i64, 3), copy.store.get("counter").?.value.int);
     try testing.expectEqual(@as(usize, 3), copy.store.get("queue").?.value.list.len());
+}
+
+test "snapshot rebuilds sets and sorted sets across chunk boundaries with exact scores" {
+    var source: TestStore = undefined;
+    try source.init();
+    defer source.deinit();
+
+    var member: [16]u8 = undefined;
+    const total = set_chunk * 2 + 3;
+    for (0..total) |i| {
+        const name = try std.fmt.bufPrint(&member, "m-{d}", .{i});
+        try source.run(&.{ "SADD", "tags", name });
+        var score: [32]u8 = undefined;
+        const text = try std.fmt.bufPrint(&score, "{d}", .{@as(f64, @floatFromInt(i)) / 3.0});
+        try source.run(&.{ "ZADD", "scheduled", text, name });
+    }
+
+    var out: Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try dump(&source, &out);
+
+    var copy: TestStore = undefined;
+    try copy.init();
+    defer copy.deinit();
+    try copy.replay(out.written());
+
+    try testing.expectEqual(total, copy.store.get("tags").?.value.set.len());
+    const original = source.store.get("scheduled").?.value.zset;
+    const rebuilt = copy.store.get("scheduled").?.value.zset;
+    try testing.expectEqual(original.len(), rebuilt.len());
+    for (original.order.items, rebuilt.order.items) |a, b| {
+        try testing.expectEqualStrings(a.member, b.member);
+        try testing.expectEqual(a.score, b.score);
+    }
 }
 
 test "snapshot keeps lists in order across RPUSH chunk boundaries" {

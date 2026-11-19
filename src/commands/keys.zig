@@ -145,6 +145,9 @@ fn scanTypeMatches(value_type: ValueType, expected: []const u8) bool {
         return value_type == .string or value_type == .short_string or value_type == .int;
     }
     if (std.ascii.eqlIgnoreCase(expected, "list")) return value_type == .list;
+    if (std.ascii.eqlIgnoreCase(expected, "hash")) return value_type == .hash_map;
+    if (std.ascii.eqlIgnoreCase(expected, "set")) return value_type == .set;
+    if (std.ascii.eqlIgnoreCase(expected, "zset")) return value_type == .zset;
     if (std.ascii.eqlIgnoreCase(expected, "tseries-type") or std.ascii.eqlIgnoreCase(expected, "TSDB-TYPE")) {
         return value_type == .time_series;
     }
@@ -176,6 +179,8 @@ pub fn type_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
         .bloom_filter => "bloom_filter",
         .search_index => "search_index",
         .hash_map => "hash",
+        .set => "set",
+        .zset => "zset",
     } else "none";
 
     try resp.write_bulk_string(writer, type_str);
@@ -282,7 +287,8 @@ pub fn object_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
             .short_string => "embstr",
             .string => "raw",
             .list => "listpack",
-            .hash_map => "listpack",
+            .hash_map, .set => "listpack",
+            .zset => "skiplist",
             .bloom_filter, .time_series, .search_index => "raw",
         };
         try resp.write_bulk_string(writer, encoding);

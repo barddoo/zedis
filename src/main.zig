@@ -95,6 +95,11 @@ test {
     _ = @import("commands/bloom.zig");
     _ = @import("commands/connection.zig");
     _ = @import("commands/hash.zig");
+    _ = @import("commands/set.zig");
+    _ = @import("app/blocking.zig");
+    _ = @import("commands/zset.zig");
+    _ = @import("storage/set.zig");
+    _ = @import("storage/zset.zig");
     _ = @import("commands/keys.zig");
     _ = @import("commands/list.zig");
     _ = @import("commands/lua.zig");

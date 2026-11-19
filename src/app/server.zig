@@ -17,6 +17,7 @@ const KeyValueAllocator = @import("../storage/kv_allocator.zig");
 const aof = @import("../persistence/aof.zig");
 const Clock = @import("clock.zig");
 const Stats = @import("stats.zig");
+const blocking_mod = @import("blocking.zig");
 const ServerStats = Stats.ServerStats;
 const SlowLog = Stats.SlowLog;
 const LatencyMonitor = Stats.LatencyMonitor;
@@ -86,6 +87,9 @@ pubsub_mutex: std.atomic.Mutex = .unlocked,
 
 // Custom allocator for key-value store with eviction
 kv_allocator: KeyValueAllocator,
+
+/// Clients parked in BLPOP/BRPOP/BLMOVE; see `blocking.zig`.
+blocking: blocking_mod.Registry = .{},
 clock: Clock,
 store: Store,
 registry: CommandRegistry,
@@ -491,6 +495,7 @@ pub fn execute_script_command(self: *Server, client: *Client, args: []const Valu
         self.store.exists(args[1].as_slice());
 
     self.registry.execute_for_script(response_writer, client.store, args);
+    self.notify_blocked(args);
 
     // A command that replied with an error did not change the store, so its
     // effect must not be replayed.
@@ -597,7 +602,24 @@ pub fn execute_command(self: *Server, client: *Client, args: []const Value, resp
     }
 
     const ok = self.execute_locked(client, args, response_writer);
+    self.notify_blocked(args);
     self.recordCommandMetrics(client, args, start_ns, ok);
+}
+
+/// Wakes clients parked on a list this command may have just filled. Waiters
+/// re-check readiness themselves, so a spurious wake only costs a lookup.
+fn notify_blocked(self: *Server, args: []const Value) void {
+    if (!self.blocking.any() or args.len < 2) return;
+    const name = args[0].as_slice();
+    const eql = std.ascii.eqlIgnoreCase;
+
+    if (eql(name, "LPUSH") or eql(name, "RPUSH") or eql(name, "LINSERT")) {
+        self.blocking.notify_key(args[1].as_slice());
+    } else if (args.len > 2 and (eql(name, "LMOVE") or eql(name, "RPOPLPUSH") or eql(name, "BLMOVE") or
+        eql(name, "RENAME") or eql(name, "COPY")))
+    {
+        self.blocking.notify_key(args[2].as_slice());
+    }
 }
 
 fn isReadOnlyCommand(self: *Server, args: []const Value) bool {

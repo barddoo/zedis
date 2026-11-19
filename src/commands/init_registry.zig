@@ -5,6 +5,8 @@ const connection_commands = @import("connection.zig");
 const string = @import("string.zig");
 const list = @import("list.zig");
 const hash = @import("hash.zig");
+const set = @import("set.zig");
+const zset = @import("zset.zig");
 const rdb = @import("rdb.zig");
 const pubsub = @import("pubsub.zig");
 const ts = @import("time_series.zig");
@@ -253,6 +255,186 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     });
 
     // List commands: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
+
+    try registry.register(.{
+        .name = "SADD",
+        .handler = .{ .store_handler = set.sadd },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Add one or more members to a set",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "SREM",
+        .handler = .{ .store_handler = set.srem },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Remove one or more members from a set",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "SMEMBERS",
+        .handler = .{ .store_handler = set.smembers },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get all members of a set",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SCARD",
+        .handler = .{ .store_handler = set.scard },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the number of members in a set",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "SISMEMBER",
+        .handler = .{ .store_handler = set.sismember },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Check whether a value is a member of a set",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZADD",
+        .handler = .{ .store_handler = zset.zadd },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Add or update members of a sorted set",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "ZINCRBY",
+        .handler = .{ .store_handler = zset.zincrby },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Increment the score of a sorted set member",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "ZREM",
+        .handler = .{ .store_handler = zset.zrem },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Remove members from a sorted set",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "ZREMRANGEBYSCORE",
+        .handler = .{ .store_handler = zset.zremrangebyscore },
+        .min_args = 4,
+        .max_args = 4,
+        .description = "Remove sorted set members within a score range",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "ZCARD",
+        .handler = .{ .store_handler = zset.zcard },
+        .min_args = 2,
+        .max_args = 2,
+        .description = "Get the number of members in a sorted set",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZSCORE",
+        .handler = .{ .store_handler = zset.zscore },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Get the score of a sorted set member",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZRANGE",
+        .handler = .{ .store_handler = zset.zrange },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Return a range of sorted set members",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZREVRANGE",
+        .handler = .{ .store_handler = zset.zrevrange },
+        .min_args = 4,
+        .max_args = 5,
+        .description = "Return a range of sorted set members, highest score first",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZRANGEBYSCORE",
+        .handler = .{ .store_handler = zset.zrangebyscore },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Return sorted set members within a score range",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "ZREVRANGEBYSCORE",
+        .handler = .{ .store_handler = zset.zrevrangebyscore },
+        .min_args = 4,
+        .max_args = null,
+        .description = "Return sorted set members within a score range, highest first",
+        .write_to_aof = false,
+    });
+
+    try registry.register(.{
+        .name = "BLPOP",
+        .handler = .{ .store_handler = list.blpop },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Remove and get the first element of a list, blocking until one exists",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "BRPOP",
+        .handler = .{ .store_handler = list.brpop },
+        .min_args = 3,
+        .max_args = null,
+        .description = "Remove and get the last element of a list, blocking until one exists",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "BLMOVE",
+        .handler = .{ .store_handler = list.blmove },
+        .min_args = 6,
+        .max_args = 6,
+        .description = "Pop from one list and push to another, blocking until the source has data",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "LMOVE",
+        .handler = .{ .store_handler = list.lmove },
+        .min_args = 5,
+        .max_args = 5,
+        .description = "Pop an element from one list and push it to another",
+        .write_to_aof = true,
+    });
+
+    try registry.register(.{
+        .name = "RPOPLPUSH",
+        .handler = .{ .store_handler = list.rpoplpush },
+        .min_args = 3,
+        .max_args = 3,
+        .description = "Pop the tail of one list and push it to the head of another",
+        .write_to_aof = true,
+    });
 
     try registry.register(.{
         .name = "LPUSH",
@@ -1036,13 +1218,15 @@ pub fn init_registry(allocator: Allocator) !CommandRegistry {
     // memory (DEL, LPOP, RPOP, FLUSHDB, ...) and commands that don't touch the
     // store stay allowed, so a full instance can still be drained.
     const denyoom_commands = [_][]const u8{
-        "SET",         "INCR",   "DECR",      "APPEND",       "GETSET",
-        "MSET",        "SETEX",  "SETNX",     "INCRBY",       "DECRBY",
-        "INCRBYFLOAT", "RENAME", "LPUSH",     "RPUSH",        "LSET",
-        "TS.CREATE",   "TS.ADD", "TS.INCRBY", "TS.DECRBY",    "TS.ALTER",
-        "BF.RESERVE",  "BF.ADD", "BF.MADD",   "BF.INSERT",    "HSET",
-        "HMSET",       "GETEX",  "SETRANGE",  "PSETEX",       "MSETNX",
-        "LINSERT",     "HSETNX", "HINCRBY",   "HINCRBYFLOAT", "COPY",
+        "SET",          "INCR",   "DECR",      "APPEND",    "GETSET",
+        "MSET",         "SETEX",  "SETNX",     "INCRBY",    "DECRBY",
+        "INCRBYFLOAT",  "RENAME", "LPUSH",     "RPUSH",     "LSET",
+        "TS.CREATE",    "TS.ADD", "TS.INCRBY", "TS.DECRBY", "TS.ALTER",
+        "BF.RESERVE",   "BF.ADD", "BF.MADD",   "BF.INSERT", "HSET",
+        "HMSET",        "GETEX",  "SETRANGE",  "PSETEX",    "MSETNX",
+        "LINSERT",      "LMOVE",  "RPOPLPUSH", "HSETNX",    "HINCRBY",
+        "HINCRBYFLOAT", "COPY",   "BLMOVE",    "SADD",      "ZADD",
+        "ZINCRBY",
     };
     for (denyoom_commands) |name| {
         const info = registry.commands.getPtr(name) orelse {

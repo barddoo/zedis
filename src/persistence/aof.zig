@@ -1210,6 +1210,15 @@ fn expect_same_dataset(expected: *Store, actual: *Store) !void {
                 }
             },
             .bloom_filter => try testing.expect(other.value == .bloom_filter),
+            .set => |set| {
+                try testing.expectEqual(set.len(), other.value.set.len());
+                var members = set.iterator();
+                while (members.next()) |m| try testing.expect(other.value.set.contains(m.*));
+            },
+            .zset => |zset| {
+                try testing.expectEqual(zset.len(), other.value.zset.len());
+                for (zset.order.items) |e| try testing.expectEqual(@as(?f64, e.score), other.value.zset.score(e.member));
+            },
             else => {
                 var buf_a: [24]u8 = undefined;
                 var buf_b: [24]u8 = undefined;

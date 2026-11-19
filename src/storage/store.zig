@@ -1,6 +1,8 @@
 const std = @import("std");
 const ZedisList = @import("list.zig").ZedisList;
 const ZedisHash = @import("hash.zig").ZedisHash;
+const ZedisSet = @import("set.zig").ZedisSet;
+const ZedisZSet = @import("zset.zig").ZedisZSet;
 const ts_module = @import("time_series.zig");
 const TimeSeries = ts_module.TimeSeries;
 const Io = std.Io;
@@ -34,6 +36,8 @@ pub const ValueType = enum(u8) {
     bloom_filter,
     search_index,
     hash_map = 7,
+    set = 8,
+    zset = 9,
 
     pub fn to_rdb_opcode(self: ValueType) u8 {
         return @backingInt(self);
@@ -53,6 +57,8 @@ pub const ZedisValue = union(ValueType) {
     bloom_filter: *ScalableBloomFilter,
     search_index: *SearchIndex,
     hash_map: *ZedisHash,
+    set: *ZedisSet,
+    zset: *ZedisZSet,
 };
 
 pub const ZedisObject = struct {
@@ -410,6 +416,8 @@ pub const Store = struct {
             .bloom_filter => {},
             .search_index => {},
             .hash_map => {},
+            .set => {},
+            .zset => {},
         }
         return cloned;
     }
@@ -438,6 +446,8 @@ pub const Store = struct {
                 self.allocator.destroy(si_ptr);
             },
             .hash_map => |h_ptr| h_ptr.deinit(),
+            .set => |s_ptr| s_ptr.deinit(),
+            .zset => |z_ptr| z_ptr.deinit(),
         }
     }
 
@@ -754,6 +764,48 @@ pub const Store = struct {
 
     pub fn get_or_create_hash(self: *Store, key: []const u8) !*ZedisHash {
         return (try self.get_hash(key)) orelse try self.create_hash(key);
+    }
+
+    pub fn get_set(self: *Store, key: []const u8) !?*ZedisSet {
+        assert(key.len > 0);
+        const entry = self.resolve_entry(key, true) orelse return null;
+        switch (entry.object.value) {
+            .set => |s| return s,
+            else => return error.WrongType,
+        }
+    }
+
+    pub fn create_set(self: *Store, key: []const u8) !*ZedisSet {
+        assert(key.len > 0);
+        const s = try ZedisSet.init(self.allocator);
+        errdefer s.deinit();
+        try self.put_object(key, .{ .value = .{ .set = s } });
+        return self.resolve_entry(key, true).?.object.value.set;
+    }
+
+    pub fn get_or_create_set(self: *Store, key: []const u8) !*ZedisSet {
+        return (try self.get_set(key)) orelse try self.create_set(key);
+    }
+
+    pub fn get_zset(self: *Store, key: []const u8) !?*ZedisZSet {
+        assert(key.len > 0);
+        const entry = self.resolve_entry(key, true) orelse return null;
+        switch (entry.object.value) {
+            .zset => |z| return z,
+            else => return error.WrongType,
+        }
+    }
+
+    pub fn create_zset(self: *Store, key: []const u8) !*ZedisZSet {
+        assert(key.len > 0);
+        const z = try ZedisZSet.init(self.allocator);
+        errdefer z.deinit();
+        try self.put_object(key, .{ .value = .{ .zset = z } });
+        return self.resolve_entry(key, true).?.object.value.zset;
+    }
+
+    pub fn get_or_create_zset(self: *Store, key: []const u8) !*ZedisZSet {
+        return (try self.get_zset(key)) orelse try self.create_zset(key);
     }
 
     pub fn expire(self: *Store, key: []const u8, time: i64) !bool {

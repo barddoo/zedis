@@ -106,6 +106,10 @@ pub const CommandRegistry = struct {
             error.FieldNotFound => "ERR unknown field",
             error.UnsupportedVectorAlgorithm => "ERR unsupported vector index algorithm",
             error.SyntaxError => "ERR syntax error",
+            error.InvalidTimeout => "ERR timeout is not a float or out of range",
+            error.NegativeTimeout => "ERR timeout is negative",
+            error.InvalidRange => "ERR min or max is not a float",
+            error.ScoreNaN => "ERR resulting score is not a number (NaN)",
             error.InvalidArgument => "ERR invalid argument",
             error.QuerySyntax => "ERR invalid query syntax",
             error.UnknownField => "ERR unknown field",
@@ -292,10 +296,10 @@ test "CMD_DENYOOM covers allocating writes and leaves freeing commands alone" {
     var registry = try init_registry(std.testing.allocator);
     defer registry.deinit();
 
-    for ([_][]const u8{ "SET", "MSET", "LPUSH", "RPUSH", "LSET", "APPEND", "INCR", "BF.ADD", "TS.ADD" }) |name| {
+    for ([_][]const u8{ "SET", "MSET", "LPUSH", "RPUSH", "LSET", "APPEND", "INCR", "BF.ADD", "TS.ADD", "LMOVE", "BLMOVE", "SADD", "ZADD", "ZINCRBY" }) |name| {
         try std.testing.expect(registry.get(name).?.denyoom);
     }
-    for ([_][]const u8{ "GET", "DEL", "LPOP", "RPOP", "FLUSHDB", "EXPIRE", "PERSIST" }) |name| {
+    for ([_][]const u8{ "GET", "DEL", "LPOP", "RPOP", "FLUSHDB", "EXPIRE", "PERSIST", "SREM", "ZREM", "BRPOP", "BLPOP" }) |name| {
         try std.testing.expect(!registry.get(name).?.denyoom);
     }
 }
@@ -305,10 +309,10 @@ test "write commands are logged to the AOF and reads are not" {
     var registry = try init_registry(std.testing.allocator);
     defer registry.deinit();
 
-    for ([_][]const u8{ "SET", "DEL", "UNLINK", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET", "EXPIRE", "PEXPIRE", "SETEX", "PEXPIREAT" }) |name| {
+    for ([_][]const u8{ "SET", "DEL", "UNLINK", "RENAME", "LPUSH", "rpush", "LPOP", "RPOP", "LSET", "EXPIRE", "PEXPIRE", "SETEX", "PEXPIREAT", "LMOVE", "RPOPLPUSH", "BRPOP", "BLPOP", "BLMOVE", "SADD", "SREM", "ZADD", "ZINCRBY", "ZREM", "ZREMRANGEBYSCORE" }) |name| {
         try std.testing.expect(registry.should_write_to_aof(name));
     }
-    for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS", "PTTL", "SCAN" }) |name| {
+    for ([_][]const u8{ "GET", "LLEN", "LINDEX", "LRANGE", "EXISTS", "PTTL", "SCAN", "SMEMBERS", "SCARD", "SISMEMBER", "ZRANGE", "ZREVRANGE", "ZRANGEBYSCORE", "ZREVRANGEBYSCORE", "ZCARD", "ZSCORE" }) |name| {
         try std.testing.expect(!registry.should_write_to_aof(name));
     }
 }

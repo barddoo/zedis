@@ -53,6 +53,8 @@ pub const Writer = struct {
             .bloom_filter => 0x0B,
             .search_index => 0x0C,
             .hash_map => 0x0D,
+            .set => 0x0E,
+            .zset => 0x0F,
         };
     }
 
