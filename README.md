@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/zedis.svg" width="458" height="168" alt="Zedis">
+</p>
+
 # Zedis
 
 [![Release](https://github.com/barddoo/zedis/actions/workflows/release.yml/badge.svg)](https://github.com/barddoo/zedis/actions/workflows/release.yml)
