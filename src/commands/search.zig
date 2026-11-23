@@ -368,9 +368,7 @@ pub fn ft_search(writer: *Writer, store: *Store, args: []const Value) !void {
 const testing = std.testing;
 
 test "FT.CREATE then FT.INFO" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -399,9 +397,7 @@ test "FT.CREATE then FT.INFO" {
 }
 
 test "FT.CREATE with VECTOR field" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -430,9 +426,7 @@ test "FT.CREATE with VECTOR field" {
 }
 
 test "FT.ADD document then FT.GET" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -478,9 +472,7 @@ test "FT.ADD document then FT.GET" {
 }
 
 test "FT.ADD rejects duplicate without REPLACE" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -507,9 +499,7 @@ test "FT.ADD rejects duplicate without REPLACE" {
 }
 
 test "FT._LIST returns created indexes" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -533,9 +523,7 @@ test "FT._LIST returns created indexes" {
 }
 
 test "FT.DROPINDEX removes index" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -611,9 +599,7 @@ test "FT.ADD under kv allocator does not OOM" {
 }
 
 test "FT.SEARCH text query returns matching docs" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -655,9 +641,7 @@ test "FT.SEARCH text query returns matching docs" {
 }
 
 test "FT.SEARCH numeric range filter" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -698,9 +682,7 @@ test "FT.SEARCH numeric range filter" {
 }
 
 test "FT.SEARCH tag filter" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();
@@ -741,9 +723,7 @@ test "FT.SEARCH tag filter" {
 }
 
 test "FT.SEARCH vector KNN returns nearest doc" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
     defer store.deinit();

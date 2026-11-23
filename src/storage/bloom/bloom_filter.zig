@@ -225,13 +225,10 @@ pub fn check_many(self: *const BloomFilter, items: []const []const u8, allocator
 pub const contains = check;
 
 test "bloom filter initialization" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 1000,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -248,7 +245,7 @@ test "bloom filter initialization" {
         BloomFilter.init(.{
             .error_rate = 0,
             .capacity = 1000,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 
@@ -257,7 +254,7 @@ test "bloom filter initialization" {
         BloomFilter.init(.{
             .error_rate = 1.0,
             .capacity = 1000,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 
@@ -266,19 +263,16 @@ test "bloom filter initialization" {
         BloomFilter.init(.{
             .error_rate = 0.01,
             .capacity = 0,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 }
 
 test "bloom filter add and check basic" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -312,13 +306,10 @@ test "bloom filter add and check basic" {
 }
 
 test "bloom filter add and check with force64" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .force64 = true,
     });
     defer filter.deinit();
@@ -333,20 +324,17 @@ test "bloom filter add and check with force64" {
 }
 
 test "bloom filter with different error rates" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter_low = try BloomFilter.init(.{
         .error_rate = 0.001, // 0.1%
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter_low.deinit();
 
     var filter_high = try BloomFilter.init(.{
         .error_rate = 0.25, // 25% (max practical)
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter_high.deinit();
 
@@ -363,13 +351,10 @@ test "bloom filter with different error rates" {
 }
 
 test "bloom filter entry counting" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -393,13 +378,10 @@ test "bloom filter entry counting" {
 }
 
 test "bloom filter contains alias" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -410,13 +392,10 @@ test "bloom filter contains alias" {
 }
 
 test "bloom filter large capacity" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100000, // 100k items
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -432,13 +411,10 @@ test "bloom filter large capacity" {
 }
 
 test "bloom filter add_many and check_many" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try BloomFilter.init(.{
         .error_rate = 0.01,
         .capacity = 100,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -453,8 +429,8 @@ test "bloom filter add_many and check_many" {
     }
 
     const test_items = [_][]const u8{ "apple", "banana", "fig", "grape", "cherry" };
-    const results = try filter.check_many(&test_items, arena.allocator());
-    defer arena.allocator().free(results);
+    const results = try filter.check_many(&test_items, std.testing.allocator);
+    defer std.testing.allocator.free(results);
 
     // Expected: [true, true, false, false, true]
     try std.testing.expect(results[0] == true); // apple

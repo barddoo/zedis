@@ -2,11 +2,13 @@
 title: Zedis
 description: A Redis-compatible in-memory data store written in Zig.
 template: splash
+head:
+  # Starlight appends the site title to the page title; the homepage already is
+  # the site title, so this keeps the tab from reading "Zedis | Zedis".
+  - tag: title
+    content: Zedis
 hero:
-  tagline: A Redis-compatible in-memory data store written in Zig, built for learning, performance and thread safety.
-  image:
-    file: ../../assets/zedis.svg
-    alt: Zedis
+  tagline: A Redis-compatible in-memory data store, written in Zig.
   actions:
     - text: Get started
       link: /getting-started/

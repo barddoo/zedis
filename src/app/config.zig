@@ -811,28 +811,38 @@ fn parse_cgroup_limit(text: []const u8) ?u64 {
 
 const testing = std.testing;
 
-test "redis-version is parsed from config" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
+/// Frees the strings `parse_config_text` allocated. The server keeps a config
+/// for its whole lifetime, so there is no production deinit; tests must release
+/// the fields the parser duped instead of letting an arena mask them.
+fn freeParsedConfig(config: *const Config, allocator: std.mem.Allocator) void {
+    const defaults: Config = .{};
+    const info = @typeInfo(Config).@"struct";
+    inline for (info.field_names, info.field_types) |name, FieldType| {
+        if (FieldType == []const u8) {
+            const value: []const u8 = @field(config, name);
+            if (value.ptr != @field(defaults, name).ptr) allocator.free(value);
+        }
+    }
+    if (config.requirepass) |password| allocator.free(password);
+    if (config.config_file) |path| allocator.free(path);
+}
 
-    const config = try parse_config_text(arena.allocator(), "redis-version 7.2.0\n");
+test "redis-version is parsed from config" {
+    const config = try parse_config_text(testing.allocator, "redis-version 7.2.0\n");
+    defer freeParsedConfig(&config, testing.allocator);
     try testing.expectEqualStrings("7.2.0", config.redis_version);
 }
 
 test "redis-version defaults to empty" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try parse_config_text(arena.allocator(), "port 6379\n");
+    const config = try parse_config_text(testing.allocator, "port 6379\n");
     try testing.expectEqualStrings("", config.redis_version);
 }
 
 test "config directives past the first 8 KiB are loaded" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(allocator);
     for (0..1024) |_| try text.appendSlice(allocator, "# padding padding padding padding\n");
     try text.appendSlice(allocator, "port 7000\n");
     try testing.expect(text.items.len > 8192);
@@ -852,47 +862,34 @@ test "bind takes the first address and drops the optional marker" {
     };
 
     for (cases) |case| {
-        var arena = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena.deinit();
-
-        const config = try parse_config_text(arena.allocator(), case.text);
+        const config = try parse_config_text(testing.allocator, case.text);
+        defer freeParsedConfig(&config, testing.allocator);
         try testing.expectEqualStrings(case.expected, config.bind);
     }
 }
 
 test "quoted values lose their quotes" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try parse_config_text(arena.allocator(), "dbfilename \"custom.rdb\"\nlogfile \"\"\n");
+    const config = try parse_config_text(testing.allocator, "dbfilename \"custom.rdb\"\nlogfile \"\"\n");
+    defer freeParsedConfig(&config, testing.allocator);
     try testing.expectEqualStrings("custom.rdb", config.dbfilename);
     try testing.expectEqualStrings("", config.logfile);
 }
 
 test "empty requirepass disables authentication" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try parse_config_text(arena.allocator(), "requirepass \"\"\n");
+    const config = try parse_config_text(testing.allocator, "requirepass \"\"\n");
     try testing.expect(config.requirepass == null);
     try testing.expect(!config.requires_auth());
 }
 
 test "unsupported maxmemory-policy is rejected" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     try testing.expectError(
         error.InvalidEvictionPolicy,
-        parse_config_text(arena.allocator(), "maxmemory-policy allkeys-lfu\n"),
+        parse_config_text(testing.allocator, "maxmemory-policy allkeys-lfu\n"),
     );
 }
 
 test "TLS directives are parsed" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try parse_config_text(arena.allocator(),
+    const config = try parse_config_text(testing.allocator,
         \\tls-port 6380
         \\tls-cert-file "/etc/zedis/server.crt"
         \\tls-key-file "/etc/zedis/server.key"
@@ -901,6 +898,7 @@ test "TLS directives are parsed" {
         \\tls-protocols "TLSv1.2 TLSv1.3"
         \\
     );
+    defer freeParsedConfig(&config, testing.allocator);
 
     try testing.expect(config.tls_enabled());
     try testing.expectEqual(6380, config.tls_port);
@@ -912,20 +910,14 @@ test "TLS directives are parsed" {
 }
 
 test "unsupported tls-auth-clients value is rejected" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     try testing.expectError(
         error.InvalidTlsAuthClients,
-        parse_config_text(arena.allocator(), "tls-auth-clients maybe\n"),
+        parse_config_text(testing.allocator, "tls-auth-clients maybe\n"),
     );
 }
 
 test "clock-update-ms is settable from the config file" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try parse_config_text(arena.allocator(), "clock-update-ms 0\n");
+    const config = try parse_config_text(testing.allocator, "clock-update-ms 0\n");
     try testing.expectEqual(0, config.clock_update_ms);
 }
 
@@ -943,9 +935,7 @@ test "cgroup limits ignore the unlimited marker" {
 }
 
 test "cgroup limit uses the most restrictive ancestor" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     const root = "zedis_test_cgroup";
     Dir.cwd().deleteTree(testing.io, root) catch {};
@@ -988,10 +978,7 @@ test "host without a container limit uses the fixed budget" {
 }
 
 test "explicit maxmemory skips auto sizing" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    var config = try parse_config_text(arena.allocator(), "maxmemory 100mb\n");
+    var config = try parse_config_text(testing.allocator, "maxmemory 100mb\n");
     try resolve_memory_budget(&config, .unknown);
 
     try testing.expectEqual(100 * 1024 * 1024, config.kv_memory_budget);
@@ -1004,10 +991,8 @@ test "auto sizing fails when the memory limit is unknown" {
 }
 
 test "stock redis.conf parses as a config file" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
-    const config = try read_file(arena.allocator(), testing.io, "tests/fixtures/redis.conf");
+    const config = try read_file(testing.allocator, testing.io, "tests/fixtures/redis.conf");
+    defer freeParsedConfig(&config, testing.allocator);
 
     try testing.expectEqual(6379, config.port);
     try testing.expectEqualStrings("127.0.0.1", config.bind); // multi-arg bind list
@@ -1029,9 +1014,7 @@ test "config rewrite updates managed directives and preserves comments" {
             "kv-memory-budget 1mb\n",
     });
 
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var config = try read_file(arena.allocator(), testing.io, path);
+    var config = try read_file(testing.allocator, testing.io, path);
     config.kv_memory_budget = 2 * 1024 * 1024;
     config.kv_memory_budget_explicit = true;
     config.eviction_policy = .noeviction;
@@ -1046,18 +1029,16 @@ test "config rewrite updates managed directives and preserves comments" {
     try testing.expect(std.mem.indexOf(u8, rewritten, "maxmemory-policy noeviction") != null);
     try testing.expect(std.mem.indexOf(u8, rewritten, "kv-memory-budget") == null);
 
-    const reparsed = try read_file(arena.allocator(), testing.io, path);
+    const reparsed = try read_file(testing.allocator, testing.io, path);
     try testing.expectEqual(@as(usize, 2 * 1024 * 1024), reparsed.kv_memory_budget);
     try testing.expectEqual(EvictionPolicy.noeviction, reparsed.eviction_policy);
     try testing.expectEqual(@as(u16, 1234), reparsed.port);
 }
 
 test "shipped config files parse" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     inline for (.{ "zedis.conf", "docker/zedis.conf", "docker/zedis-distroless.conf" }) |path| {
-        const config = try read_file(arena.allocator(), testing.io, path);
+        const config = try read_file(testing.allocator, testing.io, path);
+        defer freeParsedConfig(&config, testing.allocator);
         try testing.expectEqual(6379, config.port);
     }
 }

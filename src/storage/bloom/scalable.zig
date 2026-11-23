@@ -162,13 +162,10 @@ pub fn get_memory_usage(self: *const ScalableBloomFilter) u64 {
 }
 
 test "scalable bloom filter initialization" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 100,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .growth_factor = 2.0,
         .error_tightening_ratio = 0.5,
     });
@@ -180,13 +177,10 @@ test "scalable bloom filter initialization" {
 }
 
 test "scalable bloom filter basic add and check" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.1,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -203,13 +197,10 @@ test "scalable bloom filter basic add and check" {
 }
 
 test "scalable bloom filter multiple items" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 5,
         .error_rate = 0.1,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -229,13 +220,10 @@ test "scalable bloom filter multiple items" {
 }
 
 test "scalable bloom filter expansion" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .growth_factor = 2.0,
         .error_tightening_ratio = 0.5,
     });
@@ -264,13 +252,10 @@ test "scalable bloom filter expansion" {
 }
 
 test "scalable bloom filter no scaling mode" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .no_scaling = true,
     });
     defer filter.deinit();
@@ -296,13 +281,10 @@ test "scalable bloom filter no scaling mode" {
 }
 
 test "scalable bloom filter check reverse order" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .growth_factor = 2.0,
     });
     defer filter.deinit();
@@ -331,13 +313,10 @@ test "scalable bloom filter check reverse order" {
 }
 
 test "scalable bloom filter memory usage" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
     });
     defer filter.deinit();
 
@@ -355,13 +334,10 @@ test "scalable bloom filter memory usage" {
 }
 
 test "scalable bloom filter with force64" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     var filter = try ScalableBloomFilter.init(.{
         .initial_capacity = 10,
         .error_rate = 0.01,
-        .allocator = arena.allocator(),
+        .allocator = std.testing.allocator,
         .force64 = true,
     });
     defer filter.deinit();
@@ -374,15 +350,12 @@ test "scalable bloom filter with force64" {
 }
 
 test "scalable bloom filter invalid initialization" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-
     try std.testing.expectError(
         error.InvalidArguments,
         ScalableBloomFilter.init(.{
             .initial_capacity = 0,
             .error_rate = 0.01,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 
@@ -391,7 +364,7 @@ test "scalable bloom filter invalid initialization" {
         ScalableBloomFilter.init(.{
             .initial_capacity = 10,
             .error_rate = 0,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 
@@ -400,7 +373,7 @@ test "scalable bloom filter invalid initialization" {
         ScalableBloomFilter.init(.{
             .initial_capacity = 10,
             .error_rate = 1.0,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
         }),
     );
 
@@ -409,7 +382,7 @@ test "scalable bloom filter invalid initialization" {
         ScalableBloomFilter.init(.{
             .initial_capacity = 10,
             .error_rate = 0.01,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
             .growth_factor = 0.5,
         }),
     );
@@ -419,7 +392,7 @@ test "scalable bloom filter invalid initialization" {
         ScalableBloomFilter.init(.{
             .initial_capacity = 10,
             .error_rate = 0.01,
-            .allocator = arena.allocator(),
+            .allocator = std.testing.allocator,
             .error_tightening_ratio = 0,
         }),
     );

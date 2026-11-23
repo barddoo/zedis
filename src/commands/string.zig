@@ -689,9 +689,7 @@ pub fn set_full(writer: *Writer, store: *Store, args: []const Value) !void {
 }
 
 test "SET command with string value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -716,9 +714,7 @@ test "SET command with string value" {
 }
 
 test "SET command with integer value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -743,9 +739,7 @@ test "SET command with integer value" {
 }
 
 test "GET command with existing string value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -767,9 +761,7 @@ test "GET command with existing string value" {
 }
 
 test "GET command with existing integer value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -791,9 +783,7 @@ test "GET command with existing integer value" {
 }
 
 test "GET command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -813,9 +803,7 @@ test "GET command with non-existing key" {
 }
 
 test "INCR command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -839,9 +827,7 @@ test "INCR command on non-existing key" {
 }
 
 test "INCR command on existing integer" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -867,9 +853,7 @@ test "INCR command on existing integer" {
 }
 
 test "INCR command on string that represents integer" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -895,9 +879,7 @@ test "INCR command on string that represents integer" {
 }
 
 test "INCR command on non-integer string" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -918,9 +900,7 @@ test "INCR command on non-integer string" {
 }
 
 test "DECR command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -944,9 +924,7 @@ test "DECR command on non-existing key" {
 }
 
 test "DECR command on existing integer" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -972,9 +950,7 @@ test "DECR command on existing integer" {
 }
 
 test "DEL command with single existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -999,9 +975,7 @@ test "DEL command with single existing key" {
 }
 
 test "DEL command with multiple keys" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1032,9 +1006,7 @@ test "DEL command with multiple keys" {
 }
 
 test "DEL command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1054,9 +1026,7 @@ test "DEL command with non-existing key" {
 }
 
 test "APPEND command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1081,9 +1051,7 @@ test "APPEND command on non-existing key" {
 }
 
 test "APPEND command on existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1110,9 +1078,7 @@ test "APPEND command on existing key" {
 }
 
 test "STRLEN command on existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1134,9 +1100,7 @@ test "STRLEN command on existing key" {
 }
 
 test "STRLEN command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1156,9 +1120,7 @@ test "STRLEN command on non-existing key" {
 }
 
 test "GETSET command on existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1185,9 +1147,7 @@ test "GETSET command on existing key" {
 }
 
 test "GETSET command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1212,9 +1172,7 @@ test "GETSET command on non-existing key" {
 }
 
 test "MGET command with multiple keys" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1239,9 +1197,7 @@ test "MGET command with multiple keys" {
 }
 
 test "MSET command with multiple key-value pairs" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1272,9 +1228,7 @@ test "MSET command with multiple key-value pairs" {
 }
 
 test "SETEX command sets key with expiration" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1300,9 +1254,7 @@ test "SETEX command sets key with expiration" {
 }
 
 test "SETNX command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1327,9 +1279,7 @@ test "SETNX command on non-existing key" {
 }
 
 test "SETNX command on existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1356,9 +1306,7 @@ test "SETNX command on existing key" {
 }
 
 test "INCRBY command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1383,9 +1331,7 @@ test "INCRBY command on non-existing key" {
 }
 
 test "INCRBY command on existing integer" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1412,9 +1358,7 @@ test "INCRBY command on existing integer" {
 }
 
 test "DECRBY command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1439,9 +1383,7 @@ test "DECRBY command on non-existing key" {
 }
 
 test "DECRBY command on existing integer" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1468,9 +1410,7 @@ test "DECRBY command on existing integer" {
 }
 
 test "INCRBYFLOAT command on non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1491,9 +1431,7 @@ test "INCRBYFLOAT command on non-existing key" {
 }
 
 test "INCRBYFLOAT command on existing float" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1517,9 +1455,7 @@ test "INCRBYFLOAT command on existing float" {
 }
 
 test "INCRBYFLOAT command with negative increment" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1543,9 +1479,7 @@ test "INCRBYFLOAT command with negative increment" {
 }
 
 test "INCR command overflow returns Overflow" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1566,9 +1500,7 @@ test "INCR command overflow returns Overflow" {
 }
 
 test "DECRBY command with minimum i64 decrement returns Overflow" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1587,9 +1519,7 @@ test "DECRBY command with minimum i64 decrement returns Overflow" {
 }
 
 test "GET command on minimum i64 value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1611,9 +1541,7 @@ test "GET command on minimum i64 value" {
 }
 
 test "PEXPIRE sets a millisecond expiry" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1640,9 +1568,7 @@ test "PEXPIRE sets a millisecond expiry" {
 }
 
 test "PEXPIRE with a non-positive TTL deletes the key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1666,9 +1592,7 @@ test "PEXPIRE with a non-positive TTL deletes the key" {
 }
 
 test "PEXPIRE NX leaves an existing expiry unchanged" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1695,9 +1619,7 @@ test "PEXPIRE NX leaves an existing expiry unchanged" {
 }
 
 test "SET discards the previous expiry unless KEEPTTL is given" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1723,9 +1645,7 @@ test "SET discards the previous expiry unless KEEPTTL is given" {
 }
 
 test "MSET and GETSET discard the previous expiry" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1752,9 +1672,7 @@ test "MSET and GETSET discard the previous expiry" {
 }
 
 test "EXPIRE honours NX, GT and LT instead of resetting the expiry" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -1794,9 +1712,7 @@ test "EXPIRE honours NX, GT and LT instead of resetting the expiry" {
 }
 
 test "EXPIRE rejects a non-integer TTL" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });

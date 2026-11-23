@@ -760,6 +760,9 @@ const TestContext = struct {
         self.server.stats.deinit();
         self.server.slowlog.deinit();
         self.server.store.deinit();
+        if (self.client.name) |name| self.allocator.free(name);
+        if (self.client.lib_name) |name| self.allocator.free(name);
+        if (self.client.lib_ver) |version| self.allocator.free(version);
         if (self.server.config.requirepass) |password| {
             self.allocator.free(password);
         }
@@ -774,11 +777,8 @@ pub fn reset(client: *Client, _: []const Value, writer: *Writer) !void {
 }
 
 test "CONFIG GET returns exact parameter" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [256]u8 = undefined;
@@ -796,11 +796,8 @@ test "CONFIG GET returns exact parameter" {
 }
 
 test "CONFIG GET resolves exact alias to canonical name" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [256]u8 = undefined;
@@ -818,11 +815,8 @@ test "CONFIG GET resolves exact alias to canonical name" {
 }
 
 test "CONFIG GET supports wildcard patterns" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     ctx.server.config.maxmemory_samples = 9;
@@ -851,11 +845,8 @@ test "CONFIG GET supports wildcard patterns" {
 }
 
 test "CONFIG SET updates supported runtime parameters" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [256]u8 = undefined;
@@ -888,11 +879,8 @@ test "CONFIG SET updates supported runtime parameters" {
 }
 
 test "CONFIG SET rejects immutable parameters" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [256]u8 = undefined;
@@ -930,10 +918,8 @@ fn init_hello_client(ctx: *TestContext) void {
 }
 
 test "HELLO 3 switches the client to RESP3 and replies with a map" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     init_hello_client(&ctx);
     defer resp.version = 2;
@@ -946,10 +932,8 @@ test "HELLO 3 switches the client to RESP3 and replies with a map" {
 }
 
 test "HELLO 2 replies with a flat array and returns the client to RESP2" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     init_hello_client(&ctx);
     ctx.client.protocol_version = 3;
@@ -963,10 +947,8 @@ test "HELLO 2 replies with a flat array and returns the client to RESP2" {
 }
 
 test "HELLO with no version describes the server without changing protocol" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     init_hello_client(&ctx);
     ctx.client.protocol_version = 3;
@@ -980,10 +962,8 @@ test "HELLO with no version describes the server without changing protocol" {
 }
 
 test "HELLO rejects bad requests without changing protocol" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     init_hello_client(&ctx);
 
@@ -1002,13 +982,11 @@ test "HELLO rejects bad requests without changing protocol" {
 }
 
 test "HELLO AUTH authenticates, selects the protocol, and sets the connection name" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     init_hello_client(&ctx);
-    ctx.server.config.requirepass = try arena.allocator().dupe(u8, "secret");
+    ctx.server.config.requirepass = try testing.allocator.dupe(u8, "secret");
     defer resp.version = 2;
 
     var buffer: [512]u8 = undefined;
@@ -1029,11 +1007,8 @@ test "HELLO AUTH authenticates, selects the protocol, and sets the connection na
 }
 
 test "CLIENT SETNAME stores a name and an empty name clears it" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -1052,11 +1027,8 @@ test "CLIENT SETNAME stores a name and an empty name clears it" {
 }
 
 test "CLIENT SETNAME rejects names with spaces" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -1073,11 +1045,8 @@ test "CLIENT SETNAME rejects names with spaces" {
 }
 
 test "CLIENT SETINFO stores library metadata" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -1096,11 +1065,8 @@ test "CLIENT SETINFO stores library metadata" {
 }
 
 test "CLIENT ID returns the connection id" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [64]u8 = undefined;
@@ -1113,11 +1079,8 @@ test "CLIENT ID returns the connection id" {
 }
 
 test "SELECT accepts database zero and rejects others" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
 
     var buffer: [128]u8 = undefined;
@@ -1139,10 +1102,8 @@ test "SELECT accepts database zero and rejects others" {
 }
 
 test "CONFIG GET replies with a map under RESP3" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
     var ctx: TestContext = undefined;
-    try ctx.init(arena.allocator());
+    try ctx.init(testing.allocator);
     defer ctx.deinit();
     resp.version = 3;
     defer resp.version = 2;

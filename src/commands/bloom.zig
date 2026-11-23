@@ -311,9 +311,7 @@ pub fn bf_insert(writer: *Writer, store: *Store, args: []const Value) !void {
 }
 
 test "BF.RESERVE command with valid parameters" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -338,9 +336,7 @@ test "BF.RESERVE command with valid parameters" {
 }
 
 test "BF.RESERVE command with invalid error rate too high" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -360,9 +356,7 @@ test "BF.RESERVE command with invalid error rate too high" {
 }
 
 test "BF.RESERVE command with missing arguments" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -381,9 +375,7 @@ test "BF.RESERVE command with missing arguments" {
 }
 
 test "BF.ADD command with new item" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -416,9 +408,7 @@ test "BF.ADD command with new item" {
 }
 
 test "BF.ADD command with existing item" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -462,9 +452,7 @@ test "BF.ADD command with existing item" {
 }
 
 test "BF.EXISTS command with existing item" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -508,9 +496,7 @@ test "BF.EXISTS command with existing item" {
 }
 
 test "BF.EXISTS command with non-existing item" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -543,9 +529,7 @@ test "BF.EXISTS command with non-existing item" {
 }
 
 test "BF.MADD command with multiple items" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -581,9 +565,7 @@ test "BF.MADD command with multiple items" {
 }
 
 test "BF.MEXISTS command with multiple items" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -629,9 +611,7 @@ test "BF.MEXISTS command with multiple items" {
 }
 
 test "BF.INFO command" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -669,9 +649,7 @@ test "BF.INFO command" {
 }
 
 test "BF.INSERT command with new bloom filter" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -702,9 +680,7 @@ test "BF.INSERT command with new bloom filter" {
 }
 
 test "BF.INSERT command with existing bloom filter" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });

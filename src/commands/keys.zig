@@ -308,9 +308,7 @@ pub fn object_cmd(writer: *Writer, store: *Store, args: []const Value) !void {
 }
 
 test "EXISTS command with existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -332,9 +330,7 @@ test "EXISTS command with existing key" {
 }
 
 test "EXISTS command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -354,9 +350,7 @@ test "EXISTS command with non-existing key" {
 }
 
 test "TTL command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -376,9 +370,7 @@ test "TTL command with non-existing key" {
 }
 
 test "TTL command with key without expiration" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -400,9 +392,7 @@ test "TTL command with key without expiration" {
 }
 
 test "TTL command with key with expiration" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -428,9 +418,7 @@ test "TTL command with key with expiration" {
 }
 
 test "PERSIST command with key having expiration" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -459,9 +447,7 @@ test "PERSIST command with key having expiration" {
 }
 
 test "PERSIST command with key without expiration" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -483,9 +469,7 @@ test "PERSIST command with key without expiration" {
 }
 
 test "TYPE command with string value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -507,9 +491,7 @@ test "TYPE command with string value" {
 }
 
 test "TYPE command with integer value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -531,9 +513,7 @@ test "TYPE command with integer value" {
 }
 
 test "TYPE command with list value" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -555,9 +535,7 @@ test "TYPE command with list value" {
 }
 
 test "TYPE command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -577,9 +555,7 @@ test "TYPE command with non-existing key" {
 }
 
 test "RENAME command with existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -608,9 +584,7 @@ test "RENAME command with existing key" {
 }
 
 test "RENAME command with non-existing key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -630,9 +604,7 @@ test "RENAME command with non-existing key" {
 }
 
 test "RANDOMKEY command with non-empty store" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -659,9 +631,7 @@ test "RANDOMKEY command with non-empty store" {
 }
 
 test "RANDOMKEY command with empty store" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -695,9 +665,7 @@ test "KEYS aborts once the read-only command deadline has passed" {
 }
 
 test "KEYS command returns all keys when pattern is wildcard" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -726,9 +694,7 @@ test "KEYS command returns all keys when pattern is wildcard" {
 }
 
 test "RENAME overwrites existing destination key" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -758,9 +724,7 @@ test "RENAME overwrites existing destination key" {
 }
 
 test "RENAME preserves list ownership" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -793,9 +757,7 @@ test "RENAME preserves list ownership" {
 }
 
 test "SCAN MATCH filters keys and finishes at cursor zero" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -827,9 +789,7 @@ test "SCAN MATCH filters keys and finishes at cursor zero" {
 }
 
 test "SCAN TYPE filters by value type" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
@@ -859,9 +819,7 @@ test "SCAN TYPE filters by value type" {
 }
 
 test "SCAN rejects an invalid cursor" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 16 });
@@ -881,9 +839,7 @@ test "SCAN rejects an invalid cursor" {
 }
 
 test "PTTL reports remaining milliseconds and the missing-key sentinel" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const allocator = testing.allocator;
 
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(allocator, testing.io, &clock, .{ .initial_capacity = 4096 });
