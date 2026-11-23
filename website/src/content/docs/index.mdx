@@ -1,0 +1,63 @@
+---
+title: Zedis
+description: A Redis-compatible in-memory data store written in Zig.
+template: splash
+hero:
+  tagline: A Redis-compatible in-memory data store written in Zig, built for learning, performance and thread safety.
+  image:
+    file: ../../assets/zedis.svg
+    alt: Zedis
+  actions:
+    - text: Get started
+      link: /getting-started/
+      icon: right-arrow
+    - text: Command compatibility
+      link: /compatibility/
+      icon: open-book
+    - text: GitHub
+      link: https://github.com/barddoo/zedis
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+	<Card title="Redis protocol" icon="database">
+		Speaks RESP, including pipelined commands, so <code>redis-cli</code> and
+		existing Redis clients work without changes.
+	</Card>
+	<Card title="One executor, no store lock" icon="server">
+		All clients, parsing and command execution run on a single OS thread. Store
+		access is serialized by construction, not by a lock.
+	</Card>
+	<Card title="Persistence" icon="setting">
+		RDB point-in-time snapshots and an append-only file with group commit:
+		<code>always</code>, <code>everysec</code>, or <code>no</code>.
+	</Card>
+	<Card title="Memory budgeting" icon="analytics">
+		Redis-style <code>maxmemory</code> with LRU eviction, <code>-OOM</code>
+		rejection for allocating commands, and cgroup-aware sizing inside
+		containers.
+	</Card>
+	<Card title="TLS 1.3" icon="padlock">
+		Optional TLS listener via ztls/AWS-LC, with CA configuration and optional
+		mutual TLS through <code>tls-auth-clients</code>.
+	</Card>
+	<Card title="Observability" icon="list-format">
+		Real <code>INFO</code> counters, <code>SLOWLOG</code>, <code>LATENCY</code>,
+		and a <code>METRICS</code> command that renders Prometheus text exposition.
+	</Card>
+</CardGrid>
+
+## Where to go next
+
+- [Install and run](/getting-started/) builds the server from source or pulls a container.
+- [Command compatibility](/compatibility/) lists what is implemented, partial, and missing.
+- [Migrating from Redis](/migrating-from-redis/) is what breaks when you switch — read it before you point a workload at this.
+- [Architecture](/architecture/overview/) explains the thread model and the invariants behind it.
+
+:::note[One store, on purpose]
+Zedis is intentionally single-store: no logical databases, no `SELECT`. It also
+keeps expiry lazy-only. Both are design choices, not gaps in the roadmap.
+:::
