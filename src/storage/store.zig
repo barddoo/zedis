@@ -20,7 +20,6 @@ const assert = std.debug.assert;
 
 // Optimal load factor
 const optimal_max_load_percentage = 80;
-const expired_eviction_scan_limit = 16;
 
 // Keys up to this many bytes are stored inline in the entry (no heap allocation).
 const inline_key_max = 23;
@@ -76,18 +75,34 @@ const Slot = struct {
     idx: u32,
 };
 
+/// Eviction is a clock sweep over `entries`. Each live entry carries a saturating
+/// reference counter; the hand decrements it as it passes and evicts the first
+/// entry it finds at zero, so the sweep *is* the aging step. This is Postgres'
+/// `usage_count` scheme.
+///
+/// The cap is 5, matching `BM_MAX_USAGE_COUNT`. One bit would be cheaper to
+/// sweep but cannot tell a key read six times from a key read once, so a hot set
+/// loses to a one-shot scan: measured hot-set survival after a scan of one
+/// cache-capacity in new keys was 100% at 5 and 3% at 1, for ~12% more sweep
+/// time. Five is the smallest cap that keeps the working set alive.
+const ref_max: u8 = 5;
+
 const StoreEntry = struct {
     key: []const u8,
     inline_key_data: [inline_key_max]u8,
     object: ZedisObject,
     expires_at: ?i64 = null,
-    last_access: u64 = 0,
-    prev_lru: ?*StoreEntry = null,
-    next_lru: ?*StoreEntry = null,
-    prev_volatile: ?*StoreEntry = null,
-    next_volatile: ?*StoreEntry = null,
+    /// Low three bits are the reference counter, the top bit marks a live entry:
+    /// the free list leaves holes in `entries` and the sweep has to skip them.
+    /// Costs nothing, because it fills padding the struct already had.
+    ref: u8 = ref_free,
     next_free: u32 = no_entry,
 };
+
+const ref_live_bit: u8 = 0x80;
+const ref_count_mask: u8 = 0x07;
+/// A cleared counter and no live bit: what a slot on the free list looks like.
+const ref_free: u8 = 0;
 
 /// Smallest power-of-two slot count that keeps `count` at or below 50% load.
 fn shrinkTarget(count: usize) usize {
@@ -171,17 +186,21 @@ pub const Store = struct {
     io: Io,
     clock: *Clock,
 
-    lru_clock: std.atomic.Value(u64),
-
-    lru_head: ?*StoreEntry,
-    lru_tail: ?*StoreEntry,
-    volatile_lru_head: ?*StoreEntry,
-    volatile_lru_tail: ?*StoreEntry,
-    allkeys_sample_cursor: ?*StoreEntry,
-    volatile_sample_cursor: ?*StoreEntry,
+    /// Clock hand: an index into `entries`, kept masked to `entries.len`. It
+    /// survives across evictions so successive victims continue around the ring
+    /// instead of restarting at the oldest slot.
+    clock_hand: u32,
+    /// Entry the clock must not evict: a caller holds a pointer to it across an
+    /// allocation that can trigger eviction (an in-place update clones its new
+    /// value first). A pointer, not an index, because reclaiming memory
+    /// renumbers the index space while the pin is still held.
+    pinned: ?*StoreEntry,
 
     last_maintenance_check: i64,
     eviction_policy: Config.EvictionPolicy,
+    /// Accepted for Redis config compatibility. The clock sweep has no sample
+    /// size, so this is inert; it is kept on the struct because
+    /// `CONFIG GET/SET maxmemory-samples` still round-trips it.
     maxmemory_samples: usize,
 
     /// Hits/misses and expiry/eviction counts for INFO and METRICS. Plain u64:
@@ -300,13 +319,8 @@ pub const Store = struct {
             .entries_capacity = 0,
             .count = 0,
             .free_head = no_entry,
-            .lru_clock = .init(0),
-            .lru_head = null,
-            .lru_tail = null,
-            .volatile_lru_head = null,
-            .volatile_lru_tail = null,
-            .allkeys_sample_cursor = null,
-            .volatile_sample_cursor = null,
+            .clock_hand = 0,
+            .pinned = null,
             .last_maintenance_check = 0,
             .eviction_policy = options.eviction_policy,
             .maxmemory_samples = @max(@as(usize, @intCast(options.maxmemory_samples)), 1),
@@ -320,7 +334,7 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         for (self.slots) |s| {
             if (s.idx == empty_slot) continue;
-            self.free_entry_contents(self.entries[s.idx]);
+            self.free_entry_contents(s.idx);
         }
         for (self.entries) |entry| {
             self.allocator.destroy(entry);
@@ -328,12 +342,8 @@ pub const Store = struct {
         if (self.slots.len > 0) self.allocator.free(self.slots);
         self.free_entries_array();
         self.slots = &.{};
-        self.lru_head = null;
-        self.lru_tail = null;
-        self.volatile_lru_head = null;
-        self.volatile_lru_tail = null;
-        self.allkeys_sample_cursor = null;
-        self.volatile_sample_cursor = null;
+        self.clock_hand = 0;
+        self.pinned = null;
     }
 
     pub fn iterator(self: *const Store) Iterator {
@@ -377,29 +387,39 @@ pub const Store = struct {
 
     fn delete_at_slot(self: *Store, slot: usize) void {
         const idx = self.slots[slot].idx;
-        const entry = self.entries[idx];
         self.shiftBackward(slot);
         self.count -= 1;
-        self.free_entry_contents(entry);
+        self.free_entry_contents(idx);
+        const entry = self.entries[idx];
         entry.next_free = self.free_head;
         self.free_head = idx;
         self.maybe_maintenance();
     }
 
-    fn next_access_stamp(self: *Store) u64 {
-        return self.lru_clock.fetchAdd(1, .monotonic) + 1;
+    // --- Reference counters and the clock hand -----------------------------
+
+    inline fn refOf(self: *const Store, idx: u32) u8 {
+        return self.entries[idx].ref & ref_count_mask;
     }
 
-    inline fn uses_global_lru(self: *const Store) bool {
-        return self.eviction_policy == .allkeys_lru;
+    inline fn isLive(self: *const Store, idx: u32) bool {
+        return (self.entries[idx].ref & ref_live_bit) != 0;
     }
 
-    inline fn tracks_volatile_entries(self: *const Store) bool {
-        return self.eviction_policy != .noeviction;
+    inline fn setRef(self: *Store, idx: u32, count: u8) void {
+        assert(count <= ref_max);
+        self.entries[idx].ref = ref_live_bit | count;
     }
 
-    inline fn tracks_access_time(self: *const Store) bool {
-        return self.eviction_policy != .noeviction;
+    inline fn markDead(self: *Store, idx: u32) void {
+        self.entries[idx].ref = ref_free;
+    }
+
+    /// Records an access. A counter already at the cap is left alone, which
+    /// keeps steady-state reads of hot keys write-free.
+    inline fn noteAccess(self: *Store, idx: u32) void {
+        const current = self.refOf(idx);
+        if (current < ref_max) self.setRef(idx, current + 1);
     }
 
     fn clone_owned_object(self: *Store, object: ZedisObject) !ZedisObject {
@@ -451,90 +471,9 @@ pub const Store = struct {
         }
     }
 
-    fn detach_lru(self: *Store, entry: *StoreEntry) void {
-        const fallback = entry.prev_lru orelse entry.next_lru;
-
-        if (entry.prev_lru) |prev| {
-            prev.next_lru = entry.next_lru;
-        } else if (self.lru_head == entry) {
-            self.lru_head = entry.next_lru;
-        }
-
-        if (entry.next_lru) |next| {
-            next.prev_lru = entry.prev_lru;
-        } else if (self.lru_tail == entry) {
-            self.lru_tail = entry.prev_lru;
-        }
-
-        entry.prev_lru = null;
-        entry.next_lru = null;
-
-        if (self.allkeys_sample_cursor == entry) {
-            self.allkeys_sample_cursor = fallback;
-        }
-    }
-
-    fn attach_lru_head(self: *Store, entry: *StoreEntry) void {
-        entry.prev_lru = null;
-        entry.next_lru = self.lru_head;
-
-        if (self.lru_head) |head| {
-            head.prev_lru = entry;
-        } else {
-            self.lru_tail = entry;
-        }
-
-        self.lru_head = entry;
-    }
-
-    fn detach_volatile(self: *Store, entry: *StoreEntry) void {
-        const fallback = entry.prev_volatile orelse entry.next_volatile;
-
-        if (entry.prev_volatile) |prev| {
-            prev.next_volatile = entry.next_volatile;
-        } else if (self.volatile_lru_head == entry) {
-            self.volatile_lru_head = entry.next_volatile;
-        }
-
-        if (entry.next_volatile) |next| {
-            next.prev_volatile = entry.prev_volatile;
-        } else if (self.volatile_lru_tail == entry) {
-            self.volatile_lru_tail = entry.prev_volatile;
-        }
-
-        entry.prev_volatile = null;
-        entry.next_volatile = null;
-
-        if (self.volatile_sample_cursor == entry) {
-            self.volatile_sample_cursor = fallback;
-        }
-    }
-
-    fn attach_volatile_head(self: *Store, entry: *StoreEntry) void {
-        entry.prev_volatile = null;
-        entry.next_volatile = self.volatile_lru_head;
-
-        if (self.volatile_lru_head) |head| {
-            head.prev_volatile = entry;
-        } else {
-            self.volatile_lru_tail = entry;
-        }
-
-        self.volatile_lru_head = entry;
-    }
-
-    fn record_access(self: *Store, entry: *StoreEntry) void {
-        if (!self.tracks_access_time()) return;
-        entry.last_access = self.next_access_stamp();
-    }
-
-    fn touch_entry(self: *Store, entry: *StoreEntry) void {
-        self.record_access(entry);
-    }
-
-    fn free_entry_contents(self: *Store, entry: *StoreEntry) void {
-        self.detach_lru(entry);
-        self.detach_volatile(entry);
+    fn free_entry_contents(self: *Store, idx: u32) void {
+        const entry = self.entries[idx];
+        self.markDead(idx);
         self.free_object_value(entry.object);
         if (entry.key.len > inline_key_max) self.allocator.free(entry.key);
     }
@@ -544,7 +483,8 @@ pub const Store = struct {
             self.counters.keyspace_misses += 1;
             return null;
         };
-        const entry = self.entries[self.slots[slot].idx];
+        const idx = self.slots[slot].idx;
+        const entry = self.entries[idx];
 
         if (entry.expires_at) |expiration_time| {
             const now = self.clock.now().toMilliseconds();
@@ -557,7 +497,7 @@ pub const Store = struct {
         }
 
         self.counters.keyspace_hits += 1;
-        if (touch) self.touch_entry(entry);
+        if (touch) self.noteAccess(idx);
         return entry;
     }
 
@@ -582,14 +522,19 @@ pub const Store = struct {
 
         const h32 = keyHash(key);
         if (self.findSlot(h32, key)) |slot| {
-            const entry = self.entries[self.slots[slot].idx];
+            const idx = self.slots[slot].idx;
+            const entry = self.entries[idx];
             if (std.meta.activeTag(entry.object.value) == .time_series) {
                 return error.AlreadyExists;
             }
 
-            // Mark the entry as recently used before allocating the replacement
-            // value so LRU-driven allocators don't evict the key being updated.
-            self.touch_entry(entry);
+            // The replacement value is cloned through the budgeted allocator,
+            // which can evict. `entry` is written below, so the clock must not
+            // take it while that allocation is in flight.
+            self.noteAccess(idx);
+            const previous_pin = self.pinned;
+            self.pinned = entry;
+            defer self.pinned = previous_pin;
 
             const new_object = try self.clone_owned_object(object);
             errdefer self.free_object_value(new_object);
@@ -612,17 +557,16 @@ pub const Store = struct {
             .key = undefined,
             .inline_key_data = undefined,
             .object = new_object,
-            .last_access = if (self.tracks_access_time()) self.next_access_stamp() else 0,
         };
+        // One pass of grace for a freshly written key, matching the
+        // `usage_count = 1` Postgres leaves on a page it just read in.
+        self.setRef(idx, 1);
 
         try self.setEntryKey(entry, key);
 
         const slot = self.findInsertSlot(h32);
         self.slots[slot] = .{ .hash = h32, .idx = idx };
         self.count += 1;
-        if (self.uses_global_lru()) {
-            self.attach_lru_head(entry);
-        }
     }
 
     pub fn delete(self: *Store, key: []const u8) bool {
@@ -813,17 +757,9 @@ pub const Store = struct {
         assert(time > 0);
 
         const slot = self.findSlot(keyHash(key), key) orelse return false;
-        const entry = self.entries[self.slots[slot].idx];
-        entry.expires_at = time;
-        self.touch_entry(entry);
-        if (self.tracks_volatile_entries()) {
-            if (entry.prev_volatile != null or entry.next_volatile != null or self.volatile_lru_head == entry) {
-                self.detach_volatile(entry);
-                self.attach_volatile_head(entry);
-            } else {
-                self.attach_volatile_head(entry);
-            }
-        }
+        const idx = self.slots[slot].idx;
+        self.entries[idx].expires_at = time;
+        self.noteAccess(idx);
         return true;
     }
 
@@ -844,14 +780,12 @@ pub const Store = struct {
     pub inline fn persist(self: *Store, key: []const u8) bool {
         assert(key.len > 0);
         const slot = self.findSlot(keyHash(key), key) orelse return false;
-        const entry = self.entries[self.slots[slot].idx];
+        const idx = self.slots[slot].idx;
+        const entry = self.entries[idx];
         if (entry.expires_at == null) return false;
 
         entry.expires_at = null;
-        if (self.tracks_volatile_entries()) {
-            self.detach_volatile(entry);
-        }
-        self.touch_entry(entry);
+        self.noteAccess(idx);
         return true;
     }
 
@@ -920,6 +854,9 @@ pub const Store = struct {
             self.entries = new_entries[0..self.count];
             self.entries_capacity = needed_capacity;
             self.free_head = no_entry;
+            // Every index just moved; restart the hand at the front of the new
+            // numbering rather than in the middle of a permutation.
+            self.clock_hand = 0;
             reclaimed = true;
         }
 
@@ -935,7 +872,7 @@ pub const Store = struct {
     pub inline fn flush_db(self: *Store) void {
         for (self.slots) |s| {
             if (s.idx == empty_slot) continue;
-            self.free_entry_contents(self.entries[s.idx]);
+            self.free_entry_contents(s.idx);
         }
         for (self.slots) |*s| s.* = .{ .hash = 0, .idx = empty_slot };
         for (self.entries) |entry| {
@@ -944,108 +881,70 @@ pub const Store = struct {
         self.free_entries_array();
         self.free_head = no_entry;
         self.count = 0;
-        self.lru_head = null;
-        self.lru_tail = null;
-        self.volatile_lru_head = null;
-        self.volatile_lru_tail = null;
-        self.allkeys_sample_cursor = null;
-        self.volatile_sample_cursor = null;
+        self.clock_hand = 0;
+        self.pinned = null;
     }
 
-    fn evict_expired_volatile(self: *Store) bool {
-        var scanned: usize = 0;
-        var current = self.volatile_lru_tail;
+    const Victim = struct {
+        entry: *StoreEntry,
+        expired: bool,
+    };
 
-        while (current) |entry| : (scanned += 1) {
-            if (scanned >= expired_eviction_scan_limit) break;
+    /// Advances the clock until it finds a live, eligible entry whose counter
+    /// has run out. Entries past their TTL are taken as soon as the hand reaches
+    /// them, which is what the old separate expired-key scan did.
+    ///
+    /// Bounded by `ref_max + 1` laps: one lap clears every counter once, so a
+    /// full set of them has to reach zero before anything can be declared
+    /// unevictable. Returning null sends `enforce_budget` down its reclaim path
+    /// instead of spinning here.
+    fn sweep(self: *Store, volatile_only: bool) ?Victim {
+        const len: u32 = @intCast(self.entries.len);
+        if (self.count == 0 or len == 0) return null;
+        if (self.clock_hand >= len) self.clock_hand = 0;
 
-            const prev = entry.prev_volatile;
-            const expiration_time = entry.expires_at orelse {
-                current = prev;
-                continue;
-            };
+        var budget: usize = @as(usize, len) * @as(usize, ref_max + 1);
+        const now = self.clock.now().toMilliseconds();
 
-            if (self.clock.now().toMilliseconds() > expiration_time) {
-                self.counters.expired_keys += 1;
-                return self.delete(entry.key);
+        while (budget > 0) : (budget -= 1) {
+            const idx = self.clock_hand;
+            self.clock_hand = if (idx + 1 == len) 0 else idx + 1;
+
+            if (!self.isLive(idx)) continue;
+
+            const entry = self.entries[idx];
+            if (self.pinned) |pinned| {
+                if (entry == pinned) continue;
+            }
+            if (volatile_only and entry.expires_at == null) continue;
+            if (entry.expires_at) |expiration_time| {
+                if (now > expiration_time) return .{ .entry = entry, .expired = true };
             }
 
-            current = prev;
+            const count = self.refOf(idx);
+            if (count == 0) return .{ .entry = entry, .expired = false };
+            self.setRef(idx, count - 1);
         }
 
-        return false;
-    }
-
-    fn sample_global_victim(self: *Store) ?*StoreEntry {
-        const start = self.allkeys_sample_cursor orelse self.lru_tail orelse return null;
-
-        var best = start;
-        var current = start;
-        var scanned: usize = 0;
-        var next_cursor: ?*StoreEntry = null;
-
-        while (true) {
-            if (current.last_access < best.last_access) {
-                best = current;
-            }
-
-            scanned += 1;
-            next_cursor = current.prev_lru orelse self.lru_tail;
-
-            if (scanned >= self.maxmemory_samples) break;
-            if (next_cursor == null or next_cursor.? == start) break;
-
-            current = next_cursor.?;
-        }
-
-        self.allkeys_sample_cursor = next_cursor;
-        return best;
-    }
-
-    fn sample_volatile_victim(self: *Store) ?*StoreEntry {
-        const start = self.volatile_sample_cursor orelse self.volatile_lru_tail orelse return null;
-
-        var best = start;
-        var current = start;
-        var scanned: usize = 0;
-        var next_cursor: ?*StoreEntry = null;
-
-        while (true) {
-            if (current.last_access < best.last_access) {
-                best = current;
-            }
-
-            scanned += 1;
-            next_cursor = current.prev_volatile orelse self.volatile_lru_tail;
-
-            if (scanned >= self.maxmemory_samples) break;
-            if (next_cursor == null or next_cursor.? == start) break;
-
-            current = next_cursor.?;
-        }
-
-        self.volatile_sample_cursor = next_cursor;
-        return best;
+        return null;
     }
 
     pub fn evict_one(self: *Store, policy: Config.EvictionPolicy) bool {
-        switch (policy) {
+        const victim = switch (policy) {
             .noeviction => return false,
-            .allkeys_lru => {
-                if (self.evict_expired_volatile()) return true;
-                const victim = self.sample_global_victim() orelse return false;
-                const removed = self.delete(victim.key);
-                if (removed) self.counters.evicted_keys += 1;
-                return removed;
-            },
-            .volatile_lru => {
-                if (self.evict_expired_volatile()) return true;
-                const victim = self.sample_volatile_victim() orelse return false;
-                const removed = self.delete(victim.key);
-                if (removed) self.counters.evicted_keys += 1;
-                return removed;
-            },
+            .allkeys_lru => self.sweep(false) orelse return false,
+            .volatile_lru => self.sweep(true) orelse return false,
+        };
+
+        const removed = self.delete(victim.entry.key);
+        if (removed) {
+            if (victim.expired) {
+                self.counters.expired_keys += 1;
+            } else {
+                self.counters.evicted_keys += 1;
+            }
         }
+        return removed;
     }
 
     pub fn rename_key(self: *Store, old_key: []const u8, new_key: []const u8) !bool {
@@ -1056,9 +955,14 @@ pub const Store = struct {
             return self.resolve_entry(old_key, false) != null;
         }
 
-        // Mark the entry recently used before allocating, so LRU eviction
-        // triggered by the allocation doesn't pick the key being renamed.
-        self.touch_entry(self.resolve_entry(old_key, false) orelse return false);
+        // Pin the entry across the allocation below: it is the only thing in the
+        // store the clock must not take while the new key bytes are allocated.
+        const pinned_slot = self.findSlot(keyHash(old_key), old_key) orelse return false;
+        const pinned_entry = self.entries[self.slots[pinned_slot].idx];
+        self.noteAccess(self.slots[pinned_slot].idx);
+        const previous_pin = self.pinned;
+        self.pinned = pinned_entry;
+        defer self.pinned = previous_pin;
 
         const new_heap: ?[]u8 = if (new_key.len > inline_key_max) try self.allocator.dupe(u8, new_key) else null;
         errdefer if (new_heap) |key| self.allocator.free(key);
@@ -1094,7 +998,7 @@ pub const Store = struct {
         const slot = self.findInsertSlot(new_h32);
         self.slots[slot] = .{ .hash = new_h32, .idx = idx };
 
-        self.touch_entry(entry);
+        self.noteAccess(idx);
         return true;
     }
 
@@ -1864,7 +1768,7 @@ test "Store maintenance() keeps capacity while the table is not half empty" {
     try testing.expectEqual(@as(u32, 900), store.size());
 }
 
-test "Store evict_one allkeys_lru evicts least recently used key" {
+test "Store evict_one allkeys clock evicts the coldest key" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{
         .initial_capacity = 16,
@@ -1911,7 +1815,7 @@ test "Store evict_one volatile_lru only evicts volatile keys" {
     try testing.expect(store.get("persistent") != null);
 }
 
-test "Store evict_one prefers expired ttl entries before LRU tail" {
+test "Store evict_one prefers an expired key over a live one" {
     var clock = Clock.init(testing.io, 0);
     var store = try Store.init(testing.allocator, testing.io, &clock, .{
         .initial_capacity = 16,

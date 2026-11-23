@@ -156,11 +156,7 @@ const StoreEntry = struct {
     inline_key_data: [23]u8,     // key inline when len <= 23
     object: ZedisObject,
     expires_at: ?i64,
-    last_access: u64,
-    prev_lru: ?*StoreEntry,      // unchanged pointer-based LRU
-    next_lru: ?*StoreEntry,
-    prev_volatile: ?*StoreEntry,
-    next_volatile: ?*StoreEntry,
+    ref: u8,                     // clock counter (3 bits) + live bit
     next_free: u32,              // free-list link
 };
 
@@ -385,9 +381,13 @@ Public API (`set`, `get`, `put_object`, `delete`, `exists`, `get_type`, `keys`,
 
 - `ZedisObject`, `ValueType`, value semantics
 - `clone_owned_object`, `free_object_value`
-- All LRU / volatile-LRU list logic (`detach_lru`, `attach_lru_head`,
-  `sample_global_victim`, `evict_expired_volatile`, …) — still pointer-based
-- Expiry semantics and eviction sampling
+- Expiry semantics
+- Eviction *was* unchanged here: this document describes the inline-table
+  redesign that kept the pointer-based LRU lists. A later change replaced them
+  with a clock sweep (`setRef`, `noteAccess`, `sweep`), which removed the four
+  `?*StoreEntry` links and the `last_access` stamp — 40 bytes per entry — for a
+  single `ref` byte that fits in padding the struct already had. See
+  `memory-architecture.md` for the sweep and its measurements.
 
 ---
 
@@ -430,9 +430,8 @@ No. The inline store cannot overflow the stack:
 
 1. **No recursion.** All collection traversal is iterative `while` loops:
    - hash probing (`findSlot`, `findInsertSlot`) is a flat loop;
-   - LRU / volatile lists are walked with `while` over `prev`/`next` pointers
-     (`detach_lru`, `sample_global_victim`) — not recursive, so a million-entry
-     list is fine;
+   - the clock hand walks the `entries` array with a `while` loop and an index
+     (`sweep`) — not recursive, and bounded to `ref_max + 1` laps;
    - `deinit` / `flush_db` iterate `slots` and `entries` in `for` loops.
 2. **No large stack buffers.** All dynamic storage (`slots`, `entries`, keys, the
    `rebuildSlots` temporary) is heap-allocated via `self.allocator`. Per-call stack
@@ -508,8 +507,10 @@ cache-resident store, `std.HashMap` is fine and marginally faster.
   no expiry) would save 8 bytes per entry.
 - **Inline long-key threshold tuning**: the 23-byte limit mirrors `ShortString`;
   could be a separate tunable.
-- **Index-based LRU**: replace the four `?*StoreEntry` LRU pointers with `u32`
-  indices. Only worthwhile if entries move into a contiguous value slab (currently
-  they stay heap-allocated for pointer stability).
+- **Superseded — index-based LRU**: the four `?*StoreEntry` links are gone; a
+  clock sweep over `entries` replaced them without needing a value slab. Keeping
+  the counter in a nibble array beside `entries` was measured and dropped: it
+  costs 0.5 bytes per key more, because the entry byte is free padding, and
+  evicts slightly slower.
 - **Re-measure after layout changes**: `scripts/hashmap-ab.sh` covers GET, DEL and
   churn at 10k and 1M keys. Keep this document's numbers tied to a run.
